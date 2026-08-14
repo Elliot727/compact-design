@@ -1,0 +1,10 @@
+{
+  "$schema": "../spec/compact-design.schema.json",
+  "patch": {
+    "operations": [
+      { "op": "set", "id": "theme-title", "set": { "text": "The same design.\nA different mood." } },
+      { "op": "set", "id": "theme-card", "set": { "cornerRadius": 40 } },
+      { "op": "append", "parent": "theme-card", "node": { "id": "theme-note", "type": "TEXT", "w": 536, "h": 18, "text": "UPDATED WITH A JSON PATCH", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 9 }, "fill": "#B69B62", "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" } }
+    ]
+  }
+}

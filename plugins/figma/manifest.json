@@ -1,0 +1,13 @@
+{
+  "name": "JSON to Figma",
+  "id": "1530890358482107642",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Users may import image fills from HTTPS URLs on domains they choose in their design JSON."
+  }
+}

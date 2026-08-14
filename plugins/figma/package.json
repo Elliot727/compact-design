@@ -1,0 +1,15 @@
+{
+  "name": "@compact-design/figma-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "description": "Reference Figma adapter for Compact Design JSON.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "node scripts/lint.mjs",
+    "watch": "node scripts/build.mjs --watch"
+  },
+  "dependencies": { "@compact-design/core": "0.1.0" }
+}

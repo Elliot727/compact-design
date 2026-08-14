@@ -1,0 +1,26 @@
+{
+  "canvas": {
+    "id": "local-image-demo",
+    "name": "Local Image Upload Demo",
+    "width": 900,
+    "height": 620,
+    "fill": "#EAE5DA",
+    "clipsContent": true
+  },
+  "nodes": [
+    {
+      "id": "local-photo",
+      "name": "Selected local photograph",
+      "type": "RECTANGLE",
+      "x": 48,
+      "y": 48,
+      "w": 804,
+      "h": 524,
+      "cornerRadius": 24,
+      "fill": {
+        "image": "file:hotel-room.jpg",
+        "fit": "COVER"
+      }
+    }
+  ]
+}

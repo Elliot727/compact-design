@@ -1,0 +1,32 @@
+{
+  "name": "@compact-design/core",
+  "version": "0.1.0",
+  "description": "Reusable parser, normalizer, validator, patch engine, and linter for Compact Design JSON.",
+  "license": "MPL-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "generate:schema": "node scripts/generate-schema.mjs",
+    "build": "npm run generate:schema && node scripts/build.mjs",
+    "prepack": "npm run build",
+    "test": "npm run generate:schema && node scripts/test.mjs",
+    "typecheck": "npm run generate:schema && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "lint": "node scripts/lint.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
+  }
+}

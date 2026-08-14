@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: light dark; font: 12px/1.45 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--figma-color-bg); color: var(--figma-color-text); }
+    button, textarea, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+    .header { padding: 18px 20px 16px; border-bottom: 1px solid var(--figma-color-border); }
+    .brand { display: flex; align-items: center; gap: 11px; }
+    .mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); font: 700 15px/1 ui-monospace, monospace; }
+    h1 { margin: 0; font-size: 15px; line-height: 20px; letter-spacing: -.1px; }
+    .subtitle { margin: 2px 0 0; color: var(--figma-color-text-secondary); }
+    .content { padding: 16px 20px; display: grid; gap: 14px; }
+    .dropzone { position: relative; min-height: 92px; display: flex; align-items: center; gap: 13px; padding: 15px; border: 1px dashed var(--figma-color-border-strong); border-radius: 10px; background: var(--figma-color-bg-secondary); transition: border-color .15s, background .15s; }
+    .dropzone.dragging { border-color: var(--figma-color-border-brand); background: var(--figma-color-bg-brand-tertiary); }
+    .upload-icon { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border-radius: 9px; background: var(--figma-color-bg); color: var(--figma-color-icon-secondary); font-size: 19px; }
+    .drop-copy { min-width: 0; flex: 1; }
+    .drop-title { font-weight: 600; }
+    .drop-note { margin-top: 2px; color: var(--figma-color-text-secondary); }
+    .browse { flex: none; height: 30px; padding: 0 11px; border: 1px solid var(--figma-color-border); border-radius: 6px; background: var(--figma-color-bg); color: var(--figma-color-text); font-weight: 550; }
+    .browse:hover { background: var(--figma-color-bg-hover); }
+    #file, #asset-files { display: none; }
+    .assets { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--figma-color-border); border-radius: 8px; background: var(--figma-color-bg-secondary); }
+    .asset-copy { min-width: 0; flex: 1; }
+    .asset-title { font-weight: 600; }
+    .asset-detail { margin-top: 1px; color: var(--figma-color-text-secondary); overflow-wrap: anywhere; }
+    .editor { overflow: hidden; border: 1px solid var(--figma-color-border); border-radius: 10px; background: var(--figma-color-bg-secondary); }
+    .editor-head { height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 11px 0 13px; border-bottom: 1px solid var(--figma-color-border); }
+    .editor-label { font-weight: 600; }
+    .editor-actions { display: flex; gap: 4px; }
+    .text-button { height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--figma-color-text-secondary); }
+    .text-button:hover { background: var(--figma-color-bg-hover); color: var(--figma-color-text); }
+    textarea { display: block; width: 100%; height: 240px; resize: vertical; padding: 12px 13px; border: 0; outline: 0; background: transparent; color: var(--figma-color-text); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
+    textarea::placeholder { color: var(--figma-color-text-tertiary); }
+    textarea:focus { box-shadow: inset 0 0 0 1px var(--figma-color-border-brand); }
+    .summary { min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--figma-color-border); border-radius: 8px; }
+    .summary.empty { color: var(--figma-color-text-secondary); }
+    .summary.invalid { border-color: var(--figma-color-border-danger); color: var(--figma-color-text-danger); }
+    .summary.valid { border-color: var(--figma-color-border-success); }
+    .summary-icon { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--figma-color-bg-tertiary); font-weight: 700; }
+    .summary-text { flex: 1; min-width: 0; max-width: 100%; overflow: hidden; }
+    .summary-title { font-weight: 600; }
+    .summary-detail { color: var(--figma-color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
+    .preview { display: none; border: 1px solid var(--figma-color-border); border-radius: 10px; overflow: hidden; background: var(--figma-color-bg-secondary); }
+    .preview.visible { display: block; }
+    .preview-head { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 12px; border-bottom: 1px solid var(--figma-color-border); font-weight: 600; }
+    .preview-stats { padding: 11px 12px; color: var(--figma-color-text-secondary); }
+    .issues { max-height: 150px; overflow: auto; border-top: 1px solid var(--figma-color-border); }
+    .issue { padding: 8px 12px; border-bottom: 1px solid var(--figma-color-border); }
+    .issue-code { font: 9px ui-monospace, monospace; color: var(--figma-color-text-secondary); }
+    .issue.WARNING .issue-code { color: var(--figma-color-text-warning); }
+    .issue.ERROR .issue-code { color: var(--figma-color-text-danger); }
+    .mode-row { display: grid; gap: 6px; margin-bottom: 10px; }
+    .option-label { font-size: 10px; font-weight: 600; color: var(--figma-color-text-secondary); }
+    .mode-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border: 1px solid var(--figma-color-border); border-radius: 8px; background: var(--figma-color-bg-secondary); }
+    .mode-picker input { position: absolute; opacity: 0; pointer-events: none; }
+    .mode-picker label { justify-content: center; height: 30px; padding: 0 7px; border-radius: 5px; color: var(--figma-color-text-secondary); cursor: pointer; font-weight: 550; white-space: nowrap; }
+    .mode-picker label:hover { background: var(--figma-color-bg-hover); color: var(--figma-color-text); }
+    .mode-picker label:has(input:checked) { background: var(--figma-color-bg); color: var(--figma-color-text); box-shadow: 0 1px 3px #0002; }
+    .footer { margin-top: auto; padding: 12px 20px 16px; border-top: 1px solid var(--figma-color-border); background: var(--figma-color-bg); }
+    .options { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    label { display: flex; align-items: center; gap: 7px; color: var(--figma-color-text-secondary); }
+    .shortcut { color: var(--figma-color-text-tertiary); }
+    .footer-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+    .secondary { height: 38px; border: 1px solid var(--figma-color-border); border-radius: 7px; background: var(--figma-color-bg-secondary); color: var(--figma-color-text); font-weight: 600; }
+    .secondary:hover { background: var(--figma-color-bg-hover); }
+    .primary { width: 100%; height: 38px; border: 0; border-radius: 7px; color: var(--figma-color-text-onbrand); background: var(--figma-color-bg-brand); font-weight: 650; }
+    .primary:hover { background: var(--figma-color-bg-brand-hover); }
+    .primary:disabled { opacity: .5; cursor: not-allowed; }
+    #status { display: none; width: 100%; min-width: 0; margin-top: 9px; padding: 9px 10px; border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 120px; overflow: auto; background: var(--figma-color-bg-secondary); color: var(--figma-color-text-secondary); }
+    #status.visible { display: block; }
+    #status.error { display: block; background: var(--figma-color-bg-danger-tertiary); color: var(--figma-color-text-danger); }
+    #status.success { display: block; background: var(--figma-color-bg-success-tertiary); color: var(--figma-color-text-success); }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div class="brand"><div class="mark">{ }</div><div><h1>Compact Design Importer</h1><p class="subtitle">JSON to native, editable Figma layers</p></div></div>
+    </header>
+    <section class="content">
+      <div id="dropzone" class="dropzone" tabindex="0">
+        <div class="upload-icon">⇧</div>
+        <div class="drop-copy"><div class="drop-title">Drop a JSON file here</div><div class="drop-note">or browse your computer · one current-schema document</div></div>
+        <button id="browse" class="browse" type="button">Browse</button>
+        <input id="file" type="file" accept="application/json,.json">
+      </div>
+      <div class="assets">
+        <div class="upload-icon">▧</div>
+        <div class="asset-copy"><div class="asset-title">Local image assets</div><div id="asset-detail" class="asset-detail">Use <code>file:photo.jpg</code> in image fills, then add the matching files.</div></div>
+        <button id="add-assets" class="browse" type="button">Add images</button>
+        <input id="asset-files" type="file" accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp" multiple>
+      </div>
+      <div class="editor">
+        <div class="editor-head"><span class="editor-label">Design JSON</span><div class="editor-actions"><button id="copy" class="text-button" type="button">Copy</button><button id="download" class="text-button" type="button">Download</button><button id="format" class="text-button" type="button">Format</button><button id="clear" class="text-button" type="button">Clear</button></div></div>
+        <textarea id="input" spellcheck="false" aria-label="Design JSON" placeholder='{\n  "canvas": { "width": 800, "height": 600 },\n  "nodes": []\n}'></textarea>
+      </div>
+      <div id="summary" class="summary empty"><div class="summary-icon">i</div><div class="summary-text"><div class="summary-title">Waiting for a document</div><div class="summary-detail">Paste JSON or choose a file to begin.</div></div></div>
+      <div id="preview" class="preview"><div class="preview-head"><span>Preflight checks</span><button id="copy-repair" class="text-button" type="button">Copy repair JSON</button></div><div id="preview-stats" class="preview-stats"></div><div id="issues" class="issues"></div></div>
+    </section>
+    <footer class="footer">
+      <div class="mode-row"><span class="option-label">IMPORT MODE</span><div id="mode" class="mode-picker"><label><input type="radio" name="mode" value="CREATE" checked>Create new</label><label><input type="radio" name="mode" value="UPDATE">Update IDs</label><label><input type="radio" name="mode" value="REPLACE">Replace</label></div></div>
+      <div class="options"><label><input id="lint" type="checkbox" checked> Run design lint before import</label><span class="shortcut">⌘ ↵</span></div>
+      <div class="footer-actions"><button id="export" class="secondary" type="button">Export selection</button><button id="import" class="primary" type="button" disabled>Create Figma design</button></div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </footer>
+  </main>
+  <!-- UI_SCRIPT -->
+</body>
+</html>

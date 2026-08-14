@@ -1,0 +1,26 @@
+{
+  "$schema": "../spec/compact-design.schema.json",
+  "canvas": { "id": "theme-demo", "name": "Theme Mode Demo", "width": 760, "height": 520, "fill": "#F8F5EE" },
+  "variables": [
+    {
+      "name": "Theme",
+      "modes": ["Light", "Dark"],
+      "items": [
+        { "id": "surface", "name": "colour/surface", "type": "COLOR", "values": { "Light": { "r": 248, "g": 245, "b": 238, "a": 1 }, "Dark": { "r": 27, "g": 30, "b": 26, "a": 1 } } },
+        { "id": "ink", "name": "colour/ink", "type": "COLOR", "values": { "Light": { "r": 35, "g": 34, "b": 30, "a": 1 }, "Dark": { "r": 243, "g": 236, "b": 222, "a": 1 } } },
+        { "id": "gap", "name": "spacing/gap", "type": "FLOAT", "values": { "Light": 20, "Dark": 20 } }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "theme-card", "name": "Theme Card", "type": "FRAME", "x": 80, "y": 80, "w": 600, "h": 360, "fill": "#F8F5EE", "bindings": { "fill": "surface" }, "variableModes": { "Theme": "Dark" }, "cornerRadius": 24,
+      "layout": { "direction": "VERTICAL", "padding": { "left": 32, "top": 32, "right": 32, "bottom": 32 }, "itemSpacing": 20, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+      "children": [
+        { "id": "theme-eyebrow", "type": "TEXT", "w": 536, "h": 18, "text": "VARIABLE MODES", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 10 }, "fill": "#23221E", "bindings": { "fill": "ink" }, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+        { "id": "theme-title", "type": "TEXT", "w": 536, "h": 90, "text": "One design.\nMore than one mood.", "font": { "family": "Cormorant Garamond", "style": "SemiBold", "size": 42 }, "fill": "#23221E", "bindings": { "fill": "ink" }, "lineHeight": 1.05, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+        { "id": "theme-copy", "type": "TEXT", "w": 536, "h": 60, "text": "Switch the Theme mode in Figma to prove that the imported variables remain live and editable.", "font": { "family": "IBM Plex Mono", "style": "Regular", "size": 12 }, "fill": "#23221E", "bindings": { "fill": "ink" }, "lineHeight": 1.5, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" }
+      ]
+    }
+  ]
+}

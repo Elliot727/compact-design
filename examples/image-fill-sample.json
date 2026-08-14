@@ -1,0 +1,249 @@
+{
+  "canvas": {
+    "id": "image-gallery",
+    "name": "Image Fill Gallery",
+    "width": 1200,
+    "height": 940,
+    "fill": "#F4F1EB",
+    "clipsContent": true
+  },
+  "nodes": [
+    {
+      "name": "Eyebrow",
+      "type": "TEXT",
+      "x": 64,
+      "y": 54,
+      "w": 500,
+      "h": 22,
+      "text": "COMPACT DESIGN JSON / IMAGE FILLS",
+      "font": { "family": "Arial", "style": "Bold", "size": 12 },
+      "fill": "#6A655C",
+      "letterSpacing": { "unit": "PERCENT", "value": 8 }
+    },
+    {
+      "name": "Title",
+      "type": "TEXT",
+      "x": 64,
+      "y": 94,
+      "w": 900,
+      "h": 76,
+      "text": "One image. Four fitting modes.",
+      "font": { "family": "Arial", "style": "Bold", "size": 52 },
+      "fill": "#171714",
+      "lineHeight": 1.05,
+      "letterSpacing": { "unit": "PIXELS", "value": -2 }
+    },
+    {
+      "name": "Introduction",
+      "type": "TEXT",
+      "x": 66,
+      "y": 178,
+      "w": 720,
+      "h": 54,
+      "text": "Every photograph below is loaded from a remote HTTPS URL and applied as an editable Figma image paint.",
+      "font": { "family": "Arial", "style": "Regular", "size": 18 },
+      "fill": "#625E56",
+      "lineHeight": 1.45
+    },
+    {
+      "id": "cover-card",
+      "name": "Cover Image Card",
+      "type": "FRAME",
+      "x": 64,
+      "y": 274,
+      "w": 690,
+      "h": 374,
+      "cornerRadii": [28, 8, 28, 8],
+      "clipsContent": true,
+      "fill": {
+        "image": "https://picsum.photos/id/1018/1380/748.jpg",
+        "fit": "COVER",
+        "opacity": 1
+      },
+      "effects": [
+        {
+          "type": "DROP_SHADOW",
+          "color": "#241B1238",
+          "offset": { "x": 0, "y": 20 },
+          "blur": 38,
+          "spread": -10
+        }
+      ],
+      "children": [
+        {
+          "name": "Cover Label Background",
+          "type": "RECTANGLE",
+          "x": 28,
+          "y": 292,
+          "w": 208,
+          "h": 52,
+          "fill": "#171714DD",
+          "cornerRadius": 26
+        },
+        {
+          "name": "Cover Label",
+          "type": "TEXT",
+          "x": 48,
+          "y": 308,
+          "w": 168,
+          "h": 22,
+          "text": "COVER / FILL",
+          "font": { "family": "Arial", "style": "Bold", "size": 13 },
+          "fill": "#FFFFFF",
+          "letterSpacing": { "unit": "PERCENT", "value": 6 },
+          "align": "CENTER"
+        }
+      ]
+    },
+    {
+      "id": "contain-card",
+      "name": "Contain Image Card",
+      "type": "FRAME",
+      "x": 786,
+      "y": 274,
+      "w": 350,
+      "h": 374,
+      "fill": "#D9D4CA",
+      "cornerRadius": 28,
+      "clipsContent": true,
+      "children": [
+        {
+          "name": "Contained Image",
+          "type": "RECTANGLE",
+          "x": 24,
+          "y": 24,
+          "w": 302,
+          "h": 276,
+          "fill": {
+            "image": "https://picsum.photos/id/1018/1380/748.jpg",
+            "fit": "CONTAIN",
+            "opacity": 1
+          },
+          "cornerRadius": 16
+        },
+        {
+          "name": "Contain Label",
+          "type": "TEXT",
+          "x": 24,
+          "y": 324,
+          "w": 302,
+          "h": 24,
+          "text": "CONTAIN / FIT",
+          "font": { "family": "Arial", "style": "Bold", "size": 13 },
+          "fill": "#25231F",
+          "letterSpacing": { "unit": "PERCENT", "value": 6 },
+          "align": "CENTER"
+        }
+      ]
+    },
+    {
+      "id": "crop-card",
+      "name": "Crop Image Card",
+      "type": "FRAME",
+      "x": 64,
+      "y": 694,
+      "w": 334,
+      "h": 190,
+      "fill": {
+        "image": "https://picsum.photos/id/1025/668/380.jpg",
+        "fit": "CROP",
+        "opacity": 1,
+        "transform": [
+          [0.82, 0, 0.08],
+          [0, 0.82, 0.08]
+        ]
+      },
+      "cornerRadius": 22,
+      "clipsContent": true,
+      "children": [
+        {
+          "name": "Crop Label",
+          "type": "TEXT",
+          "x": 18,
+          "y": 150,
+          "w": 180,
+          "h": 20,
+          "text": "CROP + TRANSFORM",
+          "font": { "family": "Arial", "style": "Bold", "size": 11 },
+          "fill": "#FFFFFF",
+          "letterSpacing": { "unit": "PERCENT", "value": 5 }
+        }
+      ]
+    },
+    {
+      "id": "tile-card",
+      "name": "Tile Image Card",
+      "type": "FRAME",
+      "x": 430,
+      "y": 694,
+      "w": 334,
+      "h": 190,
+      "fill": {
+        "image": "https://picsum.photos/id/1060/120/120.jpg",
+        "fit": "TILE",
+        "opacity": 0.72
+      },
+      "cornerRadius": 22,
+      "clipsContent": true,
+      "children": [
+        {
+          "name": "Tile Overlay",
+          "type": "RECTANGLE",
+          "x": 0,
+          "y": 0,
+          "w": 334,
+          "h": 190,
+          "fill": "#361A5844"
+        },
+        {
+          "name": "Tile Label",
+          "type": "TEXT",
+          "x": 18,
+          "y": 150,
+          "w": 180,
+          "h": 20,
+          "text": "TILE + OPACITY",
+          "font": { "family": "Arial", "style": "Bold", "size": 11 },
+          "fill": "#FFFFFF",
+          "letterSpacing": { "unit": "PERCENT", "value": 5 }
+        }
+      ]
+    },
+    {
+      "name": "Image Notes",
+      "type": "FRAME",
+      "x": 796,
+      "y": 694,
+      "w": 340,
+      "h": 190,
+      "fill": "#171714",
+      "cornerRadii": [8, 28, 8, 28],
+      "children": [
+        {
+          "name": "Notes Heading",
+          "type": "TEXT",
+          "x": 24,
+          "y": 24,
+          "w": 292,
+          "h": 26,
+          "text": "REMOTE IMAGE NOTES",
+          "font": { "family": "Arial", "style": "Bold", "size": 12 },
+          "fill": "#F1B24A",
+          "letterSpacing": { "unit": "PERCENT", "value": 6 }
+        },
+        {
+          "name": "Notes Copy",
+          "type": "TEXT",
+          "x": 24,
+          "y": 66,
+          "w": 292,
+          "h": 96,
+          "text": "• Direct HTTPS URL\n• PNG, JPEG or GIF\n• Host must allow CORS\n• Figma size limits apply",
+          "font": { "family": "Arial", "style": "Regular", "size": 14 },
+          "fill": "#D9D4CA",
+          "lineHeight": 1.55
+        }
+      ]
+    }
+  ]
+}

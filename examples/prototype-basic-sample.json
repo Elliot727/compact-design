@@ -1,0 +1,71 @@
+{
+  "$schema": "../spec/compact-design.schema.json",
+  "canvases": [
+    {
+      "id": "home-screen",
+      "name": "Prototype / Home",
+      "x": 0,
+      "width": 390,
+      "height": 844,
+      "fill": "#F5F1E8",
+      "nodes": [
+        { "type": "TEXT", "x": 24, "y": 54, "w": 342, "h": 60, "text": "Small escapes", "font": { "family": "Cormorant Garamond", "style": "SemiBold", "size": 42 }, "fill": "#24231F" },
+        { "type": "TEXT", "x": 24, "y": 120, "w": 330, "h": 44, "text": "A tiny prototype showing Compact Design JSON interactions.", "font": { "family": "IBM Plex Mono", "style": "Regular", "size": 11 }, "fill": "#6D685E", "lineHeight": 1.5 },
+        {
+          "id": "home-card", "name": "Open stay details", "type": "FRAME", "x": 24, "y": 205, "w": 342, "h": 330, "fill": "#385443", "cornerRadius": 22, "clipsContent": true,
+          "prototype": [{ "trigger": { "type": "ON_CLICK" }, "actions": [{ "type": "NAVIGATE", "destination": "detail-screen", "transition": { "type": "SMART_ANIMATE", "easing": "GENTLE", "duration": 0.45 }, "resetScrollPosition": true }] }],
+          "children": [
+            { "type": "TEXT", "x": 24, "y": 28, "w": 280, "h": 18, "text": "WEEKEND 01", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 10 }, "fill": "#D7CDAF", "letterSpacing": { "unit": "PIXELS", "value": 1.2 } },
+            { "type": "TEXT", "x": 22, "y": 194, "w": 285, "h": 76, "text": "The house beyond\nthe orchard", "font": { "family": "Cormorant Garamond", "style": "Medium", "size": 32 }, "fill": "#FFFFFF", "lineHeight": 1.05 },
+            { "type": "TEXT", "x": 24, "y": 292, "w": 220, "h": 18, "text": "TAP TO EXPLORE  →", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 9 }, "fill": "#D7CDAF" }
+          ]
+        },
+        {
+          "id": "external-link", "type": "FRAME", "x": 24, "y": 570, "w": 164, "h": 48, "stroke": "#9F988B", "strokeWeight": 1, "cornerRadius": 24,
+          "prototype": [{ "trigger": { "type": "ON_CLICK" }, "actions": [{ "type": "URL", "url": "https://www.figma.com", "openInNewTab": true }] }],
+          "children": [{ "type": "TEXT", "x": 24, "y": 16, "w": 116, "h": 16, "text": "OPEN FIGMA  ↗", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 9 }, "fill": "#24231F" }]
+        }
+      ]
+    },
+    {
+      "id": "detail-screen",
+      "name": "Prototype / Detail",
+      "x": 510,
+      "width": 390,
+      "height": 844,
+      "fill": "#25342B",
+      "nodes": [
+        {
+          "id": "detail-back", "type": "FRAME", "x": 20, "y": 48, "w": 48, "h": 48, "fill": "#FFFFFF18", "cornerRadius": 24,
+          "prototype": [{ "trigger": { "type": "ON_CLICK" }, "actions": [{ "type": "BACK" }] }],
+          "children": [{ "type": "TEXT", "x": 16, "y": 13, "w": 20, "h": 20, "text": "←", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 16 }, "fill": "#FFFFFF" }]
+        },
+        { "type": "TEXT", "x": 24, "y": 150, "w": 340, "h": 132, "text": "Two nights\naway from it all.", "font": { "family": "Cormorant Garamond", "style": "Medium", "size": 49 }, "fill": "#F4EDDF", "lineHeight": 0.98 },
+        { "type": "TEXT", "x": 25, "y": 310, "w": 330, "h": 92, "text": "Long breakfasts, muddy walks, a fire already lit and absolutely nowhere else to be.", "font": { "family": "Cormorant Garamond", "style": "Regular", "size": 22 }, "fill": "#CEC6B8", "lineHeight": 1.38 },
+        {
+          "id": "reserve-button", "type": "FRAME", "x": 24, "y": 690, "w": 342, "h": 58, "fill": "#D7B56D", "cornerRadius": 29,
+          "prototype": [{ "trigger": { "type": "ON_CLICK" }, "actions": [{ "type": "NAVIGATE", "destination": "confirmation-screen", "transition": { "type": "PUSH", "direction": "LEFT", "easing": "EASE_OUT", "duration": 0.35, "matchLayers": false } }] }],
+          "children": [{ "type": "TEXT", "x": 85, "y": 20, "w": 172, "h": 18, "text": "RESERVE THE WEEKEND", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 10 }, "fill": "#25342B", "align": "CENTER" }]
+        }
+      ]
+    },
+    {
+      "id": "confirmation-screen",
+      "name": "Prototype / Confirmation",
+      "x": 1020,
+      "width": 390,
+      "height": 844,
+      "fill": "#712F38",
+      "nodes": [
+        { "type": "TEXT", "x": 32, "y": 220, "w": 326, "h": 38, "text": "✓", "font": { "family": "IBM Plex Mono", "style": "Medium", "size": 30 }, "fill": "#E5C780", "align": "CENTER" },
+        { "type": "TEXT", "x": 32, "y": 290, "w": 326, "h": 120, "text": "Your room is\nwaiting.", "font": { "family": "Cormorant Garamond", "style": "Medium", "size": 51 }, "fill": "#F8F0E3", "align": "CENTER", "lineHeight": 0.98 },
+        { "type": "TEXT", "x": 45, "y": 445, "w": 300, "h": 52, "text": "This screen returns home automatically after four seconds.", "font": { "family": "IBM Plex Mono", "style": "Regular", "size": 10 }, "fill": "#DFCBCD", "align": "CENTER", "lineHeight": 1.5 },
+        {
+          "id": "auto-return", "type": "FRAME", "x": 145, "y": 560, "w": 100, "h": 8, "fill": "#FFFFFF22", "cornerRadius": 4,
+          "prototype": [{ "trigger": { "type": "AFTER_TIMEOUT", "timeout": 4 }, "actions": [{ "type": "NAVIGATE", "destination": "home-screen", "transition": { "type": "DISSOLVE", "easing": "EASE_IN_AND_OUT", "duration": 0.45 } }] }],
+          "children": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,267 @@
+{
+  "variables": [
+    {
+      "name": "Northstar UI Tokens",
+      "items": [
+        { "id": "bg", "name": "color/background", "type": "COLOR", "value": { "r": 7, "g": 10, "b": 18, "a": 1 } },
+        { "id": "surface", "name": "color/surface", "type": "COLOR", "value": { "r": 15, "g": 20, "b": 33, "a": 1 } },
+        { "id": "surface-raised", "name": "color/surface-raised", "type": "COLOR", "value": { "r": 21, "g": 28, "b": 45, "a": 1 } },
+        { "id": "brand", "name": "color/brand", "type": "COLOR", "value": { "r": 125, "g": 92, "b": 255, "a": 1 } },
+        { "id": "positive", "name": "color/positive", "type": "COLOR", "value": { "r": 55, "g": 218, "b": 171, "a": 1 } },
+        { "id": "text", "name": "color/text", "type": "COLOR", "value": { "r": 245, "g": 247, "b": 252, "a": 1 } },
+        { "id": "muted", "name": "color/muted", "type": "COLOR", "value": { "r": 137, "g": 149, "b": 174, "a": 1 } },
+        { "id": "border", "name": "color/border", "type": "COLOR", "value": { "r": 38, "g": 47, "b": 68, "a": 1 } },
+        { "id": "radius-card", "name": "radius/card", "type": "FLOAT", "value": 18 }
+      ]
+    }
+  ],
+  "styles": [
+    { "id": "surface-style", "name": "Northstar/Surface", "type": "PAINT", "paints": [{ "type": "SOLID", "color": { "r": 15, "g": 20, "b": 33 }, "opacity": 1 }] },
+    { "id": "heading-style", "name": "Northstar/Heading", "type": "TEXT", "font": { "family": "Arial", "style": "Bold", "size": 28 } },
+    { "id": "body-style", "name": "Northstar/Body", "type": "TEXT", "font": { "family": "Arial", "style": "Regular", "size": 14 } }
+  ],
+  "canvas": {
+    "id": "northstar-dashboard",
+    "name": "Northstar Analytics Dashboard",
+    "width": 1600,
+    "height": 1200,
+    "fill": "#070A12",
+    "clipsContent": true
+  },
+  "nodes": [
+    {
+      "id": "sidebar",
+      "name": "Sidebar",
+      "type": "FRAME",
+      "x": 0,
+      "y": 0,
+      "w": 260,
+      "h": 1200,
+      "fill": "#0B0F1A",
+      "stroke": "#252D42",
+      "strokeRightWeight": 1,
+      "layout": {
+        "direction": "VERTICAL",
+        "padding": { "left": 20, "top": 24, "right": 20, "bottom": 24 },
+        "itemSpacing": 10,
+        "primaryAxisSizingMode": "FIXED",
+        "counterAxisSizingMode": "FIXED"
+      },
+      "children": [
+        {
+          "id": "brand-lockup",
+          "type": "FRAME",
+          "w": 220,
+          "h": 52,
+          "layout": { "direction": "HORIZONTAL", "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "FRAME", "w": 38, "h": 38, "fill": { "gradient": "LINEAR", "angle": 135, "stops": [{ "at": 0, "color": "#9B7CFF" }, { "at": 1, "color": "#35DAAB" }] }, "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "STAR", "w": 18, "h": 18, "pointCount": 4, "innerRadius": 0.42, "fill": "#FFFFFF", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] },
+            { "type": "TEXT", "w": 150, "h": 26, "text": "NORTHSTAR", "font": { "family": "Arial", "style": "Bold", "size": 18 }, "fill": "#F5F7FC", "letterSpacing": { "unit": "PIXELS", "value": 1.5 }, "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }
+          ]
+        },
+        { "type": "TEXT", "w": 220, "h": 18, "text": "WORKSPACE", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "letterSpacing": { "unit": "PIXELS", "value": 1.6 }, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+        {
+          "id": "nav-overview",
+          "type": "FRAME",
+          "w": 220,
+          "h": 44,
+          "fill": "#7D5CFF",
+          "cornerRadius": 11,
+          "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "SVG", "w": 18, "h": 18, "svg": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z' fill='white'/></svg>", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" },
+            { "type": "TEXT", "w": 150, "h": 20, "text": "Overview", "font": { "family": "Arial", "style": "Bold", "size": 14 }, "fill": "#FFFFFF", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }
+          ]
+        },
+        { "type": "FRAME", "w": 220, "h": 44, "cornerRadius": 11, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ELLIPSE", "w": 18, "h": 18, "stroke": "#7D89A3", "strokeWeight": 2, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 150, "h": 20, "text": "Customers", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+        { "type": "FRAME", "w": 220, "h": 44, "cornerRadius": 11, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "POLYGON", "w": 18, "h": 18, "pointCount": 6, "stroke": "#7D89A3", "strokeWeight": 2, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 150, "h": 20, "text": "Segments", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+        { "type": "FRAME", "w": 220, "h": 44, "cornerRadius": 11, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ARC", "w": 18, "h": 18, "startingAngle": -1.57, "endingAngle": 4.3, "innerRadiusRatio": 0.65, "fill": "#7D89A3", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 150, "h": 20, "text": "Reports", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+        { "type": "TEXT", "w": 220, "h": 18, "text": "MANAGE", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "letterSpacing": { "unit": "PIXELS", "value": 1.6 }, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+        { "type": "FRAME", "w": 220, "h": 44, "cornerRadius": 11, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "STAR", "w": 18, "h": 18, "pointCount": 8, "innerRadius": 0.72, "stroke": "#7D89A3", "strokeWeight": 2, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 150, "h": 20, "text": "Automations", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+        { "type": "FRAME", "w": 220, "h": 44, "cornerRadius": 11, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 12, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "RECTANGLE", "w": 18, "h": 18, "stroke": "#7D89A3", "strokeWeight": 2, "cornerRadius": 4, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 150, "h": 20, "text": "Integrations", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+        {
+          "id": "sidebar-spacer",
+          "type": "FRAME",
+          "w": 220,
+          "h": 420,
+          "layoutGrow": 1,
+          "layoutSizingHorizontal": "FILL",
+          "layoutSizingVertical": "FILL"
+        },
+        {
+          "id": "upgrade-card",
+          "type": "FRAME",
+          "w": 220,
+          "h": 150,
+          "fill": { "gradient": "LINEAR", "angle": 135, "stops": [{ "at": 0, "color": "#211B45" }, { "at": 1, "color": "#12263A" }] },
+          "stroke": "#7D5CFF55",
+          "strokeWeight": 1,
+          "cornerRadius": 16,
+          "clipsContent": true,
+          "layout": { "direction": "VERTICAL", "padding": { "left": 16, "top": 16, "right": 16, "bottom": 16 }, "itemSpacing": 10, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "ELLIPSE", "w": 120, "h": 120, "fill": "#7D5CFF", "opacity": 0.22, "effects": [{ "type": "LAYER_BLUR", "blur": 38 }], "layoutPositioning": "ABSOLUTE", "x": 130, "y": -45 },
+            { "type": "TEXT", "w": 180, "h": 22, "text": "Unlock forecasting", "font": { "family": "Arial", "style": "Bold", "size": 15 }, "fill": "#FFFFFF", "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+            { "type": "TEXT", "w": 180, "h": 36, "text": "Get predictive insights with Pro.", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#ABB5CA", "lineHeight": 1.45, "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG" },
+            { "type": "FRAME", "w": 188, "h": 34, "fill": "#7D5CFF", "cornerRadius": 9, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 100, "h": 17, "text": "View plans", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#FFFFFF", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }
+          ]
+        },
+        {
+          "id": "profile-row",
+          "type": "FRAME",
+          "w": 220,
+          "h": 54,
+          "fill": "#111727",
+          "cornerRadius": 13,
+          "layout": { "direction": "HORIZONTAL", "padding": { "left": 10, "top": 0, "right": 10, "bottom": 0 }, "itemSpacing": 10, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "ELLIPSE", "w": 34, "h": 34, "fill": { "gradient": "LINEAR", "angle": 45, "stops": [{ "at": 0, "color": "#FFB86B" }, { "at": 1, "color": "#D25CFF" }] }, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" },
+            { "type": "FRAME", "w": 130, "h": 36, "layout": { "direction": "VERTICAL", "itemSpacing": 2, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 130, "h": 18, "text": "Elliot Silver", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#F5F7FC", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 130, "h": 16, "text": "Admin", "font": { "family": "Arial", "style": "Regular", "size": 11 }, "fill": "#73809B", "layoutSizingVertical": "HUG" }] },
+            { "type": "TEXT", "w": 14, "h": 20, "text": "⋯", "font": { "family": "Arial", "style": "Bold", "size": 16 }, "fill": "#73809B", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "main",
+      "name": "Main workspace",
+      "type": "FRAME",
+      "x": 260,
+      "y": 0,
+      "w": 1340,
+      "h": 1200,
+      "fill": "#070A12",
+      "clipsContent": true,
+      "layoutGrids": [{ "pattern": "COLUMNS", "alignment": "STRETCH", "count": 12, "gutterSize": 20, "offset": 38, "color": { "r": 125, "g": 92, "b": 255, "a": 0.05 } }],
+      "children": [
+        { "type": "ELLIPSE", "x": 910, "y": -250, "w": 620, "h": 620, "fill": { "gradient": "RADIAL", "stops": [{ "at": 0, "color": "#7D5CFF66" }, { "at": 1, "color": "#7D5CFF00" }] }, "blendMode": "SCREEN", "locked": true },
+        {
+          "id": "topbar",
+          "type": "FRAME",
+          "x": 38,
+          "y": 24,
+          "w": 1264,
+          "h": 58,
+          "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "FRAME", "w": 390, "h": 42, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "itemSpacing": 10, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ELLIPSE", "w": 15, "h": 15, "stroke": "#64708A", "strokeWeight": 2, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 300, "h": 19, "text": "Search customers, reports, metrics…", "font": { "family": "Arial", "style": "Regular", "size": 13 }, "fill": "#64708A", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 260, "h": 42, "layout": { "direction": "HORIZONTAL", "itemSpacing": 10, "primaryAxisAlignItems": "MAX", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 42, "h": 42, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 18, "h": 20, "text": "?", "font": { "family": "Arial", "style": "Bold", "size": 15 }, "fill": "#8995AE", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "FRAME", "w": 42, "h": 42, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 18, "h": 20, "text": "●", "font": { "family": "Arial", "style": "Regular", "size": 11 }, "fill": "#35DAAB", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "FRAME", "w": 138, "h": 42, "fill": "#7D5CFF", "cornerRadius": 12, "elevation": "LOW", "layout": { "direction": "HORIZONTAL", "itemSpacing": 8, "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 16, "h": 20, "text": "+", "font": { "family": "Arial", "style": "Bold", "size": 18 }, "fill": "#FFFFFF", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 88, "h": 18, "text": "New report", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#FFFFFF", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }] }
+          ]
+        },
+        {
+          "id": "page-heading",
+          "type": "FRAME",
+          "x": 38,
+          "y": 116,
+          "w": 1264,
+          "h": 86,
+          "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "FRAME", "w": 600, "h": 82, "layout": { "direction": "VERTICAL", "itemSpacing": 8, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 500, "h": 38, "text": "Good morning, Elliot", "fill": "#F5F7FC", "styleRefs": { "text": "heading-style" }, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 560, "h": 22, "runs": [{ "text": "Your business is up ", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE" }, { "text": "18.4%", "font": { "family": "Arial", "style": "Bold", "size": 14 }, "fill": "#35DAAB" }, { "text": " this month. Here’s what is driving it.", "font": { "family": "Arial", "style": "Regular", "size": 14 }, "fill": "#8995AE" }], "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 180, "h": 42, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 120, "h": 18, "text": "Last 30 days", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#D8DDEA", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 16, "h": 18, "text": "⌄", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#73809B", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }
+          ]
+        },
+        {
+          "id": "metric-row",
+          "type": "FRAME",
+          "x": 38,
+          "y": 228,
+          "w": 1264,
+          "h": 168,
+          "layout": { "direction": "HORIZONTAL", "itemSpacing": 18, "counterAxisAlignItems": "STRETCH", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "FRAME", "w": 302, "h": 168, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 18, "bindings": { "cornerRadius": "radius-card" }, "layout": { "direction": "VERTICAL", "padding": { "left": 20, "top": 18, "right": 20, "bottom": 18 }, "itemSpacing": 12, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 262, "h": 30, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 18, "text": "Total revenue", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "FRAME", "w": 30, "h": 30, "fill": "#7D5CFF22", "cornerRadius": 9, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] }, { "type": "TEXT", "w": 220, "h": 42, "text": "$284,920", "font": { "family": "Arial", "style": "Bold", "size": 32 }, "fill": "#F5F7FC", "letterSpacing": { "unit": "PIXELS", "value": -1 }, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 220, "h": 20, "text": "↑ 18.4%  vs last month", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#35DAAB", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 302, "h": 168, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 18, "layout": { "direction": "VERTICAL", "padding": { "left": 20, "top": 18, "right": 20, "bottom": 18 }, "itemSpacing": 12, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 262, "h": 30, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 18, "text": "Active customers", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "ELLIPSE", "w": 30, "h": 30, "fill": "#35DAAB22", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] }, { "type": "TEXT", "w": 220, "h": 42, "text": "12,842", "font": { "family": "Arial", "style": "Bold", "size": 32 }, "fill": "#F5F7FC", "letterSpacing": { "unit": "PIXELS", "value": -1 }, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 220, "h": 20, "text": "↑ 8.2%  vs last month", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#35DAAB", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 302, "h": 168, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 18, "layout": { "direction": "VERTICAL", "padding": { "left": 20, "top": 18, "right": 20, "bottom": 18 }, "itemSpacing": 12, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 262, "h": 30, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 18, "text": "Conversion rate", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "ARC", "w": 30, "h": 30, "startingAngle": -1.57, "endingAngle": 3.6, "innerRadiusRatio": 0.68, "fill": "#FFB86B", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] }, { "type": "TEXT", "w": 220, "h": 42, "text": "7.84%", "font": { "family": "Arial", "style": "Bold", "size": 32 }, "fill": "#F5F7FC", "letterSpacing": { "unit": "PIXELS", "value": -1 }, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 220, "h": 20, "text": "↑ 1.3%  vs last month", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#35DAAB", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 302, "h": 168, "fill": "#0F1421", "stroke": "#252F45", "strokeWeight": 1, "cornerRadius": 18, "layout": { "direction": "VERTICAL", "padding": { "left": 20, "top": 18, "right": 20, "bottom": 18 }, "itemSpacing": 12, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 262, "h": 30, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 18, "text": "Avg. order value", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "POLYGON", "w": 30, "h": 30, "pointCount": 6, "fill": "#59B7FF22", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] }, { "type": "TEXT", "w": 220, "h": 42, "text": "$142.60", "font": { "family": "Arial", "style": "Bold", "size": 32 }, "fill": "#F5F7FC", "letterSpacing": { "unit": "PIXELS", "value": -1 }, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 220, "h": 20, "text": "↓ 2.1%  vs last month", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#FF7E8A", "layoutSizingVertical": "HUG" }] }
+          ]
+        },
+        {
+          "id": "revenue-chart",
+          "type": "FRAME",
+          "x": 38,
+          "y": 420,
+          "w": 824,
+          "h": 394,
+          "fill": "#0F1421",
+          "stroke": "#252F45",
+          "strokeWeight": 1,
+          "cornerRadius": 18,
+          "children": [
+            { "type": "TEXT", "x": 24, "y": 22, "w": 250, "h": 26, "text": "Revenue overview", "font": { "family": "Arial", "style": "Bold", "size": 18 }, "fill": "#F5F7FC" },
+            { "type": "TEXT", "x": 24, "y": 54, "w": 280, "h": 18, "text": "Gross revenue across all channels", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#73809B" },
+            { "type": "FRAME", "x": 612, "y": 20, "w": 188, "h": 34, "fill": "#151C2D", "cornerRadius": 9, "layout": { "direction": "HORIZONTAL", "itemSpacing": 2, "padding": { "left": 3, "top": 3, "right": 3, "bottom": 3 }, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 58, "h": 28, "fill": "#2A3350", "cornerRadius": 7, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 30, "h": 16, "text": "Day", "font": { "family": "Arial", "style": "Bold", "size": 11 }, "fill": "#FFFFFF", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "TEXT", "w": 58, "h": 28, "text": "Week", "font": { "family": "Arial", "style": "Regular", "size": 11 }, "fill": "#73809B", "align": "CENTER", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "TEXT", "w": 58, "h": 28, "text": "Month", "font": { "family": "Arial", "style": "Regular", "size": 11 }, "fill": "#73809B", "align": "CENTER", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }] },
+            { "type": "LINE", "x": 58, "y": 126, "w": 718, "h": 1, "stroke": "#263047", "strokeWeight": 1, "dashPattern": [4, 6] },
+            { "type": "LINE", "x": 58, "y": 188, "w": 718, "h": 1, "stroke": "#263047", "strokeWeight": 1, "dashPattern": [4, 6] },
+            { "type": "LINE", "x": 58, "y": 250, "w": 718, "h": 1, "stroke": "#263047", "strokeWeight": 1, "dashPattern": [4, 6] },
+            { "type": "LINE", "x": 58, "y": 312, "w": 718, "h": 1, "stroke": "#263047", "strokeWeight": 1, "dashPattern": [4, 6] },
+            { "type": "VECTOR", "x": 58, "y": 102, "w": 718, "h": 220, "vectorPaths": [{ "windingRule": "NONZERO", "data": "M 0 190 C 80 170, 110 182, 170 138 C 230 95, 270 130, 330 100 C 390 70, 430 92, 485 48 C 545 2, 600 70, 718 18 L 718 220 L 0 220 Z" }], "fills": [{ "gradient": "LINEAR", "angle": 90, "stops": [{ "at": 0, "color": "#7D5CFF55" }, { "at": 1, "color": "#7D5CFF00" }] }], "strokes": [] },
+            { "type": "VECTOR", "x": 58, "y": 102, "w": 718, "h": 220, "vectorPaths": [{ "windingRule": "NONZERO", "data": "M 0 190 C 80 170, 110 182, 170 138 C 230 95, 270 130, 330 100 C 390 70, 430 92, 485 48 C 545 2, 600 70, 718 18" }], "fills": [], "strokes": [{ "type": "SOLID", "color": { "r": 125, "g": 92, "b": 255, "a": 1 }, "opacity": 1 }], "strokeWeight": 3, "strokeCap": "ROUND" },
+            { "type": "TEXT", "x": 58, "y": 350, "w": 718, "h": 18, "text": "1 Apr          5 Apr          10 Apr          15 Apr          20 Apr          25 Apr          30 Apr", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#59657D", "align": "CENTER" }
+          ]
+        },
+        {
+          "id": "channels",
+          "type": "FRAME",
+          "x": 880,
+          "y": 420,
+          "w": 422,
+          "h": 394,
+          "fill": "#0F1421",
+          "stroke": "#252F45",
+          "strokeWeight": 1,
+          "cornerRadius": 18,
+          "layout": { "direction": "VERTICAL", "padding": { "left": 22, "top": 22, "right": 22, "bottom": 22 }, "itemSpacing": 20, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "TEXT", "w": 300, "h": 26, "text": "Revenue by channel", "font": { "family": "Arial", "style": "Bold", "size": 18 }, "fill": "#F5F7FC", "layoutSizingVertical": "HUG" },
+            { "type": "FRAME", "w": 378, "h": 150, "layout": { "direction": "HORIZONTAL", "itemSpacing": 28, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ARC", "w": 142, "h": 142, "startingAngle": -1.57, "endingAngle": 3.9, "innerRadiusRatio": 0.72, "fill": { "gradient": "LINEAR", "angle": 90, "stops": [{ "at": 0, "color": "#7D5CFF" }, { "at": 1, "color": "#35DAAB" }] }, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 190, "h": 124, "layout": { "direction": "VERTICAL", "itemSpacing": 14, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 180, "h": 20, "text": "●  Direct        48%", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#A992FF", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 180, "h": 20, "text": "●  Organic      27%", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#35DAAB", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 180, "h": 20, "text": "●  Referral      16%", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#59B7FF", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 180, "h": 20, "text": "●  Social          9%", "font": { "family": "Arial", "style": "Bold", "size": 13 }, "fill": "#FFB86B", "layoutSizingVertical": "HUG" }] }] },
+            { "type": "FRAME", "w": 378, "h": 1, "fill": "#252F45", "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" },
+            { "type": "TEXT", "w": 240, "h": 18, "text": "TOP PERFORMING CHANNEL", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "letterSpacing": { "unit": "PIXELS", "value": 1.2 }, "layoutSizingVertical": "HUG" },
+            { "type": "FRAME", "w": 378, "h": 54, "fill": "#151C2D", "cornerRadius": 12, "layout": { "direction": "HORIZONTAL", "padding": { "left": 14, "top": 0, "right": 14, "bottom": 0 }, "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 180, "h": 20, "text": "Direct traffic", "font": { "family": "Arial", "style": "Bold", "size": 14 }, "fill": "#F5F7FC", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 100, "h": 20, "text": "$136.7k", "font": { "family": "Arial", "style": "Bold", "size": 14 }, "fill": "#35DAAB", "align": "RIGHT", "layoutSizingVertical": "HUG" }] }
+          ]
+        },
+        {
+          "id": "orders-table",
+          "type": "FRAME",
+          "x": 38,
+          "y": 838,
+          "w": 824,
+          "h": 330,
+          "fill": "#0F1421",
+          "stroke": "#252F45",
+          "strokeWeight": 1,
+          "cornerRadius": 18,
+          "clipsContent": true,
+          "layout": { "direction": "VERTICAL", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "FRAME", "w": 824, "h": 68, "layout": { "direction": "HORIZONTAL", "padding": { "left": 22, "top": 0, "right": 22, "bottom": 0 }, "primaryAxisAlignItems": "SPACE_BETWEEN", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 350, "h": 44, "layout": { "direction": "VERTICAL", "itemSpacing": 4, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 260, "h": 22, "text": "Recent orders", "font": { "family": "Arial", "style": "Bold", "size": 17 }, "fill": "#F5F7FC", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 300, "h": 16, "text": "Latest purchases across your store", "font": { "family": "Arial", "style": "Regular", "size": 11 }, "fill": "#73809B", "layoutSizingVertical": "HUG" }] }, { "type": "TEXT", "w": 80, "h": 18, "text": "View all →", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#A992FF", "align": "RIGHT", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 824, "h": 38, "fill": "#151C2D", "layout": { "direction": "HORIZONTAL", "padding": { "left": 22, "top": 0, "right": 22, "bottom": 0 }, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 250, "h": 16, "text": "CUSTOMER", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 170, "h": 16, "text": "ORDER", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 150, "h": 16, "text": "STATUS", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 180, "h": 16, "text": "TOTAL", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#59657D", "align": "RIGHT", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 824, "h": 68, "stroke": "#252F45", "strokeBottomWeight": 1, "layout": { "direction": "HORIZONTAL", "padding": { "left": 22, "top": 0, "right": 22, "bottom": 0 }, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 250, "h": 38, "layout": { "direction": "HORIZONTAL", "itemSpacing": 10, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ELLIPSE", "w": 32, "h": 32, "fill": { "gradient": "LINEAR", "angle": 135, "stops": [{ "at": 0, "color": "#59B7FF" }, { "at": 1, "color": "#7D5CFF" }] }, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 170, "h": 36, "layout": { "direction": "VERTICAL", "itemSpacing": 2, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 17, "text": "Maya Patel", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 160, "h": 15, "text": "maya@example.com", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#66728B", "layoutSizingVertical": "HUG" }] }] }, { "type": "TEXT", "w": 170, "h": 18, "text": "#NS-10482", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "FRAME", "w": 86, "h": 26, "fill": "#35DAAB1F", "cornerRadius": 999, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 54, "h": 15, "text": "PAID", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#35DAAB", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "TEXT", "w": 244, "h": 18, "text": "$248.00", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "align": "RIGHT", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 824, "h": 68, "stroke": "#252F45", "strokeBottomWeight": 1, "layout": { "direction": "HORIZONTAL", "padding": { "left": 22, "top": 0, "right": 22, "bottom": 0 }, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 250, "h": 38, "layout": { "direction": "HORIZONTAL", "itemSpacing": 10, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ELLIPSE", "w": 32, "h": 32, "fill": { "gradient": "LINEAR", "angle": 135, "stops": [{ "at": 0, "color": "#FFB86B" }, { "at": 1, "color": "#FF7E8A" }] }, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 170, "h": 36, "layout": { "direction": "VERTICAL", "itemSpacing": 2, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 17, "text": "Jon Bell", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 160, "h": 15, "text": "jon@example.com", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#66728B", "layoutSizingVertical": "HUG" }] }] }, { "type": "TEXT", "w": 170, "h": 18, "text": "#NS-10481", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "FRAME", "w": 86, "h": 26, "fill": "#FFB86B1F", "cornerRadius": 999, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 54, "h": 15, "text": "PENDING", "font": { "family": "Arial", "style": "Bold", "size": 9 }, "fill": "#FFB86B", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "TEXT", "w": 244, "h": 18, "text": "$179.40", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "align": "RIGHT", "layoutSizingVertical": "HUG" }] },
+            { "type": "FRAME", "w": 824, "h": 68, "layout": { "direction": "HORIZONTAL", "padding": { "left": 22, "top": 0, "right": 22, "bottom": 0 }, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 250, "h": 38, "layout": { "direction": "HORIZONTAL", "itemSpacing": 10, "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "ELLIPSE", "w": 32, "h": 32, "fill": { "gradient": "LINEAR", "angle": 135, "stops": [{ "at": 0, "color": "#35DAAB" }, { "at": 1, "color": "#59B7FF" }] }, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 170, "h": 36, "layout": { "direction": "VERTICAL", "itemSpacing": 2, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 160, "h": 17, "text": "Noah Kim", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 160, "h": 15, "text": "noah@example.com", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#66728B", "layoutSizingVertical": "HUG" }] }] }, { "type": "TEXT", "w": 170, "h": 18, "text": "#NS-10480", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE", "layoutSizingVertical": "HUG" }, { "type": "FRAME", "w": 86, "h": 26, "fill": "#35DAAB1F", "cornerRadius": 999, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 54, "h": 15, "text": "PAID", "font": { "family": "Arial", "style": "Bold", "size": 10 }, "fill": "#35DAAB", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }, { "type": "TEXT", "w": 244, "h": 18, "text": "$312.80", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5", "align": "RIGHT", "layoutSizingVertical": "HUG" }] }
+          ]
+        },
+        {
+          "id": "activity",
+          "type": "FRAME",
+          "x": 880,
+          "y": 838,
+          "w": 422,
+          "h": 330,
+          "fill": "#0F1421",
+          "stroke": "#252F45",
+          "strokeWeight": 1,
+          "cornerRadius": 18,
+          "layout": { "direction": "VERTICAL", "padding": { "left": 22, "top": 22, "right": 22, "bottom": 22 }, "itemSpacing": 18, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" },
+          "children": [
+            { "type": "TEXT", "w": 250, "h": 24, "text": "Live activity", "font": { "family": "Arial", "style": "Bold", "size": 18 }, "fill": "#F5F7FC", "layoutSizingVertical": "HUG" },
+            { "type": "FRAME", "w": 378, "h": 62, "layout": { "direction": "HORIZONTAL", "itemSpacing": 12, "counterAxisAlignItems": "MIN", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 34, "h": 34, "fill": "#7D5CFF22", "cornerRadius": 10, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 326, "h": 58, "layout": { "direction": "VERTICAL", "itemSpacing": 4, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 300, "h": 34, "runs": [{ "text": "Maya Patel", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5" }, { "text": " completed an order for $248", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE" }], "lineHeight": 1.4, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 200, "h": 15, "text": "2 minutes ago", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }] }] },
+            { "type": "FRAME", "w": 378, "h": 62, "layout": { "direction": "HORIZONTAL", "itemSpacing": 12, "counterAxisAlignItems": "MIN", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 34, "h": 34, "fill": "#35DAAB22", "cornerRadius": 10, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 326, "h": 58, "layout": { "direction": "VERTICAL", "itemSpacing": 4, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 300, "h": 34, "runs": [{ "text": "Workflow", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5" }, { "text": " “VIP follow-up” completed", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE" }], "lineHeight": 1.4, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 200, "h": 15, "text": "14 minutes ago", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }] }] },
+            { "type": "FRAME", "w": 378, "h": 62, "layout": { "direction": "HORIZONTAL", "itemSpacing": 12, "counterAxisAlignItems": "MIN", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "FRAME", "w": 34, "h": 34, "fill": "#59B7FF22", "cornerRadius": 10, "layoutSizingHorizontal": "FIXED", "layoutSizingVertical": "FIXED" }, { "type": "FRAME", "w": 326, "h": 58, "layout": { "direction": "VERTICAL", "itemSpacing": 4, "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 300, "h": 34, "runs": [{ "text": "Jon Bell", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#E8ECF5" }, { "text": " joined the Pro segment", "font": { "family": "Arial", "style": "Regular", "size": 12 }, "fill": "#8995AE" }], "lineHeight": 1.4, "layoutSizingVertical": "HUG" }, { "type": "TEXT", "w": 200, "h": 15, "text": "28 minutes ago", "font": { "family": "Arial", "style": "Regular", "size": 10 }, "fill": "#59657D", "layoutSizingVertical": "HUG" }] }] },
+            { "type": "FRAME", "w": 378, "h": 36, "fill": "#151C2D", "cornerRadius": 10, "layout": { "direction": "HORIZONTAL", "primaryAxisAlignItems": "CENTER", "counterAxisAlignItems": "CENTER", "primaryAxisSizingMode": "FIXED", "counterAxisSizingMode": "FIXED" }, "children": [{ "type": "TEXT", "w": 140, "h": 17, "text": "View all activity", "font": { "family": "Arial", "style": "Bold", "size": 12 }, "fill": "#A992FF", "align": "CENTER", "layoutSizingHorizontal": "HUG", "layoutSizingVertical": "HUG" }] }
+          ]
+        }
+      ]
+    }
+  ]
+}

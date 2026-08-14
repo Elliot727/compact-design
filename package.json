@@ -1,0 +1,25 @@
+{
+  "name": "compact-design",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "description": "Compact Design JSON language, reusable core, and reference adapters.",
+  "scripts": {
+    "build": "npm run build -w @compact-design/core && npm run build -w @compact-design/figma-plugin",
+    "test": "npm run test -w @compact-design/core && npm run test -w @compact-design/figma-plugin",
+    "typecheck": "npm run typecheck -w @compact-design/core && npm run typecheck -w @compact-design/figma-plugin",
+    "lint": "npm run lint -w @compact-design/core && npm run lint -w @compact-design/figma-plugin",
+    "check": "npm run typecheck && npm test && npm run lint && npm run build",
+    "watch:figma": "npm run watch -w @compact-design/figma-plugin"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "latest",
+    "esbuild": "latest",
+    "lefthook": "^2.1.10",
+    "typescript": "latest"
+  }
+}
