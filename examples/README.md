@@ -1,6 +1,6 @@
 # Maintained examples
 
-These examples target the current Compact Design JSON schema. Files that include `$schema` reference the authoritative schema in [`../spec/compact-design.schema.json`](../spec/compact-design.schema.json).
+These examples target the current Compact Design JSON schema. Each file includes `"$schema": "../spec/compact-design.schema.json"` for editor validation.
 
 | File | Purpose |
 |---|---|

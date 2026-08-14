@@ -1,4 +1,5 @@
 {
+  "$schema": "../spec/compact-design.schema.json",
   "canvas": {
     "id": "local-image-demo",
     "name": "Local Image Upload Demo",

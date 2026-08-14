@@ -1,4 +1,5 @@
 {
+  "$schema": "../spec/compact-design.schema.json",
   "variables": [
     {
       "name": "Northstar UI Tokens",
