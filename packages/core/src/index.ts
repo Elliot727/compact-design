@@ -28,5 +28,7 @@ export function lint(value: InternalDocument): RepairIssue[] { return lintDocume
 export function applyPatch(document: InternalDocument, patch: InternalPatchDocument): PatchResult { return applyDocumentPatch(document, patch); }
 
 export { isPatchDocument, schema };
+export { indexDocument } from "./references";
+export type { DocumentIndex } from "./references";
 export type { PatchResult, RepairIssue };
 export type * from "./types";

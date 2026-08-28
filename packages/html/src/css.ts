@@ -1,0 +1,274 @@
+import type { DesignColor, DesignEffect, DesignFont, DesignPaint, DesignProperties, LetterSpacing, LineHeight } from "@compact-design/core";
+
+const WEB_SAFE = new Set([
+  "Arial", "Helvetica", "Times", "Times New Roman", "Courier", "Courier New",
+  "Georgia", "Verdana", "Tahoma", "Trebuchet MS", "Impact", "Comic Sans MS", "system-ui", "sans-serif", "serif", "monospace"
+]);
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isDesignColor(value: unknown): value is DesignColor {
+  return isRecord(value) && typeof value.r === "number" && typeof value.g === "number" && typeof value.b === "number";
+}
+
+export function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export function htmlId(id: string): string {
+  const cleaned = id.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `n-${cleaned || "node"}`;
+}
+
+export function cssEscape(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
+}
+
+export function finite(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export function cssColor(value: DesignColor | undefined, opacity = 1): string {
+  if (!value) return `rgba(0, 0, 0, ${opacity})`;
+  const channel = (input: unknown) => {
+    const n = finite(input, 0);
+    return Math.round(n > 1 && n <= 255 ? n : n * 255);
+  };
+  const alpha = finite(value.a, 1) * opacity;
+  return `rgba(${channel(value.r)}, ${channel(value.g)}, ${channel(value.b)}, ${alpha})`;
+}
+
+export function paintColor(paint: DesignPaint | undefined): string | undefined {
+  if (!paint || paint.type !== "SOLID" || !paint.color) return undefined;
+  return cssColor(paint.color, finite(paint.opacity, 1));
+}
+
+function gradientAngle(paint: DesignPaint): number {
+  const transform = paint.gradientTransform;
+  if (!transform) return 90;
+  const cosine = transform[0]?.[0] ?? 1;
+  const sine = transform[0]?.[1] ?? 0;
+  const compact = Math.atan2(sine, cosine) * 180 / Math.PI;
+  return compact + 90;
+}
+
+function gradientStops(paint: DesignPaint): string {
+  const stops = paint.gradientStops || [];
+  if (!stops.length) return `${cssColor(paint.color)}, ${cssColor(paint.color)}`;
+  return stops.map((stop) => `${cssColor(stop.color)} ${Math.round(finite(stop.position, 0) * 1000) / 10}%`).join(", ");
+}
+
+export function backgroundLayers(paints: DesignPaint[]): string[] {
+  const layers: string[] = [];
+  for (const paint of [...paints].reverse()) {
+    if (paint.type === "SOLID" && paint.color) layers.push(`linear-gradient(${cssColor(paint.color, finite(paint.opacity, 1))}, ${cssColor(paint.color, finite(paint.opacity, 1))})`);
+    else if (paint.type === "GRADIENT_LINEAR") layers.push(`linear-gradient(${gradientAngle(paint)}deg, ${gradientStops(paint)})`);
+    else if (paint.type === "GRADIENT_RADIAL" || paint.type === "GRADIENT_DIAMOND") layers.push(`radial-gradient(circle, ${gradientStops(paint)})`);
+    else if (paint.type === "GRADIENT_ANGULAR") layers.push(`conic-gradient(${gradientStops(paint)})`);
+    else if (paint.type === "IMAGE" && paint.src) {
+      const size = paint.scaleMode === "FIT" ? "contain" : paint.scaleMode === "TILE" ? "auto" : "cover";
+      const repeat = paint.scaleMode === "TILE" ? "repeat" : "no-repeat";
+      layers.push(`url(${JSON.stringify(paint.src)}) ${repeat} center / ${size}`);
+    }
+  }
+  return layers;
+}
+
+export function fontWeight(style: string): number {
+  const value = style.toLowerCase();
+  if (value.includes("thin")) return 100;
+  if (value.includes("extralight") || value.includes("ultralight")) return 200;
+  if (value.includes("light")) return 300;
+  if (value.includes("medium")) return 500;
+  if (value.includes("semibold") || value.includes("demibold")) return 600;
+  if (value.includes("extrabold") || value.includes("ultrabold")) return 800;
+  if (value.includes("black") || value.includes("heavy")) return 900;
+  if (value.includes("bold")) return 700;
+  return 400;
+}
+
+export function isItalic(style: string): boolean {
+  return /italic|oblique/i.test(style);
+}
+
+export function quoteFont(family: string): string {
+  return /[^a-zA-Z0-9-]/.test(family) ? `"${family.replace(/"/g, '\\"')}"` : family;
+}
+
+export function isWebSafeFont(family: string): boolean {
+  return WEB_SAFE.has(family);
+}
+
+export function fontDeclarations(font: DesignFont | undefined): string[] {
+  if (!font) return [];
+  const declarations = [
+    `font-family: ${quoteFont(font.family)}, sans-serif`,
+    `font-size: ${finite(font.size, 16)}px`,
+    `font-weight: ${fontWeight(font.style)}`
+  ];
+  if (isItalic(font.style)) declarations.push("font-style: italic");
+  return declarations;
+}
+
+export function lineHeightCss(value: LineHeight | undefined): string | undefined {
+  if (!value || value.unit === "AUTO") return undefined;
+  if (value.unit === "PIXELS") return `${finite(value.value, 0)}px`;
+  return String(finite(value.value, 100) / 100);
+}
+
+export function letterSpacingCss(value: LetterSpacing | undefined): string | undefined {
+  if (!value) return undefined;
+  if (value.unit === "PERCENT") return `${finite(value.value, 0) / 100}em`;
+  return `${finite(value.value, 0)}px`;
+}
+
+export function effectShadows(effects: DesignEffect[]): string[] {
+  const shadows: string[] = [];
+  for (const effect of effects) {
+    if (effect.visible === false) continue;
+    if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") {
+      const inset = effect.type === "INNER_SHADOW" ? "inset " : "";
+      shadows.push(`${inset}${finite(effect.offset?.x, 0)}px ${finite(effect.offset?.y, 4)}px ${finite(effect.radius, 8)}px ${finite(effect.spread, 0)}px ${cssColor(effect.color)}`);
+    }
+  }
+  return shadows;
+}
+
+export function blurFilters(effects: DesignEffect[]): { filter?: string; backdrop?: string } {
+  const layer = effects.filter((effect) => effect.visible !== false && effect.type === "LAYER_BLUR");
+  const backdrop = effects.filter((effect) => effect.visible !== false && effect.type === "BACKGROUND_BLUR");
+  return {
+    filter: layer.length ? layer.map((effect) => `blur(${finite(effect.radius, 8)}px)`).join(" ") : undefined,
+    backdrop: backdrop.length ? backdrop.map((effect) => `blur(${finite(effect.radius, 8)}px)`).join(" ") : undefined
+  };
+}
+
+const ALIGN: Record<string, string> = {
+  MIN: "flex-start",
+  MAX: "flex-end",
+  CENTER: "center",
+  SPACE_BETWEEN: "space-between",
+  BASELINE: "baseline",
+  STRETCH: "stretch"
+};
+
+export function layoutDeclarations(props: DesignProperties): string[] {
+  const layout = props.layout;
+  if (!layout?.direction) return [];
+  const declarations: string[] = [];
+  if (layout.direction === "GRID") {
+    declarations.push("display: grid");
+    if (typeof layout.itemSpacing === "number") declarations.push(`gap: ${layout.itemSpacing}px`);
+  } else {
+    declarations.push("display: flex");
+    declarations.push(`flex-direction: ${layout.direction === "HORIZONTAL" ? "row" : "column"}`);
+    if (layout.wrap) declarations.push("flex-wrap: wrap");
+    declarations.push(`justify-content: ${ALIGN[layout.primaryAxisAlignItems || "MIN"] || "flex-start"}`);
+    declarations.push(`align-items: ${ALIGN[layout.counterAxisAlignItems || "MIN"] || "flex-start"}`);
+    if (typeof layout.itemSpacing === "number") declarations.push(`gap: ${layout.itemSpacing}px`);
+    if (typeof layout.counterAxisSpacing === "number" && layout.wrap) declarations.push(`row-gap: ${layout.counterAxisSpacing}px`);
+  }
+  const padding = layout.padding;
+  if (padding) {
+    declarations.push(`padding: ${finite(padding.top, 0)}px ${finite(padding.right, 0)}px ${finite(padding.bottom, 0)}px ${finite(padding.left, 0)}px`);
+  }
+  return declarations;
+}
+
+export function childSizingDeclarations(props: DesignProperties, parentDirection: "HORIZONTAL" | "VERTICAL" | "GRID" | undefined): string[] {
+  if (!parentDirection) return [];
+  const declarations: string[] = [];
+  const horizontal = props.layoutSizingHorizontal;
+  const vertical = props.layoutSizingVertical;
+  if (parentDirection === "HORIZONTAL") {
+    if (horizontal === "FILL") declarations.push("flex: 1 1 0", "min-width: 0");
+    else if (horizontal === "HUG") declarations.push("flex: 0 0 auto", "width: auto");
+    if (vertical === "FILL") declarations.push("align-self: stretch", "height: auto");
+    else if (vertical === "HUG") declarations.push("height: auto");
+  } else if (parentDirection === "VERTICAL") {
+    if (vertical === "FILL") declarations.push("flex: 1 1 0", "min-height: 0");
+    else if (vertical === "HUG") declarations.push("flex: 0 0 auto", "height: auto");
+    if (horizontal === "FILL") declarations.push("align-self: stretch", "width: auto");
+    else if (horizontal === "HUG") declarations.push("width: auto");
+  }
+  if (typeof props.layoutGrow === "number") declarations.push(`flex-grow: ${props.layoutGrow}`);
+  if (props.layoutAlign === "STRETCH") declarations.push("align-self: stretch");
+  if (typeof props.minWidth === "number") declarations.push(`min-width: ${props.minWidth}px`);
+  if (typeof props.maxWidth === "number") declarations.push(`max-width: ${props.maxWidth}px`);
+  if (typeof props.minHeight === "number") declarations.push(`min-height: ${props.minHeight}px`);
+  if (typeof props.maxHeight === "number") declarations.push(`max-height: ${props.maxHeight}px`);
+  return declarations;
+}
+
+export function overflowDeclarations(props: DesignProperties): string[] {
+  if (props.clipsContent) return ["overflow: hidden"];
+  if (props.overflowDirection === "HORIZONTAL") return ["overflow-x: auto", "overflow-y: hidden"];
+  if (props.overflowDirection === "VERTICAL") return ["overflow-x: hidden", "overflow-y: auto"];
+  if (props.overflowDirection === "BOTH") return ["overflow: auto"];
+  return [];
+}
+
+export function radiusDeclarations(props: DesignProperties): string[] {
+  if (Array.isArray(props.cornerRadii) && props.cornerRadii.length === 4) {
+    return [`border-radius: ${props.cornerRadii.map((value) => `${finite(value, 0)}px`).join(" ")}`];
+  }
+  if (typeof props.cornerRadius === "number") return [`border-radius: ${props.cornerRadius}px`];
+  return [];
+}
+
+export function strokeDeclarations(props: DesignProperties): string[] {
+  const color = paintColor(props.styles.strokes[0]);
+  if (!color) return [];
+  const style = props.dashPattern?.length ? "dashed" : "solid";
+  const declarations: string[] = [];
+  const sides = [
+    ["border-top-width", props.strokeTopWeight],
+    ["border-right-width", props.strokeRightWeight],
+    ["border-bottom-width", props.strokeBottomWeight],
+    ["border-left-width", props.strokeLeftWeight]
+  ] as const;
+  const perSide = sides.some(([, value]) => typeof value === "number");
+  if (perSide) {
+    declarations.push(`border-style: ${style}`, `border-color: ${color}`, "border-width: 0");
+    for (const [property, value] of sides) if (typeof value === "number") declarations.push(`${property}: ${value}px`);
+  } else {
+    const weight = finite(props.strokeWeight, 1);
+    if (weight <= 0) return [];
+    declarations.push(`border: ${weight}px ${style} ${color}`);
+  }
+  return declarations;
+}
+
+export function blendModeCss(value: string | undefined): string | undefined {
+  if (!value || value === "PASS_THROUGH" || value === "NORMAL") return undefined;
+  return value.toLowerCase().replace(/_/g, "-");
+}
+
+export function textCaseCss(value: string | undefined): string | undefined {
+  if (value === "UPPER") return "uppercase";
+  if (value === "LOWER") return "lowercase";
+  if (value === "TITLE") return "capitalize";
+  return undefined;
+}
+
+export function sanitizeSvg(markup: string): string {
+  return markup
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+}
+
+export function regularPolygon(cx: number, cy: number, radius: number, points: number, innerRatio?: number): string {
+  const count = Math.max(3, Math.round(points));
+  const coords: string[] = [];
+  const steps = innerRatio === undefined ? count : count * 2;
+  for (let index = 0; index < steps; index += 1) {
+    const ratio = innerRatio === undefined || index % 2 === 0 ? 1 : innerRatio;
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / steps;
+    coords.push(`${cx + radius * ratio * Math.cos(angle)},${cy + radius * ratio * Math.sin(angle)}`);
+  }
+  return coords.join(" ");
+}
+
+

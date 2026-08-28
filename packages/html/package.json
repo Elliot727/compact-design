@@ -1,12 +1,15 @@
 {
-  "name": "@compact-design/core",
+  "name": "@compact-design/html",
   "version": "0.1.0",
-  "description": "Reusable parser, normalizer, validator, patch engine, and linter for Compact Design JSON.",
+  "description": "HTML and CSS renderer for Compact Design JSON.",
   "license": "MPL-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "compact-design-html": "./scripts/render.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,7 +20,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/render.mjs"
   ],
   "publishConfig": {
     "access": "public"
@@ -25,31 +29,30 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Elliot727/compact-design.git",
-    "directory": "packages/core"
+    "directory": "packages/html"
   },
-  "homepage": "https://github.com/Elliot727/compact-design/tree/main/packages/core#readme",
+  "homepage": "https://github.com/Elliot727/compact-design/tree/main/packages/html#readme",
   "bugs": {
     "url": "https://github.com/Elliot727/compact-design/issues"
   },
   "keywords": [
     "compact-design",
-    "design",
-    "json",
-    "schema",
-    "linter"
+    "html",
+    "css",
+    "renderer"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "generate:schema": "node scripts/generate-schema.mjs",
-    "build": "npm run generate:schema && node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
     "prepack": "npm run build",
-    "test": "npm run generate:schema && node scripts/test.mjs",
-    "typecheck": "npm run generate:schema && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "lint": "node scripts/lint.mjs"
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "node scripts/lint.mjs",
+    "render": "node scripts/render.mjs"
   },
   "dependencies": {
-    "ajv": "^8.20.0"
+    "@compact-design/core": "0.1.0"
   }
 }

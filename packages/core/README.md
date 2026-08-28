@@ -2,7 +2,11 @@
 
 Reusable Compact Design JSON language tooling with no dependency on Figma or the Figma Plugin API.
 
-The package is not published yet. In this monorepo the Figma adapter consumes it through npm workspaces.
+```bash
+npm install @compact-design/core
+```
+
+In this monorepo the Figma adapter and HTML renderer consume it through npm workspaces.
 
 ## Public API
 
@@ -13,6 +17,7 @@ import {
   lint,
   normalizePatch,
   applyPatch,
+  indexDocument,
   schema
 } from "@compact-design/core";
 ```
@@ -70,7 +75,7 @@ Core patching returns a new canonical document. Adapter-specific transactional b
 console.log(schema.$schema); // Draft 2020-12
 ```
 
-The sole source schema is [`../../spec/compact-design.schema.json`](../../spec/compact-design.schema.json). The package build generates its programmatic module from that file, preventing a hand-maintained second copy.
+The sole source schema is [`spec/compact-design.schema.json`](https://github.com/Elliot727/compact-design/blob/main/spec/compact-design.schema.json). The package build generates its programmatic module from that file, preventing a hand-maintained second copy.
 
 ## Package boundary
 

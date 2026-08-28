@@ -1,6 +1,6 @@
 # Compact Design
 
-Compact Design JSON is an LLM-friendly design language. `@compact-design/core` is the reusable language engine, and the Figma plugin is its first reference adapter.
+Compact Design JSON is an LLM-friendly design language. `@compact-design/core` is the reusable language engine. The Figma plugin and the HTML renderer are reference adapters.
 
 ```text
 Compact Design JSON
@@ -10,22 +10,30 @@ Compact Design JSON
         ↓
 adapter
         ↓
-Figma today; other tools can implement the same language independently
+Figma and HTML/CSS today; other tools can implement the same language independently
 ```
 
-The dependency direction is deliberate: the Figma plugin depends on core; core never depends on Figma or its plugin API.
+The dependency direction is deliberate: adapters depend on core; core never depends on Figma, the DOM, or an adapter.
 
 ## Repository
 
 ```text
 packages/core/       reusable @compact-design/core package
+packages/html/       HTML + CSS renderer
 plugins/figma/       Figma adapter, plugin controller, and UI
 spec/                authoritative Draft 2020-12 JSON Schema
 examples/            maintained Compact Design fixtures
 docs/                language and showcase documentation
 ```
 
-This is one npm-workspaces monorepo and one Git repository. No package is published by this project setup.
+This is one npm-workspaces monorepo and one Git repository. Published packages:
+
+```bash
+npm install @compact-design/core
+npm install @compact-design/html
+```
+
+The Figma plugin is not an npm package. Import [`plugins/figma/manifest.json`](./plugins/figma/manifest.json) in the Figma desktop app, or publish it from **Plugins → Manage plugins**.
 
 ## Development
 
@@ -43,6 +51,12 @@ npm run lint
 
 For Figma development, run `npm run build`, then import [`plugins/figma/manifest.json`](./plugins/figma/manifest.json) through **Plugins → Development → Import plugin from manifest…**. Generated plugin files are written to `plugins/figma/dist/`.
 
+To print a document as a web page:
+
+```bash
+npm run render -- examples/design-language-showcase.json -o /tmp/northstar.html
+```
+
 ## Language resources
 
 - [Complete language documentation](./docs/DESIGN-LANGUAGE.md)
@@ -50,12 +64,13 @@ For Figma development, run `npm run build`, then import [`plugins/figma/manifest
 - [Authoritative JSON Schema](./spec/compact-design.schema.json)
 - [Maintained examples](./examples/README.md)
 - [`@compact-design/core` usage](./packages/core/README.md)
+- [`@compact-design/html` renderer](./packages/html/README.md)
 
 The compact authoring syntax remains the public format: hex fills, angle-based gradients, HUG sizing, elevation presets, shorthand shadows, responsive canvases, variables, styles, prototypes, components, images, and patches are normalized into a predictable canonical representation before an adapter consumes them.
 
 ## Figma adapter boundary
 
-The Figma package owns native node creation, font loading, Figma styles and variables, component/instance APIs, plugin data, page state, image creation, import rollback, prototype API limitations, and Figma-to-Compact export translation. These are intentionally absent from core.
+The Figma package owns native node creation, font loading, Figma styles and variables, component/instance APIs, plugin data, page state, image creation, import rollback, prototype API limitations, and Figma-to-Compact export translation. The HTML package owns CSS layout, paints, and in-page prototype behaviour. These are intentionally absent from core.
 
 ## License
 
