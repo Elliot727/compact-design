@@ -88,6 +88,14 @@ test("validates geometry, auto layout, variables, and prototype destinations", (
   assert.ok(lintDocument(document).some((issue) => issue.code === "BROKEN_PROTOTYPE_DESTINATION"));
 });
 
+test("accepts Figma open vector paths with a NONE winding rule", () => {
+  const result = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ type: "VECTOR", w: 80, h: 20, vectorPaths: [{ windingRule: "NONE", data: "M 0 0 L 80 20" }] }]
+  });
+  assert.equal(result.valid, true);
+});
+
 test("normalizes patch set, remove, and append operations", () => {
   const patch = normalizePatchDocument(fixture("update-patch-sample.json"));
   assert.deepEqual(patch.patch.operations.map((operation) => operation.op), ["SET", "SET", "APPEND"]);

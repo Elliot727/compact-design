@@ -4,7 +4,7 @@ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type Transform = [[number, number, number], [number, number, number]];
 export interface LineHeight { unit: "AUTO" | "PIXELS" | "PERCENT"; value?: number; }
 export interface LetterSpacing { unit: "PIXELS" | "PERCENT"; value: number; }
-export interface VectorPath { windingRule: "NONZERO" | "EVENODD"; data: string; }
+export interface VectorPath { windingRule: "NONZERO" | "EVENODD" | "NONE"; data: string; }
 export interface VariableAlias { type: "VARIABLE_ALIAS"; id: string; }
 export interface Constraints { horizontal: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE"; vertical: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE"; }
 export type ComponentPropertyType = "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "VARIANT";

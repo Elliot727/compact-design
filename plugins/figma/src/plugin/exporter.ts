@@ -1,6 +1,21 @@
 type CompactValue = Record<string, unknown>;
 let activeExportIds = new Map<string, string>();
-function compactId(node: SceneNode): string { return node.getPluginData("compactDesignId") || node.id; }
+let activeNodeExportIds = new WeakMap<SceneNode, string>();
+function storedCompactId(node: SceneNode): string { return node.getPluginData("compactDesignId") || node.id; }
+function compactId(node: SceneNode): string { return activeNodeExportIds.get(node) || activeExportIds.get(node.id) || storedCompactId(node); }
+
+export function uniqueExportIds(preferredIds: string[]): string[] {
+  const result: string[] = [];
+  const used = new Set<string>();
+  for (const preferredId of preferredIds) {
+    let candidate = preferredId;
+    let suffix = 2;
+    while (used.has(candidate)) candidate = `${preferredId}-${suffix++}`;
+    result.push(candidate);
+    used.add(candidate);
+  }
+  return result;
+}
 
 function rgba(color: RGB | RGBA, opacity = 1): string {
   const channel = (value: number) => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0").toUpperCase();
@@ -136,9 +151,9 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
   return result;
 }
 
-function collectIds(node: SceneNode, result: Set<string>): void {
-  result.add(node.id);
-  if ("children" in node) for (const child of node.children) if ("x" in child) collectIds(child as SceneNode, result);
+function collectNodes(node: SceneNode, result: SceneNode[]): void {
+  result.push(node);
+  if ("children" in node) for (const child of node.children) if ("x" in child) collectNodes(child as SceneNode, result);
 }
 
 function compactTrigger(value: Trigger | null): CompactValue {
@@ -177,10 +192,18 @@ async function compactReactions(node: SceneNode): Promise<CompactValue[] | null>
 
 export async function exportSelection(selection: readonly SceneNode[]): Promise<{ document: CompactValue; warnings: string[] }> {
   if (!selection.length) throw new Error("Select at least one frame or layer to export.");
+  const exportedNodes: SceneNode[] = [];
   const exportedIds = new Set<string>();
+  selection.forEach((node) => collectNodes(node, exportedNodes));
+  exportedNodes.forEach((node) => exportedIds.add(node.id));
+  const assignedIds = uniqueExportIds(exportedNodes.map(storedCompactId));
   activeExportIds = new Map();
-  selection.forEach((node) => collectIds(node, exportedIds));
-  for (const nativeId of exportedIds) { const node = await figma.getNodeByIdAsync(nativeId); if (node && "x" in node) activeExportIds.set(nativeId, compactId(node as SceneNode)); }
+  activeNodeExportIds = new WeakMap();
+  exportedNodes.forEach((node, index) => {
+    const assigned = assignedIds[index];
+    activeNodeExportIds.set(node, assigned);
+    if (!activeExportIds.has(node.id)) activeExportIds.set(node.id, assigned);
+  });
   const warnings: string[] = [];
   const canvases: CompactValue[] = [];
   for (const [index, node] of selection.entries()) {

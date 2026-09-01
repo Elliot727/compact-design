@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
+import { uniqueExportIds } from "../src/plugin/exporter";
 
 test("Figma adapter consumes core and does not duplicate language modules", () => {
   const files: string[] = [];
@@ -23,6 +24,11 @@ test("plugin UI polls the Compact Design MCP bridge on localhost", () => {
   const source = readFileSync("src/ui/bridge.ts", "utf8");
   assert.match(source, /localhost:18791/);
   assert.match(source, /\/poll/);
+});
+
+test("export assigns unique IDs when copied layers retain plugin IDs", () => {
+  assert.deepEqual(uniqueExportIds(["card", "card", "card"]), ["card", "card-2", "card-3"]);
+  assert.deepEqual(uniqueExportIds(["1087:813", "1087:813"]), ["1087:813", "1087:813-2"]);
 });
 
 test("built UI contains one syntactically valid, uncorrupted script", () => {

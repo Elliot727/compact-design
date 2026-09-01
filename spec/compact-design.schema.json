@@ -544,7 +544,7 @@
       "additionalProperties": false,
       "required": ["data"],
       "properties": {
-        "windingRule": { "enum": ["NONZERO", "EVENODD"] },
+        "windingRule": { "enum": ["NONZERO", "EVENODD", "NONE"] },
         "data": { "type": "string", "minLength": 1 }
       }
     },
