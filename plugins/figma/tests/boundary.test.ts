@@ -19,6 +19,12 @@ test("core workspace has no Figma runtime or typing dependency", () => {
   assert.equal(manifest.devDependencies?.["@figma/plugin-typings"], undefined);
 });
 
+test("plugin UI polls the Compact Design MCP bridge on localhost", () => {
+  const source = readFileSync("src/ui/bridge.ts", "utf8");
+  assert.match(source, /localhost:18791/);
+  assert.match(source, /\/poll/);
+});
+
 test("built UI contains one syntactically valid, uncorrupted script", () => {
   const html = readFileSync("dist/ui.html", "utf8");
   assert.doesNotMatch(html, /<!-- UI_SCRIPT -->/);

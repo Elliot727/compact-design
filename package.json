@@ -9,16 +9,18 @@
   ],
   "description": "Compact Design JSON language, reusable core, and reference adapters.",
   "scripts": {
-    "build": "npm run build -w @compact-design/core && npm run build -w @compact-design/html && npm run build -w @compact-design/figma-plugin",
-    "test": "npm run test -w @compact-design/core && npm run test -w @compact-design/html && npm run test -w @compact-design/figma-plugin",
-    "typecheck": "npm run typecheck -w @compact-design/core && npm run typecheck -w @compact-design/html && npm run typecheck -w @compact-design/figma-plugin",
-    "lint": "npm run lint -w @compact-design/core && npm run lint -w @compact-design/html && npm run lint -w @compact-design/figma-plugin",
+    "build": "npm run build -w @compact-design/core && npm run build -w @compact-design/html && npm run build -w @compact-design/mcp && npm run build -w @compact-design/figma-plugin",
+    "test": "npm run test -w @compact-design/core && npm run test -w @compact-design/html && npm run test -w @compact-design/mcp && npm run test -w @compact-design/figma-plugin",
+    "typecheck": "npm run typecheck -w @compact-design/core && npm run typecheck -w @compact-design/html && npm run typecheck -w @compact-design/mcp && npm run typecheck -w @compact-design/figma-plugin",
+    "lint": "npm run lint -w @compact-design/core && npm run lint -w @compact-design/html && npm run lint -w @compact-design/mcp && npm run lint -w @compact-design/figma-plugin",
     "check": "npm run typecheck && npm test && npm run lint && npm run build",
     "watch:figma": "npm run watch -w @compact-design/figma-plugin",
-    "render": "npm run render -w @compact-design/html --"
+    "render": "npm run render -w @compact-design/html --",
+    "mcp": "npm run start -w @compact-design/mcp"
   },
   "devDependencies": {
     "@figma/plugin-typings": "latest",
+    "@types/node": "latest",
     "esbuild": "latest",
     "lefthook": "^2.1.10",
     "typescript": "latest"

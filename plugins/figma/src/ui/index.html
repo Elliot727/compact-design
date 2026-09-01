@@ -14,6 +14,10 @@
     .mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); font: 700 15px/1 ui-monospace, monospace; }
     h1 { margin: 0; font-size: 15px; line-height: 20px; letter-spacing: -.1px; }
     .subtitle { margin: 2px 0 0; color: var(--figma-color-text-secondary); }
+    .mcp { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--figma-color-text-secondary); }
+    .mcp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--figma-color-icon-tertiary); }
+    .mcp.online .mcp-dot { background: var(--figma-color-bg-success); }
+    .mcp.busy .mcp-dot { background: var(--figma-color-bg-brand); }
     .content { padding: 16px 20px; display: grid; gap: 14px; }
     .dropzone { position: relative; min-height: 92px; display: flex; align-items: center; gap: 13px; padding: 15px; border: 1px dashed var(--figma-color-border-strong); border-radius: 10px; background: var(--figma-color-bg-secondary); transition: border-color .15s, background .15s; }
     .dropzone.dragging { border-color: var(--figma-color-border-brand); background: var(--figma-color-bg-brand-tertiary); }
@@ -80,7 +84,7 @@
 <body>
   <main class="app">
     <header class="header">
-      <div class="brand"><div class="mark">{ }</div><div><h1>Compact Design Importer</h1><p class="subtitle">JSON to native, editable Figma layers</p></div></div>
+      <div class="brand"><div class="mark">{ }</div><div><h1>Compact Design Importer</h1><p class="subtitle">JSON to native, editable Figma layers</p><div id="mcp" class="mcp"><span class="mcp-dot"></span><span id="mcp-label">MCP idle · start @compact-design/mcp</span></div></div></div>
     </header>
     <section class="content">
       <div id="dropzone" class="dropzone" tabindex="0">

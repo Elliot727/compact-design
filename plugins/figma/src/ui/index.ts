@@ -1,4 +1,5 @@
 import { isPatchDocument, lint, normalize, normalizePatch, parse, validate, type RepairIssue } from "@compact-design/core";
+import { completeMcpJob, startMcpPoll, type McpJob, type McpState } from "./bridge";
 import { prepareImages, requiredLocalAssets } from "./images";
 import type { ImportMode, InternalDocument, InternalNode, InternalPatchDocument } from "@compact-design/core";
 
@@ -24,10 +25,22 @@ const previewStats = document.querySelector<HTMLDivElement>("#preview-stats")!;
 const issuesElement = document.querySelector<HTMLDivElement>("#issues")!;
 const copyRepair = document.querySelector<HTMLButtonElement>("#copy-repair")!;
 const localAssets = new Map<string, File>();
+const mcp = document.querySelector<HTMLDivElement>("#mcp")!;
+const mcpLabel = document.querySelector<HTMLSpanElement>("#mcp-label")!;
 let currentPayload: InternalDocument | null = null;
 let currentPatch: InternalPatchDocument | null = null;
 let currentIssues: RepairIssue[] = [];
 let updateTimer = 0;
+let pluginWaiter: ((message: Record<string, unknown>) => void) | null = null;
+
+function setMcpState(state: McpState): void {
+  mcp.className = `mcp ${state}`;
+  mcpLabel.textContent = state === "online" ? "MCP connected · AI can import directly" : state === "busy" ? "MCP importing…" : "MCP idle · start @compact-design/mcp";
+}
+
+function waitForPlugin(): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => { pluginWaiter = resolve; });
+}
 function selectedMode(): ImportMode { return (modePicker.querySelector<HTMLInputElement>('input[name="mode"]:checked')?.value || "CREATE") as ImportMode; }
 
 async function copyText(value: string): Promise<boolean> {
@@ -164,6 +177,7 @@ document.addEventListener("keydown", (event) => { if ((event.metaKey || event.ct
 window.onmessage = (event) => {
   const message = event.data.pluginMessage;
   if (!message) return;
+  if (pluginWaiter) { pluginWaiter(message); pluginWaiter = null; }
   if (message.type === "export-complete") {
     exportButton.disabled = false; exportButton.textContent = "Export selection";
     input.value = JSON.stringify(message.document, null, 2); updateSummary();
@@ -183,3 +197,29 @@ window.onmessage = (event) => {
   const warningText = message.warnings?.length ? `\nImport warnings:\n${message.warnings.join("\n")}` : "";
   setStatus(message.type === "import-complete" ? `Done — imported ${message.count} canvas${message.count === 1 ? "" : "es"}.${warningText}` : message.message, message.type === "import-error" ? "error" : "success");
 };
+
+startMcpPoll(async (job: McpJob) => {
+  try {
+    if (job.type === "import") {
+      const documentValue = job.document as InternalDocument;
+      await prepareImages(documentValue, localAssets, (message) => setStatus(message));
+      parent.postMessage({ pluginMessage: { type: "import-json", document: documentValue, mode: (job.mode as ImportMode) || "CREATE" } }, "*");
+      await completeMcpJob(job.id, await waitForPlugin());
+      return;
+    }
+    if (job.type === "patch") {
+      const patch = job.patch as InternalPatchDocument;
+      const patchImages: InternalDocument = { nodes: patch.patch.operations.flatMap((operation, index) => operation.node ? [operation.node] : operation.normalized ? [{ id: `patch-image-${index}`, name: "Patch image", type: "FRAME", properties: operation.normalized, children: [] }] : []), styles: [], variables: [] };
+      await prepareImages(patchImages, localAssets, (message) => setStatus(message));
+      parent.postMessage({ pluginMessage: { type: "apply-patch", patch } }, "*");
+      await completeMcpJob(job.id, await waitForPlugin());
+      return;
+    }
+    if (job.type === "export") {
+      parent.postMessage({ pluginMessage: { type: "export-selection" } }, "*");
+      await completeMcpJob(job.id, await waitForPlugin());
+    }
+  } catch (error) {
+    await completeMcpJob(job.id, { type: "import-error", message: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
+  }
+}, setMcpState);

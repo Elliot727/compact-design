@@ -1,0 +1,56 @@
+{
+  "name": "@compact-design/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Compact Design: validate JSON and import it into a running Figma plugin.",
+  "license": "MPL-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "compact-design-mcp": "./scripts/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "scripts/cli.mjs"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Elliot727/compact-design.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/Elliot727/compact-design/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Elliot727/compact-design/issues"
+  },
+  "keywords": [
+    "compact-design",
+    "mcp",
+    "figma"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "node scripts/lint.mjs",
+    "start": "node scripts/cli.mjs"
+  },
+  "dependencies": {
+    "@compact-design/core": "0.1.0",
+    "@compact-design/html": "0.1.0"
+  }
+}

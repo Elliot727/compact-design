@@ -11,3 +11,5 @@ npm run build -w @compact-design/figma-plugin
 ```
 
 Then import [`manifest.json`](./manifest.json) in the Figma desktop app.
+
+To let an AI import without pasting JSON, keep this plugin open and run `@compact-design/mcp`. The plugin UI polls `http://localhost:18791`.

@@ -7,7 +7,7 @@
   "editorType": ["figma"],
   "documentAccess": "dynamic-page",
   "networkAccess": {
-    "allowedDomains": ["*"],
-    "reasoning": "Users may import image fills from HTTPS URLs on domains they choose in their design JSON."
+    "allowedDomains": ["*", "http://localhost:18791"],
+    "reasoning": "Users may import image fills from HTTPS URLs they choose in their design JSON. The optional Compact Design MCP bridge is a local server on localhost."
   }
 }
