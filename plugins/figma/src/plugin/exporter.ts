@@ -1,6 +1,7 @@
 type CompactValue = Record<string, unknown>;
 let activeExportIds = new Map<string, string>();
 let activeNodeExportIds = new WeakMap<SceneNode, string>();
+let activeMainComponents = new WeakMap<InstanceNode, ComponentNode | null>();
 function storedCompactId(node: SceneNode): string { return node.getPluginData("compactDesignId") || node.id; }
 function compactId(node: SceneNode): string { return activeNodeExportIds.get(node) || activeExportIds.get(node.id) || storedCompactId(node); }
 
@@ -86,14 +87,20 @@ function font(value: FontName | PluginAPI["mixed"], size: number | PluginAPI["mi
   return { family: value.family, style: value.style, size: typeof size === "number" ? size : 16 };
 }
 
-function nodeType(node: SceneNode, exportedIds: Set<string>): string {
-  if (node.type === "INSTANCE") return node.mainComponent && exportedIds.has(node.mainComponent.id) ? "INSTANCE" : "FRAME";
+async function instanceMainComponent(node: InstanceNode): Promise<ComponentNode | null> {
+  if (!activeMainComponents.has(node)) activeMainComponents.set(node, await node.getMainComponentAsync());
+  return activeMainComponents.get(node) || null;
+}
+
+function nodeType(node: SceneNode, exportedIds: Set<string>, mainComponent: ComponentNode | null): string {
+  if (node.type === "INSTANCE") return mainComponent && exportedIds.has(mainComponent.id) ? "INSTANCE" : "FRAME";
   if (["FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "BOOLEAN_OPERATION", "RECTANGLE", "ELLIPSE", "LINE", "POLYGON", "STAR", "SECTION", "SLICE", "VECTOR", "TEXT"].includes(node.type)) return node.type;
   return "FRAME";
 }
 
 async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<CompactValue> {
-  const type = nodeType(node, exportedIds);
+  const mainComponent = node.type === "INSTANCE" ? await instanceMainComponent(node) : null;
+  const type = nodeType(node, exportedIds, mainComponent);
   const result: CompactValue = { id: compactId(node), name: node.name, type, x: node.x, y: node.y, w: node.width, h: node.height };
   if ("rotation" in node && node.rotation) result.rotation = node.rotation;
   if ("opacity" in node && node.opacity !== 1) result.opacity = node.opacity;
@@ -144,7 +151,7 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
   if (node.type === "STAR") { result.pointCount = node.pointCount; result.innerRadius = node.innerRadius; }
   if (node.type === "ELLIPSE" && (node.arcData.startingAngle !== 0 || node.arcData.endingAngle !== Math.PI * 2 || node.arcData.innerRadius !== 0)) { result.type = "ARC"; result.startingAngle = node.arcData.startingAngle; result.endingAngle = node.arcData.endingAngle; result.innerRadiusRatio = node.arcData.innerRadius; }
   if (node.type === "BOOLEAN_OPERATION") result.operation = node.booleanOperation;
-  if (node.type === "INSTANCE" && type === "INSTANCE" && node.mainComponent) { result.componentId = activeExportIds.get(node.mainComponent.id) || compactId(node.mainComponent); result.instanceProperties = Object.fromEntries(Object.entries(node.componentProperties).map(([key, value]) => [key, value.value])); }
+  if (node.type === "INSTANCE" && type === "INSTANCE" && mainComponent) { result.componentId = activeExportIds.get(mainComponent.id) || compactId(mainComponent); result.instanceProperties = Object.fromEntries(Object.entries(node.componentProperties).map(([key, value]) => [key, value.value])); }
   const prototype = await compactReactions(node);
   if (prototype) result.prototype = prototype;
   if ("children" in node) result.children = await Promise.all(node.children.filter((child): child is SceneNode => child.type !== "STICKY" && child.type !== "CONNECTOR" && child.type !== "SHAPE_WITH_TEXT" && child.type !== "CODE_BLOCK" && child.type !== "STAMP" && child.type !== "WIDGET" && child.type !== "EMBED" && child.type !== "LINK_UNFURL" && child.type !== "MEDIA").map((child) => compactNode(child, exportedIds)));
@@ -168,26 +175,35 @@ async function compactVariableData(value: VariableData | undefined): Promise<unk
   return value.value;
 }
 
-async function compactAction(value: Action): Promise<CompactValue> {
-  if (value.type === "NODE") return {
-    type: value.navigation, ...(value.destinationId ? { destination: activeExportIds.get(value.destinationId) || value.destinationId } : {}),
-    ...(value.transition ? { transition: { ...value.transition, easing: value.transition.easing } } : {}),
-    ...(value.overlayRelativePosition ? { overlayRelativePosition: value.overlayRelativePosition } : {}),
-    ...(value.resetVideoPosition ? { resetVideoPosition: true } : {}), ...(value.resetScrollPosition ? { resetScrollPosition: true } : {}),
-    ...(value.resetInteractiveComponents ? { resetInteractiveComponents: true } : {})
-  };
+async function compactAction(value: Action): Promise<CompactValue | null> {
+  if (value.type === "NODE") {
+    const destination = value.destinationId ? activeExportIds.get(value.destinationId) : undefined;
+    if (!destination) return null;
+    return {
+      type: value.navigation, destination,
+      ...(value.transition ? { transition: { ...value.transition, easing: value.transition.easing } } : {}),
+      ...(value.overlayRelativePosition ? { overlayRelativePosition: value.overlayRelativePosition } : {}),
+      ...(value.resetVideoPosition ? { resetVideoPosition: true } : {}), ...(value.resetScrollPosition ? { resetScrollPosition: true } : {}),
+      ...(value.resetInteractiveComponents ? { resetInteractiveComponents: true } : {})
+    };
+  }
   if (value.type === "BACK" || value.type === "CLOSE") return { type: value.type };
   if (value.type === "URL") return { type: value.type, url: value.url, openInNewTab: value.openInNewTab };
   if (value.type === "UPDATE_MEDIA_RUNTIME") return { type: value.type, destination: value.destinationId, mediaAction: value.mediaAction, ...(value.mediaAction === "SKIP_FORWARD" || value.mediaAction === "SKIP_BACKWARD" ? { amountToSkip: value.amountToSkip } : {}), ...(value.mediaAction === "SKIP_TO" ? { newTimestamp: value.newTimestamp } : {}) };
   if (value.type === "SET_VARIABLE") return { type: value.type, variable: value.variableId, value: await compactVariableData(value.variableValue) };
   if (value.type === "SET_VARIABLE_MODE") return { type: value.type, collection: value.variableCollectionId, mode: value.variableModeId };
   const conditional = value as Extract<Action, { type: "CONDITIONAL" }>;
-  return { type: "CONDITIONAL", blocks: await Promise.all(conditional.conditionalBlocks.map(async (block: ConditionalBlock) => ({ ...(block.condition ? { condition: await compactVariableData(block.condition) } : {}), actions: await Promise.all(block.actions.map(compactAction)) }))) };
+  const blocks = (await Promise.all(conditional.conditionalBlocks.map(async (block: ConditionalBlock) => {
+    const actions = (await Promise.all(block.actions.map(compactAction))).filter((action): action is CompactValue => action !== null);
+    return actions.length ? { ...(block.condition ? { condition: await compactVariableData(block.condition) } : {}), actions } : null;
+  }))).filter((block): block is { actions: CompactValue[] } => block !== null);
+  return blocks.length ? { type: "CONDITIONAL", blocks } : null;
 }
 
 async function compactReactions(node: SceneNode): Promise<CompactValue[] | null> {
   if (!("reactions" in node) || !node.reactions.length) return null;
-  return Promise.all(node.reactions.map(async (reaction) => ({ trigger: compactTrigger(reaction.trigger), actions: await Promise.all((reaction.actions || (reaction.action ? [reaction.action] : [])).map(compactAction)) })));
+  const reactions = await Promise.all(node.reactions.map(async (reaction) => ({ trigger: compactTrigger(reaction.trigger), actions: (await Promise.all((reaction.actions || (reaction.action ? [reaction.action] : [])).map(compactAction))).filter((action): action is CompactValue => action !== null) })));
+  return reactions.filter((reaction) => reaction.actions.length > 0);
 }
 
 export async function exportSelection(selection: readonly SceneNode[]): Promise<{ document: CompactValue; warnings: string[] }> {
@@ -199,6 +215,7 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   const assignedIds = uniqueExportIds(exportedNodes.map(storedCompactId));
   activeExportIds = new Map();
   activeNodeExportIds = new WeakMap();
+  activeMainComponents = new WeakMap();
   exportedNodes.forEach((node, index) => {
     const assigned = assignedIds[index];
     activeNodeExportIds.set(node, assigned);
@@ -213,7 +230,10 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
     const fill = canBecomeCanvas ? (exported.fill ?? exportedFills[0] ?? "#FFFFFF") : "#FFFFFF";
     const children = canBecomeCanvas && Array.isArray(exported.children) ? exported.children : [{ ...exported, x: 0, y: 0 }];
     canvases.push({ id: compactId(node), name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children });
-    if (node.type === "INSTANCE" && (!node.mainComponent || !exportedIds.has(node.mainComponent.id))) warnings.push(`Instance '${node.name}' was flattened to an editable frame because its main component was outside the selection.`);
+    if (node.type === "INSTANCE") {
+      const mainComponent = await instanceMainComponent(node);
+      if (!mainComponent || !exportedIds.has(mainComponent.id)) warnings.push(`Instance '${node.name}' was flattened to an editable frame because its main component was outside the selection.`);
+    }
   }
   if (canvases.length === 1) {
     const { nodes, ...canvas } = canvases[0];

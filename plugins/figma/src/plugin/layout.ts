@@ -34,7 +34,12 @@ export function applyChildLayout(node: SceneNode, props: DesignProperties): void
   const writable = node as unknown as Record<string, unknown>;
   for (const key of ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const) if (key in node && (Number.isFinite(props[key]) || props[key] === null)) writable[key] = props[key];
   if ("layoutAlign" in node && props.layoutAlign === undefined && stretchChildren.has(parent)) node.layoutAlign = "STRETCH";
-  for (const key of ["layoutAlign", "layoutGrow", "layoutPositioning", "layoutSizingHorizontal", "layoutSizingVertical"] as const) if (key in node && props[key] !== undefined) writable[key] = props[key];
+  const canUseHug = node.type === "TEXT" || ("layoutMode" in node && node.layoutMode !== "NONE");
+  for (const key of ["layoutAlign", "layoutGrow", "layoutPositioning", "layoutSizingHorizontal", "layoutSizingVertical"] as const) {
+    if (!(key in node) || props[key] === undefined) continue;
+    if ((key === "layoutSizingHorizontal" || key === "layoutSizingVertical") && props[key] === "HUG" && !canUseHug) continue;
+    writable[key] = props[key];
+  }
 }
 
 export function applyGrids(node: SceneNode, values: JsonObject[]): void {
