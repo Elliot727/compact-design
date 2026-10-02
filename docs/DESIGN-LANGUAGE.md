@@ -79,6 +79,8 @@ Lint is heuristic and advisory because Figma is not a browser layout engine. Sch
 
 Select one or more frames or layers in Figma and choose **Export selection**. A selected container is represented as a canvas and its descendants become `nodes`. Multiple selected roots produce `canvases`. The generated document is placed in the JSON editor and can be copied, downloaded, edited, or imported again.
 
+Through `@compact-design/mcp`, `figma_export` can read the whole current page (`scope: "page"`) or one layer by its Compact Design id or Figma id. An id export includes a main component that lives on the same page, so the instance stays an instance. A component that lives on another page is still flattened.
+
 Solid and gradient paints, embedded image fills, geometry, hierarchy, common effects, text, Auto Layout, constraints, vectors and standard shapes are preserved. Image data is embedded as a base64 data URL, which makes exports self-contained but can make the JSON file large. Instances whose main component is outside the selection are flattened into editable frames to prevent invalid component references. Figma-only metadata or properties that have no compact-language equivalent may be omitted.
 
 ## Document structure

@@ -81,7 +81,11 @@ export class FigmaBridge {
   }
 
   exportSelection(): Promise<ImportResult> {
-    return this.submit({ type: "export" });
+    return this.exportDocument();
+  }
+
+  exportDocument(options: { scope?: "selection" | "page"; id?: string } = {}): Promise<ImportResult> {
+    return this.submit({ type: "export", scope: options.scope ?? "selection", ...(options.id ? { targetId: options.id } : {}) });
   }
 
   private async submit(payload: Record<string, unknown>): Promise<ImportResult> {

@@ -65,8 +65,15 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "figma_export",
-    description: "Export the current Figma selection as Compact Design JSON. Requires the plugin to be open with a selection.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+    description: "Export Compact Design JSON from the open Figma file. scope 'page' exports every top-level layer on the current page. id exports one layer by its Compact Design id or Figma id and includes on-page main components so instances stay linked. Omit both to export the current selection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["selection", "page"], description: "selection (default) or page." },
+        id: { type: "string", description: "Compact Design id or Figma node id. Wins over scope." }
+      },
+      additionalProperties: false
+    }
   }
 ];
 
@@ -133,7 +140,9 @@ export function createToolRunner(bridge: FigmaBridge, cwd = process.cwd()) {
         return textResult(outcome, !outcome.ok);
       }
       case "figma_export": {
-        const outcome = await bridge.exportSelection();
+        const scope = args.scope === "page" || args.scope === "selection" ? args.scope : undefined;
+        const id = typeof args.id === "string" && args.id.trim() ? args.id.trim() : undefined;
+        const outcome = await bridge.exportDocument({ scope, id });
         return textResult(outcome, !outcome.ok);
       }
       default:

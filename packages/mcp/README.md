@@ -64,7 +64,7 @@ Paste-into-the-plugin still works. MCP is the same importer without the clipboar
 | `figma_status` | no |
 | `figma_import` | yes |
 | `figma_patch` | yes |
-| `figma_export` | yes |
+| `figma_export` | yes. `scope: "page"` reads the current page. `id` reads one layer and keeps on-page main components linked. The default is the current selection. |
 
 Override the bridge port with `COMPACT_DESIGN_MCP_PORT` (default `18791`). The plugin currently expects the default port.
 

@@ -86,7 +86,7 @@ async function dispatch(method: string, params: unknown, context: ServerContext)
           role: "user",
           content: {
             type: "text",
-            text: "Call get_language, write Compact Design JSON for the user's request, validate it, then figma_import. If the plugin is disconnected, tell the user to open the Compact Design plugin in Figma Desktop and retry. Do not paste JSON for a human to import unless Figma is unavailable."
+            text: "Call get_language, write Compact Design JSON for the user's request, validate it, then figma_import. To change an existing file, figma_export with scope \"page\" or an id, then figma_patch. If the plugin is disconnected, tell the user to open the Compact Design plugin in Figma Desktop and retry. Do not paste JSON for a human to import unless Figma is unavailable."
           }
         }]
       };

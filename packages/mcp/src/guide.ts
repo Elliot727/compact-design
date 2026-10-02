@@ -41,5 +41,6 @@ Images: https://…, file:photo.jpg (resolved from the MCP working directory), o
 2. Call validate. Fix every ERROR using path + message.
 3. Optionally lint (advisory).
 4. Call figma_import (or figma_patch). The Compact Design plugin must be open in Figma Desktop.
-5. If figma_status.pluginConnected is false, tell the user to run the plugin and retry.
+5. To edit what is already in the file, call figma_export with scope "page", or with id set to a Compact Design id. Then change that JSON with figma_patch. Do not regenerate the whole screen for a small edit.
+6. If figma_status.pluginConnected is false, tell the user to run the plugin and retry.
 `;

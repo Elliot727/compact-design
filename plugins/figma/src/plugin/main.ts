@@ -1,17 +1,28 @@
 import type { ImportMode, InternalDocument, InternalPatchDocument } from "@compact-design/core";
 import { importDocument } from "./importer";
-import { exportSelection } from "./exporter";
+import { collectExportCandidates, exportSelection } from "./exporter";
+import { planExport } from "./export-plan";
 import { applyPatch } from "./patch";
 import { createResources } from "./resources";
 
 figma.showUI(__html__, { width: 560, height: 780, themeColors: true });
 
-figma.ui.onmessage = async (message: { type?: string; document?: InternalDocument; patch?: InternalPatchDocument; mode?: ImportMode }) => {
-  if (message.type === "export-selection") {
+figma.ui.onmessage = async (message: { type?: string; document?: InternalDocument; patch?: InternalPatchDocument; mode?: ImportMode; scope?: "selection" | "page"; targetId?: string }) => {
+  if (message.type === "export-selection" || message.type === "export") {
     try {
-      const result = await exportSelection(figma.currentPage.selection);
-      figma.ui.postMessage({ type: "export-complete", document: result.document, warnings: result.warnings });
-      figma.notify(`Exported ${figma.currentPage.selection.length} selected layer${figma.currentPage.selection.length === 1 ? "" : "s"}`);
+      const { candidates, nodes } = collectExportCandidates(figma.currentPage);
+      const plan = planExport(candidates, {
+        scope: message.type === "export" && message.scope === "page" ? "page" : "selection",
+        id: message.targetId,
+        selectionIds: [...figma.currentPage.selection].map((node) => node.id)
+      });
+      const roots = plan.rootIds.flatMap((id) => {
+        const node = nodes.get(id);
+        return node ? [node] : [];
+      });
+      const result = await exportSelection(roots);
+      figma.ui.postMessage({ type: "export-complete", document: result.document, warnings: [...plan.warnings, ...result.warnings] });
+      figma.notify(`Exported ${roots.length} layer${roots.length === 1 ? "" : "s"}`);
     } catch (error) { figma.ui.postMessage({ type: "export-error", message: error instanceof Error ? error.message : String(error) }); }
     return;
   }

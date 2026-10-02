@@ -104,6 +104,32 @@ test("bridge completes an import through the plugin poll and result handshake", 
   }
 });
 
+test("figma_export asks the plugin for a page or one layer", async () => {
+  const port = 19100 + Math.floor(Math.random() * 1000);
+  const bridge = new FigmaBridge({ port, connectTimeoutMs: 100, jobTimeoutMs: 500 });
+  const runner = createToolRunner(bridge);
+  await bridge.listen();
+  try {
+    const poll = fetch(`http://localhost:${port}/poll?wait=400`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const exported = runner("figma_export", { scope: "page", id: "home" });
+    const job = await (await poll).json() as { id: string; type: string; scope: string; targetId: string };
+    assert.equal(job.type, "export");
+    assert.equal(job.scope, "page");
+    assert.equal(job.targetId, "home");
+    await fetch(`http://localhost:${port}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: job.id, message: { type: "export-complete", document: { canvas: { id: "home" } }, warnings: [] } })
+    });
+    const payload = await exported;
+    assert.equal(payload.isError, false);
+    assert.match(payload.content[0].text, /"home"/);
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("stdio writes newline-delimited JSON, not LSP Content-Length frames", () => {
   const line = encodeStdioMessage({ jsonrpc: "2.0", id: 1, result: { ok: true } });
   assert.equal(line.startsWith("{"), true);

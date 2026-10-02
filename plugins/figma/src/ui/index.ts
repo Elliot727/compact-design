@@ -216,7 +216,7 @@ startMcpPoll(async (job: McpJob) => {
       return;
     }
     if (job.type === "export") {
-      parent.postMessage({ pluginMessage: { type: "export-selection" } }, "*");
+      parent.postMessage({ pluginMessage: { type: "export", scope: job.scope, targetId: job.targetId } }, "*");
       await completeMcpJob(job.id, await waitForPlugin());
     }
   } catch (error) {

@@ -8,6 +8,8 @@ export interface McpJob {
   document?: unknown;
   patch?: unknown;
   mode?: string;
+  scope?: "selection" | "page";
+  targetId?: string;
 }
 
 export async function completeMcpJob(id: string, message: Record<string, unknown>): Promise<void> {
