@@ -70,7 +70,7 @@ jobs:
 
           Bumps `@compact-design/core`, `@compact-design/html`, and `@compact-design/mcp` together. The Figma plugin is **not** published to npm.
 
-          Merging this PR creates tag `vX.Y.Z`; the publish workflow then runs `npm publish` for those three workspaces when `NPM_TOKEN` is set (tag push only — merge does not publish). Otherwise follow the manual publish notes in the README.
+          Merging this PR creates tag `vX.Y.Z`; the publish workflow then runs `npm publish` for those three workspaces via npm Trusted Publishing (OIDC) on tag push (merge does not publish). Optional `NPM_TOKEN` is a classic-auth fallback — see the README.
 
           Triggered by the `batch-release` label or `workflow_dispatch`.
           MD

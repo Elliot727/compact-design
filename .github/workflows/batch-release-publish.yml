@@ -56,8 +56,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: npm
           registry-url: https://registry.npmjs.org
+          # No package-manager cache on release publishes (Trusted Publisher guidance)
 
       # setup-node writes //registry…/:_authToken=${NODE_AUTH_TOKEN}; an empty
       # expansion blocks npm OIDC Trusted Publishing (actions/setup-node#1551).
@@ -89,8 +89,12 @@ jobs:
         env:
           # Prefer OIDC Trusted Publishing when unset; classic token fallback when set
           # (bootstrap / first publish of packages that do not exist on npm yet).
+          # Empty string is not "unset" — clear it so npm takes the OIDC path.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            unset NODE_AUTH_TOKEN
+          fi
           npm publish -w @compact-design/core --access public
           npm publish -w @compact-design/html --access public
           npm publish -w @compact-design/mcp --access public
