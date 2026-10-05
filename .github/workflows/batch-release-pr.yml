@@ -1,0 +1,86 @@
+name: Batch release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump for core, html, and mcp (kept in sync)
+        type: choice
+        options:
+          - minor
+          - patch
+          - major
+        default: minor
+  issues:
+    types: [labeled]
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release-pr:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'batch-release' &&
+       !(github.event_name == 'pull_request_target' && startsWith(github.event.pull_request.head.ref, 'release/v')))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Prepare version bump and changelog
+        id: prepare
+        run: |
+          BUMP="${{ github.event.inputs.bump || 'minor' }}"
+          node scripts/prepare-batch-release.mjs "$BUMP"
+          VERSION="$(node -p "require('./packages/core/package.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=release/v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.prepare.outputs.version }}"
+          BRANCH="${{ steps.prepare.outputs.branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add packages/core/package.json packages/html/package.json packages/mcp/package.json package-lock.json CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No release changes to commit (already at v${VERSION}?)."
+          else
+            git commit -m "chore(release): v${VERSION}"
+          fi
+          git push -u origin "$BRANCH" --force-with-lease
+          BODY="$(cat <<'MD'
+          ## Batch release
+
+          Bumps `@compact-design/core`, `@compact-design/html`, and `@compact-design/mcp` together. The Figma plugin is **not** published to npm.
+
+          Merging this PR creates tag `vX.Y.Z`; the publish workflow then runs `npm publish` for those three workspaces when `NPM_TOKEN` is set (tag push only — merge does not publish). Otherwise follow the manual publish notes in the README.
+
+          Triggered by the `batch-release` label or `workflow_dispatch`.
+          MD
+          )"
+          # strip leading spaces from heredoc indent
+          BODY="$(printf '%s\n' "$BODY" | sed 's/^          //')"
+          EXISTING="$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')"
+          if [ -z "$EXISTING" ]; then
+            gh pr create --head "$BRANCH" --base main --title "chore(release): v${VERSION}" --body "$BODY"
+          else
+            gh pr edit "$EXISTING" --title "chore(release): v${VERSION}" --body "$BODY"
+            echo "Updated PR #${EXISTING}"
+          fi
