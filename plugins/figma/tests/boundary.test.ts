@@ -239,6 +239,16 @@ test("selection export still requires a selection", () => {
   assert.throws(() => planExport([], { scope: "selection", selectionIds: [] }), /Select at least one/);
 });
 
+test("export path reads instance main components asynchronously under dynamic-page", () => {
+  const exporter = readFileSync("src/plugin/exporter.ts", "utf8");
+  const main = readFileSync("src/plugin/main.ts", "utf8");
+  assert.match(exporter, /getMainComponentAsync\s*\(/);
+  assert.doesNotMatch(exporter, /\.mainComponent\b/);
+  assert.doesNotMatch(exporter, /(?<!get)getMainComponent\s*\(/);
+  assert.match(main, /await collectExportCandidates\(/);
+  assert.match(readFileSync("manifest.json", "utf8"), /"documentAccess"\s*:\s*"dynamic-page"/);
+});
+
 test("built UI contains one syntactically valid, uncorrupted script", () => {
   const html = readFileSync("dist/ui.html", "utf8");
   assert.doesNotMatch(html, /<!-- UI_SCRIPT -->/);

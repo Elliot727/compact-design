@@ -10,7 +10,7 @@ figma.showUI(__html__, { width: 560, height: 780, themeColors: true });
 figma.ui.onmessage = async (message: { type?: string; document?: InternalDocument; patch?: InternalPatchDocument; mode?: ImportMode; scope?: "selection" | "page"; targetId?: string }) => {
   if (message.type === "export-selection" || message.type === "export") {
     try {
-      const { candidates, nodes } = collectExportCandidates(figma.currentPage);
+      const { candidates, nodes } = await collectExportCandidates(figma.currentPage);
       const plan = planExport(candidates, {
         scope: message.type === "export" && message.scope === "page" ? "page" : "selection",
         id: message.targetId,
