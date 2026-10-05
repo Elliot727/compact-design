@@ -23,6 +23,7 @@ import {
   uniqueVariableExportIds
 } from "../src/plugin/export-variables";
 import { planExport, type ExportCandidate } from "../src/plugin/export-plan";
+import { validate } from "@compact-design/core";
 
 test("Figma adapter consumes core and does not duplicate language modules", () => {
   const files: string[] = [];
@@ -194,6 +195,67 @@ test("export styleRefs maps fill/stroke/text and skips empty or mixed ids", () =
     fillStyleId: "S:fill",
     textStyleId: "S:text"
   }, mixed), ["S:fill"]);
+});
+
+test("exportSelection does not copy node-only props onto canvas", () => {
+  const source = readFileSync("src/plugin/exporter.ts", "utf8");
+  assert.doesNotMatch(source, /canvas\.(bindings|variableModes|styleRefs)\s*=/);
+});
+
+test("exported FRAME canvas with styleRefs on nodes validates without canvas node-only props", () => {
+  const polluted = validate({
+    canvas: {
+      id: "home",
+      name: "Home",
+      width: 390,
+      height: 844,
+      fill: "#FFFFFF",
+      clipsContent: true,
+      styleRefs: { fill: "ink" },
+      bindings: { fill: "surface" },
+      variableModes: { Theme: "Dark" }
+    },
+    nodes: [{ id: "card", type: "FRAME", w: 100, h: 40, styleRefs: { fill: "ink" } }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] }],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "surface", name: "colour/surface", type: "COLOR", values: { Light: { r: 248, g: 245, b: 238, a: 1 }, Dark: { r: 26, g: 27, b: 24, a: 1 } } }]
+    }]
+  });
+  assert.equal(polluted.valid, false);
+  assert.ok(polluted.issues.some((issue) => issue.code === "SCHEMA_ADDITIONALPROPERTIES" && issue.path.startsWith("$/canvas")));
+
+  const clean = validate({
+    canvas: {
+      id: "home",
+      name: "Home",
+      x: 0,
+      width: 390,
+      height: 844,
+      fill: "#FFFFFF",
+      clipsContent: true
+    },
+    nodes: [
+      { id: "card", type: "FRAME", w: 100, h: 40, styleRefs: { fill: "ink" }, bindings: { fill: "surface" }, variableModes: { Theme: "Dark" } }
+    ],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] }],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "surface", name: "colour/surface", type: "COLOR", values: { Light: { r: 248, g: 245, b: 238, a: 1 }, Dark: { r: 26, g: 27, b: 24, a: 1 } } }]
+    }]
+  });
+  assert.equal(clean.valid, true, clean.issues.map((issue) => `${issue.code} ${issue.path}: ${issue.message}`).join("\n"));
+  const root = clean.document!.nodes[0];
+  assert.equal(root.id, "home");
+  assert.equal(root.properties.bindings, undefined);
+  assert.equal(root.properties.variableModes, undefined);
+  assert.equal(root.properties.styleRefs, undefined);
+  const card = root.children[0];
+  assert.deepEqual(card.properties.styleRefs, { fill: "ink" });
+  assert.deepEqual(card.properties.bindings, { fill: "surface" });
+  assert.deepEqual(card.properties.variableModes, { Theme: "Dark" });
 });
 
 
