@@ -40,6 +40,16 @@ function toolText(response: { result?: unknown } | null): string {
   return (response?.result as { content: Array<{ text: string }> }).content[0].text;
 }
 
+test("get_language covers variables, bindings, modes, and export round-trip", async () => {
+  const response = await rpc("tools/call", { name: "get_language", arguments: {} });
+  const guide = toolText(response);
+  assert.match(guide, /bindings/);
+  assert.match(guide, /variableModes/);
+  assert.match(guide, /figma_export/);
+  assert.match(guide, /SET_VARIABLE_MODE/);
+  assert.match(guide, /"values"/);
+});
+
 test("validate accepts a compact document and rejects garbage", async () => {
   const ok = await rpc("tools/call", {
     name: "validate",
