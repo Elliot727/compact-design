@@ -235,3 +235,49 @@ test("accepts Theme Dark and bindings.fill surface when variables are declared",
   });
   assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
 });
+
+test("rejects unknown styleRefs against document.styles", () => {
+  const missingStyle = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "card", type: "FRAME", w: 50, h: 50, styleRefs: { fill: "missing-ink" } }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] }]
+  });
+  assert.equal(missingStyle.valid, false);
+  assert.ok(missingStyle.issues.some((issue) => issue.path.includes("styleRefs.fill") && /missing-ink/.test(issue.message)));
+
+  const emptyRef = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "card", type: "FRAME", w: 50, h: 50, styleRefs: { stroke: "" } }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] }]
+  });
+  assert.equal(emptyRef.valid, false);
+  assert.ok(emptyRef.issues.some((issue) => issue.path.includes("styleRefs.stroke") && /non-empty/.test(issue.message)));
+
+  const wrongType = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "label", type: "TEXT", w: 40, h: 16, text: "Hi", styleRefs: { fill: "Body", text: "ink" } }],
+    styles: [
+      { id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] },
+      { id: "body", name: "Body", type: "TEXT", font: { family: "Inter", style: "Regular", size: 14 } }
+    ]
+  });
+  assert.equal(wrongType.valid, false);
+  assert.ok(wrongType.issues.some((issue) => issue.path.includes("styleRefs.fill") && /PAINT/.test(issue.message)));
+  assert.ok(wrongType.issues.some((issue) => issue.path.includes("styleRefs.text") && /TEXT/.test(issue.message)));
+});
+
+test("accepts styleRefs by id and name when styles are declared", () => {
+  const result = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "card", type: "FRAME", w: 50, h: 50, styleRefs: { fill: "ink", stroke: "Ink" }, children: [
+        { id: "label", type: "TEXT", w: 40, h: 16, text: "Hi", styleRefs: { text: "Body" } }
+      ] }
+    ],
+    styles: [
+      { id: "ink", name: "Ink", type: "PAINT", paints: ["#112233"] },
+      { id: "body", name: "Body", type: "TEXT", font: { family: "Inter", style: "Regular", size: 14 } }
+    ]
+  });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+});
