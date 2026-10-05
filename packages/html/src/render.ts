@@ -33,6 +33,7 @@ import {
   paintColor,
   radiusDeclarations,
   regularPolygon,
+  coalesceBoxShadows,
   sanitizeSvg,
   strokeDeclarations,
   textCaseCss
@@ -277,7 +278,8 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
   const blend = blendModeCss(props.blendMode);
   if (blend) declarations.push(`mix-blend-mode: ${blend}`);
   if (props.layoutPositioning === "ABSOLUTE") declarations.push("position: absolute");
-  return `#${cssEscape(id)} { ${declarations.filter(Boolean).join("; ")} }`;
+  const merged = coalesceBoxShadows(declarations.filter(Boolean));
+  return `#${cssEscape(id)} { ${merged.join("; ")} }`;
 }
 
 function positionDeclarations(props: DesignProperties, state: WalkState): string[] {
@@ -450,11 +452,7 @@ function runFill(value: unknown): string | undefined {
 function boundStrokeDeclarations(props: DesignProperties, ctx: RenderContext): string[] {
   const strokeBinding = props.bindings?.stroke;
   if (strokeBinding && isColorBinding(strokeBinding, ctx)) {
-    const color = `var(--cd-${cssVar(strokeBinding)})`;
-    const style = props.dashPattern?.length ? "dashed" : "solid";
-    const weight = finite(props.strokeWeight, 1);
-    if (weight <= 0) return [];
-    return [`border: ${weight}px ${style} ${color}`];
+    return strokeDeclarations(props, `var(--cd-${cssVar(strokeBinding)})`);
   }
   return strokeDeclarations(props);
 }
