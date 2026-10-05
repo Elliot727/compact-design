@@ -39,7 +39,7 @@ The Figma plugin is not an npm package. Import [`plugins/figma/manifest.json`](.
 
 ## Batch npm release
 
-Add the GitHub label `batch-release` to an issue or PR (or run the **Batch release PR** workflow) to open a release PR that bumps `@compact-design/core`, `@compact-design/html`, and `@compact-design/mcp` together and updates [`CHANGELOG.md`](./CHANGELOG.md). Merging that PR publishes those three packages when the `NPM_TOKEN` repository secret is set; otherwise publish manually with `npm publish -w` (see the publish workflow log). The Figma plugin is never published to npm.
+Add the GitHub label `batch-release` to an issue or PR (or run the **Batch release PR** workflow) to open a release PR that bumps `@compact-design/core`, `@compact-design/html`, and `@compact-design/mcp` together and updates [`CHANGELOG.md`](./CHANGELOG.md). Merging that PR creates a `v*` tag; the tag push publishes those three packages when the `NPM_TOKEN` repository secret is set; otherwise publish manually with `npm publish -w` (see the publish workflow log). The Figma plugin is never published to npm.
 
 
 To skip the JSON paste step, run the plugin in Figma Desktop and point your MCP client at `@compact-design/mcp`. The model writes Compact Design JSON; the server validates it and the plugin creates native layers. See [`packages/mcp/README.md`](./packages/mcp/README.md).
