@@ -237,7 +237,7 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...radiusDeclarations(props),
     ...strokeDeclarations(resolvedProps(props, ctx, modes)),
     ...paintDeclarations(node.type, resolvedProps(props, ctx, modes)),
-    ...effectDeclarations(props),
+    ...effectDeclarations(node.type, props),
     ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
     ...variableCustomProperties(props, modes, ctx)
   ];
@@ -313,14 +313,25 @@ function paintDeclarations(type: string, props: DesignProperties): string[] {
   return layers.length ? [`background: ${layers.join(", ")}`] : [];
 }
 
-function effectDeclarations(props: DesignProperties): string[] {
+function effectDeclarations(type: string, props: DesignProperties): string[] {
   const declarations: string[] = [];
-  const shadows = effectShadows(props.styles.effects);
-  if (shadows.length) declarations.push(`box-shadow: ${shadows.join(", ")}`);
+  if (type === "TEXT") {
+    const shadows = textShadows(props.styles.effects);
+    if (shadows.length) declarations.push(`text-shadow: ${shadows.join(", ")}`);
+  } else {
+    const shadows = effectShadows(props.styles.effects);
+    if (shadows.length) declarations.push(`box-shadow: ${shadows.join(", ")}`);
+  }
   const blur = blurFilters(props.styles.effects);
   if (blur.filter) declarations.push(`filter: ${blur.filter}`);
   if (blur.backdrop) declarations.push(`backdrop-filter: ${blur.backdrop}`);
   return declarations;
+}
+
+function textShadows(effects: DesignProperties["styles"]["effects"]): string[] {
+  return effects
+    .filter((effect) => effect.visible !== false && effect.type === "DROP_SHADOW")
+    .map((effect) => `${finite(effect.offset?.x, 0)}px ${finite(effect.offset?.y, 4)}px ${finite(effect.radius, 8)}px ${cssColor(effect.color)}`);
 }
 
 function textDeclarations(type: string, props: DesignProperties, ctx: RenderContext): string[] {
@@ -530,5 +541,4 @@ function runtimeScript(timeouts: RenderContext["timeouts"]): string {
 })();
 </script>`;
 }
-
 
