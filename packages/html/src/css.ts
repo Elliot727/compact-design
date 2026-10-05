@@ -271,4 +271,28 @@ export function regularPolygon(cx: number, cy: number, radius: number, points: n
   return coords.join(" ");
 }
 
+const TURN = Math.PI * 2;
 
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/** SVG path for a Figma-style arc: radians from 3 o'clock, sweeping clockwise from start to end. */
+export function arcPath(width: number, height: number, startingAngle: number, endingAngle: number, innerRadiusRatio: number): string {
+  const rx = width / 2;
+  const ry = height / 2;
+  const ratio = Math.min(1, Math.max(0, innerRadiusRatio));
+  let sweep = endingAngle - startingAngle;
+  if (sweep < 0) sweep = sweep % TURN + TURN;
+  const point = (angle: number, scale: number) => `${round(rx + rx * scale * Math.cos(angle))} ${round(ry + ry * scale * Math.sin(angle))}`;
+  const ellipse = (scale: number) => {
+    const r = `${round(rx * scale)} ${round(ry * scale)}`;
+    return `M ${point(startingAngle, scale)} A ${r} 0 1 1 ${point(startingAngle + Math.PI, scale)} A ${r} 0 1 1 ${point(startingAngle, scale)} Z`;
+  };
+  if (sweep === 0 || sweep >= TURN) return ratio > 0 ? `${ellipse(1)} ${ellipse(ratio)}` : ellipse(1);
+  const end = startingAngle + sweep;
+  const large = sweep > Math.PI ? 1 : 0;
+  const outer = `M ${point(startingAngle, 1)} A ${round(rx)} ${round(ry)} 0 ${large} 1 ${point(end, 1)}`;
+  if (ratio === 0) return `${outer} L ${round(rx)} ${round(ry)} Z`;
+  return `${outer} L ${point(end, ratio)} A ${round(rx * ratio)} ${round(ry * ratio)} 0 ${large} 0 ${point(startingAngle, ratio)} Z`;
+}
