@@ -64,13 +64,13 @@ jobs:
           else
             git commit -m "chore(release): v${VERSION}"
           fi
-          git push -u origin "$BRANCH" --force-with-lease || git push -u origin "$BRANCH" --force
+          git push -u origin "$BRANCH" --force-with-lease
           BODY="$(cat <<'MD'
           ## Batch release
 
           Bumps `@compact-design/core`, `@compact-design/html`, and `@compact-design/mcp` together. The Figma plugin is **not** published to npm.
 
-          After merge, the publish workflow runs `npm publish` for those three workspaces when `NPM_TOKEN` is set; otherwise follow the manual publish notes in the README.
+          Merging this PR creates tag `vX.Y.Z`; the publish workflow then runs `npm publish` for those three workspaces when `NPM_TOKEN` is set (tag push only — merge does not publish). Otherwise follow the manual publish notes in the README.
 
           Triggered by the `batch-release` label or `workflow_dispatch`.
           MD
