@@ -29,6 +29,7 @@ import {
   isScrollingOverflow,
   isWebSafeFont,
   layoutDeclarations,
+  layoutGridOverlayDeclarations,
   letterSpacingCss,
   lineHeightCss,
   clampedFixedChildCount,
@@ -294,7 +295,12 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
   // Fixed sticky chrome wins over layoutPositioning ABSOLUTE.
   if (props.layoutPositioning === "ABSOLUTE" && !state.fixedSticky) declarations.push("position: absolute");
   const merged = coalesceBoxShadows(declarations.filter(Boolean));
-  return `#${cssEscape(id)} { ${merged.join("; ")} }`;
+  const rules = [`#${cssEscape(id)} { ${merged.join("; ")} }`];
+  if (!state.asMask) {
+    const overlay = layoutGridOverlayDeclarations(props.layoutGrids);
+    if (overlay.length) rules.push(`#${cssEscape(id)}::after { ${overlay.join("; ")} }`);
+  }
+  return rules.join("\n");
 }
 
 function positionDeclarations(props: DesignProperties, state: WalkState): string[] {
