@@ -50,6 +50,22 @@ test("get_language covers variables, bindings, modes, and export round-trip", as
   assert.match(guide, /"values"/);
 });
 
+test("get_language covers styles, styleRefs, grids, strokes, and isMask", async () => {
+  const response = await rpc("tools/call", { name: "get_language", arguments: {} });
+  const guide = toolText(response);
+  assert.match(guide, /styleRefs/);
+  assert.match(guide, /"styles"/);
+  assert.match(guide, /"fill": "ink"/);
+  assert.match(guide, /layoutGrids/);
+  assert.match(guide, /strokeAlign/);
+  assert.match(guide, /CENTER \| INSIDE \| OUTSIDE/);
+  assert.match(guide, /strokeCap/);
+  assert.match(guide, /strokeJoin/);
+  assert.match(guide, /isMask/);
+  assert.match(guide, /styles\/styleRefs/);
+  assert.match(guide, /layout grids/);
+});
+
 test("validate accepts a compact document and rejects garbage", async () => {
   const ok = await rpc("tools/call", {
     name: "validate",
