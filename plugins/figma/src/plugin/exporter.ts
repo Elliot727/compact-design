@@ -100,6 +100,26 @@ export function compactStrokeAppearance(
   return result;
 }
 
+
+export function compactTextTypography(
+  node: {
+    textCase?: string | symbol;
+    paragraphIndent?: number | symbol;
+    listSpacing?: number | symbol;
+    hangingPunctuation?: boolean;
+    hangingList?: boolean;
+  },
+  mixed: unknown
+): CompactValue {
+  const result: CompactValue = {};
+  if (node.textCase !== undefined && node.textCase !== mixed && node.textCase !== "ORIGINAL") result.textCase = node.textCase;
+  if (typeof node.paragraphIndent === "number" && node.paragraphIndent !== 0) result.paragraphIndent = node.paragraphIndent;
+  if (typeof node.listSpacing === "number" && node.listSpacing !== 0) result.listSpacing = node.listSpacing;
+  if (node.hangingPunctuation === true) result.hangingPunctuation = true;
+  if (node.hangingList === true) result.hangingList = true;
+  return result;
+}
+
 export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[] {
   return values.map((grid) => {
     const color = exportColorChannels(grid.color ?? { r: 0, g: 0, b: 0, a: 0.1 });
@@ -188,6 +208,7 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
     if (node.letterSpacing !== figma.mixed) result.letterSpacing = node.letterSpacing;
     if (node.lineHeight !== figma.mixed) result.lineHeight = node.lineHeight;
     if (node.paragraphSpacing) result.paragraphSpacing = node.paragraphSpacing;
+    Object.assign(result, compactTextTypography(node, figma.mixed));
     if (node.textDecoration !== figma.mixed && node.textDecoration !== "NONE") result.textDecoration = node.textDecoration;
   }
   if (node.type === "VECTOR") result.vectorPaths = node.vectorPaths;

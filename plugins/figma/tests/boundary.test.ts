@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { compactLayoutGrids, compactStrokeAppearance, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { compactLayoutGrids, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
 import {
   collectStyleIdsFromNode,
   compactStyleExportId,
@@ -86,6 +86,45 @@ test("export stroke appearance omits defaults and skips mixed values", () => {
     strokeJoin: "BEVEL"
   });
   assert.deepEqual(compactStrokeAppearance({}, mixed), {});
+});
+
+test("export text typography emits Probe brief fields and skips defaults", () => {
+  const mixed = Symbol("mixed");
+  assert.deepEqual(compactTextTypography({
+    textCase: "ORIGINAL",
+    paragraphIndent: 0,
+    listSpacing: 0,
+    hangingPunctuation: false,
+    hangingList: false
+  }, mixed), {});
+  assert.deepEqual(compactTextTypography({
+    textCase: "UPPER",
+    paragraphIndent: 24,
+    listSpacing: 8,
+    hangingPunctuation: true,
+    hangingList: true
+  }, mixed), {
+    textCase: "UPPER",
+    paragraphIndent: 24,
+    listSpacing: 8,
+    hangingPunctuation: true,
+    hangingList: true
+  });
+  assert.deepEqual(compactTextTypography({
+    textCase: mixed,
+    paragraphIndent: mixed,
+    listSpacing: mixed,
+    hangingPunctuation: false,
+    hangingList: false
+  }, mixed), {});
+  assert.deepEqual(compactTextTypography({
+    textCase: "TITLE",
+    hangingPunctuation: true
+  }, mixed), {
+    textCase: "TITLE",
+    hangingPunctuation: true
+  });
+  assert.deepEqual(compactTextTypography({}, mixed), {});
 });
 
 test("export style ids prefer plugin data then name then figma id", () => {
