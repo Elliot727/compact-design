@@ -167,3 +167,24 @@ test("source code contains no explicit any annotations", () => {
   const violations = files.flatMap((path) => [...readFileSync(path, "utf8").matchAll(explicitAny)].map((match) => `${path}:${match.index}`));
   assert.deepEqual(violations, []);
 });
+
+test("canvas variableModes and bindings pass through to the root frame", () => {
+  const document = normalizeDocument({
+    canvas: {
+      id: "screen",
+      width: 390,
+      height: 844,
+      fill: "#F8F5EE",
+      variableModes: { Theme: "Dark" },
+      bindings: { fill: "surface" }
+    },
+    nodes: [],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "surface", name: "colour/surface", type: "COLOR", values: { Light: { r: 248, g: 245, b: 238, a: 1 }, Dark: { r: 26, g: 27, b: 24, a: 1 } } }]
+    }]
+  });
+  assert.deepEqual(document.nodes[0].properties.variableModes, { Theme: "Dark" });
+  assert.deepEqual(document.nodes[0].properties.bindings, { fill: "surface" });
+});

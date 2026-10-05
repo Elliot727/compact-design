@@ -61,7 +61,9 @@ export async function createResources(document: InternalDocument): Promise<Resou
         const resolved = value.type === "COLOR" ? { ...color(raw), a: clamp(finite(rawObject.a, 1), 0, 1) } : raw;
         variable.setValueForMode(mode.modeId, resolved as VariableValue);
       }
-      resources.variables.set(value.id || value.name, variable);
+      const compactId = value.id || value.name;
+      variable.setPluginData("compactDesignId", compactId);
+      resources.variables.set(compactId, variable);
     }
   }
   return resources;

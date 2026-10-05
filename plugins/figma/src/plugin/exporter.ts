@@ -1,9 +1,11 @@
 import type { ExportCandidate } from "./export-plan";
+import { VariableExportContext } from "./export-variables";
 
 type CompactValue = Record<string, unknown>;
 let activeExportIds = new Map<string, string>();
 let activeNodeExportIds = new WeakMap<SceneNode, string>();
 let activeMainComponents = new WeakMap<InstanceNode, ComponentNode | null>();
+let activeVariables: VariableExportContext | null = null;
 function storedCompactId(node: SceneNode): string { return node.getPluginData("compactDesignId") || node.id; }
 function compactId(node: SceneNode): string { return activeNodeExportIds.get(node) || activeExportIds.get(node.id) || storedCompactId(node); }
 
@@ -160,6 +162,12 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
   if (node.type === "INSTANCE" && type === "INSTANCE" && mainComponent) { result.componentId = activeExportIds.get(mainComponent.id) || compactId(mainComponent); result.instanceProperties = Object.fromEntries(Object.entries(node.componentProperties).map(([key, value]) => [key, value.value])); }
   const prototype = await compactReactions(node);
   if (prototype) result.prototype = prototype;
+  if (activeVariables) {
+    const bindings = await activeVariables.bindingsForNode(node);
+    if (bindings) result.bindings = bindings;
+    const variableModes = await activeVariables.variableModesForNode(node);
+    if (variableModes) result.variableModes = variableModes;
+  }
   if ("children" in node) result.children = await Promise.all(node.children.filter((child): child is SceneNode => child.type !== "STICKY" && child.type !== "CONNECTOR" && child.type !== "SHAPE_WITH_TEXT" && child.type !== "CODE_BLOCK" && child.type !== "STAMP" && child.type !== "WIDGET" && child.type !== "EMBED" && child.type !== "LINK_UNFURL" && child.type !== "MEDIA").map((child) => compactNode(child, exportedIds)));
   return result;
 }
@@ -241,6 +249,7 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   activeExportIds = new Map();
   activeNodeExportIds = new WeakMap();
   activeMainComponents = new WeakMap();
+  activeVariables = new VariableExportContext();
   exportedNodes.forEach((node, index) => {
     const assigned = assignedIds[index];
     activeNodeExportIds.set(node, assigned);
@@ -248,21 +257,33 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   });
   const warnings: string[] = [];
   const canvases: CompactValue[] = [];
-  for (const [index, node] of selection.entries()) {
-    const canBecomeCanvas = node.type === "FRAME";
-    const exported = await compactNode(node, exportedIds);
-    const exportedFills = Array.isArray(exported.fills) ? exported.fills : [];
-    const fill = canBecomeCanvas ? (exported.fill ?? exportedFills[0] ?? "#FFFFFF") : "#FFFFFF";
-    const children = canBecomeCanvas && Array.isArray(exported.children) ? exported.children : [{ ...exported, x: 0, y: 0 }];
-    canvases.push({ id: exportCanvasId(compactId(node), node.type), name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children });
-    if (node.type === "INSTANCE") {
-      const mainComponent = await instanceMainComponent(node);
-      if (!mainComponent || !exportedIds.has(mainComponent.id)) warnings.push(`Instance '${node.name}' was flattened to an editable frame because its main component was outside the selection.`);
+  try {
+    for (const node of selection) await activeVariables.collectRefsFromNode(node);
+    const variables = await activeVariables.buildVariablesArray();
+    warnings.push(...activeVariables.warnings);
+    for (const [index, node] of selection.entries()) {
+      const canBecomeCanvas = node.type === "FRAME";
+      const exported = await compactNode(node, exportedIds);
+      const exportedFills = Array.isArray(exported.fills) ? exported.fills : [];
+      const fill = canBecomeCanvas ? (exported.fill ?? exportedFills[0] ?? "#FFFFFF") : "#FFFFFF";
+      const children = canBecomeCanvas && Array.isArray(exported.children) ? exported.children : [{ ...exported, x: 0, y: 0 }];
+      const canvas: CompactValue = { id: exportCanvasId(compactId(node), node.type), name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children };
+      if (canBecomeCanvas) {
+        if (exported.bindings) canvas.bindings = exported.bindings;
+        if (exported.variableModes) canvas.variableModes = exported.variableModes;
+      }
+      canvases.push(canvas);
+      if (node.type === "INSTANCE") {
+        const mainComponent = await instanceMainComponent(node);
+        if (!mainComponent || !exportedIds.has(mainComponent.id)) warnings.push(`Instance '${node.name}' was flattened to an editable frame because its main component was outside the selection.`);
+      }
     }
+    if (canvases.length === 1) {
+      const { nodes, ...canvas } = canvases[0];
+      return { document: { canvas, nodes, ...(variables.length ? { variables } : {}) }, warnings };
+    }
+    return { document: { canvases, ...(variables.length ? { variables } : {}) }, warnings };
+  } finally {
+    activeVariables = null;
   }
-  if (canvases.length === 1) {
-    const { nodes, ...canvas } = canvases[0];
-    return { document: { canvas, nodes }, warnings };
-  }
-  return { document: { canvases }, warnings };
 }

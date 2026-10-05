@@ -216,6 +216,8 @@ export function normalizeDocument(value: unknown): InternalDocument {
         coordinateMode: "ABSOLUTE", children: canvas.nodes || []
       } as CompactNode, { x: 0, y: 0 }, `canvas-${index}`);
       root.properties.breakpoint = canvas.breakpoint;
+      if (canvas.variableModes) root.properties.variableModes = canvas.variableModes as DesignProperties["variableModes"];
+      if (canvas.bindings) root.properties.bindings = canvas.bindings as DesignProperties["bindings"];
       return root;
     }),
     styles: normalizeStyles(source.styles),
