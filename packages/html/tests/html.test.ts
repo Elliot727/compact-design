@@ -117,6 +117,26 @@ test("text runs emit link, textDecoration, and letterSpacing", () => {
   assert.match(result.html, /letter-spacing: 2px/);
 });
 
+test("text shadows emit text-shadow, not box-shadow", () => {
+  const result = render({
+    canvas: { id: "shadow", width: 300, height: 80, fill: "#FFFFFF" },
+    nodes: [{
+      id: "glow",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 300,
+      h: 40,
+      text: "Shadowed",
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      shadow: { x: 1, y: 2, blur: 3, spread: 4, color: "#000000" }
+    }]
+  });
+  assert.match(result.css, /#n-glow \{[^}]*text-shadow: 1px 2px 3px rgba\(0, 0, 0, 1\)/);
+  assert.doesNotMatch(result.css, /#n-glow \{[^}]*box-shadow/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
