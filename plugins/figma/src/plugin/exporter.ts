@@ -258,6 +258,9 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   const warnings: string[] = [];
   const canvases: CompactValue[] = [];
   try {
+    for (const node of selection) await activeVariables.collectRefsFromNode(node);
+    const variables = await activeVariables.buildVariablesArray();
+    warnings.push(...activeVariables.warnings);
     for (const [index, node] of selection.entries()) {
       const canBecomeCanvas = node.type === "FRAME";
       const exported = await compactNode(node, exportedIds);
@@ -275,8 +278,6 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
         if (!mainComponent || !exportedIds.has(mainComponent.id)) warnings.push(`Instance '${node.name}' was flattened to an editable frame because its main component was outside the selection.`);
       }
     }
-    const variables = await activeVariables.buildVariablesArray();
-    warnings.push(...activeVariables.warnings);
     if (canvases.length === 1) {
       const { nodes, ...canvas } = canvases[0];
       return { document: { canvas, nodes, ...(variables.length ? { variables } : {}) }, warnings };

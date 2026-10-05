@@ -11,7 +11,9 @@ import {
   exportColorChannels,
   exportFigmaVariableValue,
   nodeFieldBindings,
-  paintColorAliasId
+  paintColorAliasId,
+  resolveAliasedRawValue,
+  uniqueVariableExportIds
 } from "../src/plugin/export-variables";
 import { planExport, type ExportCandidate } from "../src/plugin/export-plan";
 
@@ -115,10 +117,17 @@ test("export color channels scale Figma 0-1 RGB to Compact 0-255", () => {
   assert.deepEqual(exportColorChannels({ r: 0, g: 0, b: 0 }, 0.25), { r: 0, g: 0, b: 0, a: 0.25 });
 });
 
-test("export variable value skips aliases and keeps floats", () => {
+test("export variable value keeps floats and resolves aliases when lookup is provided", () => {
   assert.deepEqual(exportFigmaVariableValue("FLOAT", 16), { value: 16 });
   assert.deepEqual(exportFigmaVariableValue("COLOR", { r: 1, g: 1, b: 1, a: 1 }), { value: { r: 255, g: 255, b: 255, a: 1 } });
   assert.deepEqual(exportFigmaVariableValue("COLOR", { type: "VARIABLE_ALIAS", id: "VariableID:1:2" }), { skippedAlias: true });
+  const lookup = (id: string) => id === "VariableID:1:2"
+    ? { modes: [{ modeId: "m", name: "Light" }], valuesByMode: { m: { r: 1, g: 0, b: 0, a: 1 } } }
+    : undefined;
+  assert.deepEqual(
+    exportFigmaVariableValue("COLOR", { type: "VARIABLE_ALIAS", id: "VariableID:1:2" }, "Light", lookup),
+    { value: { r: 255, g: 0, b: 0, a: 1 } }
+  );
 });
 
 test("paint color alias and node field bindings map to compact keys", () => {
@@ -145,11 +154,12 @@ test("explicit variable modes resolve collection and mode names", () => {
 });
 
 test("assemble variable groups emits Theme Light/Dark with bindings-ready ids", () => {
-  const groups = assembleVariableGroups([{
+  const { groups, exportIdByFigmaId } = assembleVariableGroups([{
     name: "Theme",
     modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
     items: [{
-      id: "surface",
+      figmaId: "VariableID:surface",
+      preferredId: "surface",
       name: "colour/surface",
       type: "COLOR",
       valuesByMode: {
@@ -157,10 +167,89 @@ test("assemble variable groups emits Theme Light/Dark with bindings-ready ids", 
         "m-dark": { r: 26 / 255, g: 27 / 255, b: 24 / 255, a: 1 }
       }
     }]
-  }]);
+  }], () => undefined);
   assert.equal(groups.length, 1);
   assert.deepEqual(groups[0].modes, ["Light", "Dark"]);
   assert.equal(groups[0].items[0].id, "surface");
+  assert.equal(exportIdByFigmaId.get("VariableID:surface"), "surface");
   assert.deepEqual(groups[0].items[0].values.Light, { r: 248, g: 245, b: 238, a: 1 });
   assert.deepEqual(groups[0].items[0].values.Dark, { r: 26, g: 27, b: 24, a: 1 });
+});
+
+test("alias values resolve cycle-safe; unresolved aliases drop the variable", () => {
+  const catalog: Record<string, { modes: Array<{ modeId: string; name: string }>; valuesByMode: Record<string, unknown> }> = {
+    "VariableID:base": {
+      modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
+      valuesByMode: {
+        "m-light": { r: 1, g: 0, b: 0, a: 1 },
+        "m-dark": { r: 0, g: 0, b: 1, a: 1 }
+      }
+    },
+    "VariableID:alias": {
+      modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
+      valuesByMode: {
+        "m-light": { type: "VARIABLE_ALIAS", id: "VariableID:base" },
+        "m-dark": { type: "VARIABLE_ALIAS", id: "VariableID:base" }
+      }
+    },
+    "VariableID:loop-a": {
+      modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
+      valuesByMode: {
+        "m-light": { type: "VARIABLE_ALIAS", id: "VariableID:loop-b" },
+        "m-dark": { type: "VARIABLE_ALIAS", id: "VariableID:loop-b" }
+      }
+    },
+    "VariableID:loop-b": {
+      modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
+      valuesByMode: {
+        "m-light": { type: "VARIABLE_ALIAS", id: "VariableID:loop-a" },
+        "m-dark": { type: "VARIABLE_ALIAS", id: "VariableID:loop-a" }
+      }
+    }
+  };
+  const lookup = (id: string) => catalog[id];
+  assert.deepEqual(
+    resolveAliasedRawValue({ type: "VARIABLE_ALIAS", id: "VariableID:base" }, "Dark", lookup),
+    { value: { r: 0, g: 0, b: 1, a: 1 } }
+  );
+  assert.equal(resolveAliasedRawValue({ type: "VARIABLE_ALIAS", id: "VariableID:loop-a" }, "Light", lookup).cycle, true);
+
+  const dropped: string[] = [];
+  const { groups, exportIdByFigmaId } = assembleVariableGroups([{
+    name: "Theme",
+    modes: [{ modeId: "m-light", name: "Light" }, { modeId: "m-dark", name: "Dark" }],
+    items: [
+      { figmaId: "VariableID:alias", preferredId: "surface", name: "colour/surface", type: "COLOR", valuesByMode: catalog["VariableID:alias"].valuesByMode },
+      { figmaId: "VariableID:loop-a", preferredId: "loop", name: "loop", type: "COLOR", valuesByMode: catalog["VariableID:loop-a"].valuesByMode }
+    ]
+  }], lookup, (figmaId) => dropped.push(figmaId));
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].items.length, 1);
+  assert.equal(groups[0].items[0].id, "surface");
+  assert.deepEqual(groups[0].items[0].values.Light, { r: 255, g: 0, b: 0, a: 1 });
+  assert.deepEqual(groups[0].items[0].values.Dark, { r: 0, g: 0, b: 255, a: 1 });
+  assert.equal(exportIdByFigmaId.has("VariableID:alias"), true);
+  assert.equal(exportIdByFigmaId.has("VariableID:loop-a"), false);
+  assert.deepEqual(dropped, ["VariableID:loop-a"]);
+});
+
+test("name-fallback variable ids dedupe across collisions", () => {
+  assert.deepEqual(uniqueVariableExportIds(["colour/surface", "colour/surface", "brand"]), ["colour/surface", "colour/surface-2", "brand"]);
+  const { groups, exportIdByFigmaId } = assembleVariableGroups([
+    {
+      name: "Theme",
+      modes: [{ modeId: "m", name: "Default" }],
+      items: [{ figmaId: "VariableID:a", preferredId: "colour/surface", name: "colour/surface", type: "FLOAT", valuesByMode: { m: 8 } }]
+    },
+    {
+      name: "Density",
+      modes: [{ modeId: "n", name: "Default" }],
+      items: [{ figmaId: "VariableID:b", preferredId: "colour/surface", name: "colour/surface", type: "FLOAT", valuesByMode: { n: 16 } }]
+    }
+  ], () => undefined);
+  assert.equal(groups[0].items[0].id, "colour/surface");
+  assert.equal(groups[1].items[0].id, "colour/surface-2");
+  assert.equal(exportIdByFigmaId.get("VariableID:a"), "colour/surface");
+  assert.equal(exportIdByFigmaId.get("VariableID:b"), "colour/surface-2");
 });
