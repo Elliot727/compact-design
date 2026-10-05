@@ -1,5 +1,6 @@
 import type { ImportMode, InternalDocument, InternalNode, JsonObject } from "@compact-design/core";
 import { createNode } from "./nodes";
+import { clearEffectWarnings, effectWarnings } from "./paints";
 import { createResources } from "./resources";
 import { clearFontWarnings, fontWarnings } from "./text";
 import { buildReactions } from "./prototype";
@@ -31,6 +32,7 @@ function indexExisting(): Map<string, SceneNode> {
 
 export async function importDocument(document: InternalDocument, mode: ImportMode): Promise<{ roots: SceneNode[]; warnings: string[]; created: number; replaced: number }> {
   clearFontWarnings();
+  clearEffectWarnings();
   const resources = await createResources(document);
   const context = {
     sourceNodes: new Map<string, SceneNode>(),
@@ -91,7 +93,7 @@ export async function importDocument(document: InternalDocument, mode: ImportMod
     }
     if (!roots.length) throw new Error("No canvases were imported.");
     for (const backup of backups) if (!backup.removed) backup.remove();
-    return { roots, warnings: [...resources.warnings, ...fontWarnings, ...prototypeWarnings], created, replaced };
+    return { roots, warnings: [...resources.warnings, ...fontWarnings, ...effectWarnings, ...prototypeWarnings], created, replaced };
   } catch (error) {
     for (const node of [...context.createdNodes].reverse()) if (!node.removed) node.remove();
     for (const style of resources.createdStyles) style.remove();

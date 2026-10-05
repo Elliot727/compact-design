@@ -310,7 +310,7 @@ Before import, the UI inspects every remote and local image. Images larger than 
 }
 ```
 
-Effect types: `DROP_SHADOW`, `INNER_SHADOW`, `LAYER_BLUR`, `BACKGROUND_BLUR`, `NOISE`, `TEXTURE`, and `GLASS`. (`SHADER` is not yet supported.) Progressive blurs may set `blurType`, `startRadius`, `startOffset`, and `endOffset`. Drop shadows may set `showShadowBehindNode`.
+Effect types: `DROP_SHADOW`, `INNER_SHADOW`, `LAYER_BLUR`, `BACKGROUND_BLUR`, `NOISE`, `TEXTURE`, `GLASS`, and `SHADER`. `SHADER` requires the Figma shader `id` (from `figma.listAvailableShaders()`) and may carry `properties` keyed by property-definition id; values round-trip verbatim. The Figma plugin imports each shader with `figma.importShaderById` before applying it and skips (with a warning) any shader it cannot import. The HTML renderer does not render shaders. Progressive blurs may set `blurType`, `startRadius`, `startOffset`, and `endOffset`. Drop shadows may set `showShadowBehindNode`.
 
 Use `elevation: "NONE|LOW|MEDIUM|HIGH|FLOATING"` for standard presets. Use `shadow` for concise custom shadows:
 

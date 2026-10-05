@@ -44,9 +44,41 @@ function rgbaColor(value: DesignEffect["color"]): RGBA {
   return { ...color(value), a: clamp(finite(value?.a, 1), 0, 1) };
 }
 
-/** Map Compact DesignEffect → Figma Effect. SHADER is deferred (needs importShaderById). */
+/** Warnings collected while applying effects (e.g. shaders that could not be imported). */
+export const effectWarnings = new Set<string>();
+const shaderImports = new Map<string, Promise<string | null>>();
+export function clearEffectWarnings(): void { effectWarnings.clear(); shaderImports.clear(); }
+
+export type ShaderImporter = (id: string) => Promise<unknown>;
+const figmaShaderImporter: ShaderImporter = (id) => figma.importShaderById(id);
+
+/** Import a shader once per import run; resolves to an error message, or null on success. */
+function ensureShader(id: string, importShader: ShaderImporter): Promise<string | null> {
+  let pending = shaderImports.get(id);
+  if (!pending) {
+    pending = importShader(id).then(() => null, (error: unknown) => error instanceof Error ? error.message : String(error));
+    shaderImports.set(id, pending);
+  }
+  return pending;
+}
+
+/**
+ * Map Compact DesignEffect → Figma Effect. SHADER effects are mapped
+ * structurally here; use effectsFromData so the shader is imported with
+ * figma.importShaderById before it is applied.
+ */
 export function effectFromData(value: DesignEffect): Effect | null {
   if (!value?.type) return null;
+  if (value.type === "SHADER") {
+    if (typeof value.id !== "string" || !value.id) return null;
+    const properties = value.properties && typeof value.properties === "object" && !Array.isArray(value.properties) ? value.properties : undefined;
+    return {
+      type: "SHADER",
+      id: value.id,
+      visible: value.visible !== false,
+      ...(properties ? { properties: properties as ShaderEffect["properties"] } : {})
+    } as ShaderEffect;
+  }
   if (value.type === "DROP_SHADOW" || value.type === "INNER_SHADOW") {
     const shadow = {
       type: value.type,
@@ -122,11 +154,48 @@ export function effectFromData(value: DesignEffect): Effect | null {
   return null;
 }
 
+/**
+ * Resolve Compact effects into Figma effects, importing each SHADER with
+ * figma.importShaderById first. A shader that cannot be imported is skipped
+ * and recorded in effectWarnings instead of failing the whole import.
+ */
+export async function effectsFromData(values: DesignEffect[], label = "node", importShader: ShaderImporter = figmaShaderImporter): Promise<Effect[]> {
+  const result: Effect[] = [];
+  for (const value of values || []) {
+    if (value?.type === "SHADER") {
+      if (typeof value.id !== "string" || !value.id) {
+        effectWarnings.add(`${label}: skipped a SHADER effect without an id.`);
+        continue;
+      }
+      const failure = await ensureShader(value.id, importShader);
+      if (failure !== null) {
+        effectWarnings.add(`${label}: skipped SHADER '${value.id}' because it could not be imported (${failure}).`);
+        continue;
+      }
+    }
+    const resolved = effectFromData(value);
+    if (resolved) result.push(resolved);
+  }
+  return result;
+}
+
+function applyEffects(node: SceneNode & BlendMixin, effects: Effect[]): void {
+  try {
+    node.effects = effects;
+  } catch (error) {
+    if (!effects.some((effect) => effect.type === "SHADER")) throw error;
+    // A shader can import but still reject stale property assignments; keep
+    // the rest of the node's effects rather than failing the import.
+    node.effects = effects.filter((effect) => effect.type !== "SHADER");
+    effectWarnings.add(`${node.name}: dropped SHADER effect(s) Figma rejected (${error instanceof Error ? error.message : String(error)}).`);
+  }
+}
+
 export async function applyAppearance(node: SceneNode, props: DesignProperties, isText: boolean): Promise<void> {
   const styles = props.styles || {};
   if ("fills" in node) node.fills = styles.fills !== undefined ? await paints(styles.fills) : (isText ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : []);
   if ("strokes" in node) node.strokes = await paints(styles.strokes || []);
-  if ("effects" in node) node.effects = (styles.effects || []).map(effectFromData).filter(Boolean) as Effect[];
+  if ("effects" in node) applyEffects(node, await effectsFromData(styles.effects || [], node.name));
   if ("strokeWeight" in node && typeof props.strokeWeight === "number" && Number.isFinite(props.strokeWeight)) node.strokeWeight = Math.max(0, props.strokeWeight);
   if ("strokeAlign" in node && props.strokeAlign) node.strokeAlign = props.strokeAlign;
   if ("strokeCap" in node && props.strokeCap) node.strokeCap = props.strokeCap as unknown as typeof node.strokeCap;

@@ -36,7 +36,7 @@ Images: https://…, file:photo.jpg (resolved from the MCP working directory), o
 
 ## Effects
 { "effects": [{ "type": "DROP_SHADOW", "color": "#00000055", "offset": { "x": 0, "y": 12 }, "blur": 28, "spread": -4, "showShadowBehindNode": true }] }
-Types: DROP_SHADOW | INNER_SHADOW | LAYER_BLUR | BACKGROUND_BLUR | NOISE | TEXTURE | GLASS. SHADER is not yet supported.
+Types: DROP_SHADOW | INNER_SHADOW | LAYER_BLUR | BACKGROUND_BLUR | NOISE | TEXTURE | GLASS | SHADER. SHADER is supported with a required Figma shader id (+ optional properties keyed by property-definition id): { "type": "SHADER", "id": "<shader id>" }.
 Progressive blurs may set blurType, startRadius, startOffset, endOffset.
 
 ## Styles and styleRefs

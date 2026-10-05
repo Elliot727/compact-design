@@ -348,11 +348,45 @@ test("schema accepts NOISE, TEXTURE, and GLASS effects with type-specific fields
   assert.equal(effects.find((effect) => effect.type === "LAYER_BLUR")?.blurType, "PROGRESSIVE");
 });
 
-test("schema rejects SHADER effects until a dedicated brief lands", () => {
+test("schema accepts SHADER effects with id, visible, and loose properties", () => {
   const result = validate({
     canvas: { width: 100, height: 100 },
-    nodes: [{ id: "fx", type: "FRAME", w: 40, h: 40, effects: [{ type: "SHADER", id: "shader-1" }] }]
+    nodes: [{
+      id: "fx",
+      type: "FRAME",
+      w: 40,
+      h: 40,
+      effects: [{
+        type: "SHADER",
+        id: "shader-1",
+        visible: true,
+        properties: {
+          "def:amount": 0.5,
+          "def:enabled": true,
+          "def:mode": "soft",
+          "def:tint": { r: 1, g: 0.5, b: 0, a: 1 },
+          "def:center": { x: 0.5, y: 0.5 },
+          "def:ramp": { stops: [{ position: 0, color: { r: 0, g: 0, b: 0 } }, { position: 1, color: { r: 1, g: 1, b: 1 } }] },
+          "def:bound": { type: "VARIABLE_ALIAS", id: "VariableID:1:2" }
+        }
+      }]
+    }]
+  });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+  const [shader] = result.document!.nodes[0].children[0].properties.styles.effects;
+  assert.equal(shader.type, "SHADER");
+  assert.equal(shader.id, "shader-1");
+  assert.equal(shader.visible, true);
+  assert.deepEqual(shader.properties?.["def:center"], { x: 0.5, y: 0.5 });
+  assert.equal(shader.properties?.["def:amount"], 0.5);
+  assert.equal("color" in shader || "offset" in shader || "radius" in shader, false);
+});
+
+test("schema requires an id on SHADER effects", () => {
+  const result = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "fx", type: "FRAME", w: 40, h: 40, effects: [{ type: "SHADER", visible: true }] }]
   });
   assert.equal(result.valid, false);
-  assert.ok(result.issues.some((issue) => /effect|SHADER|enum/i.test(`${issue.path} ${issue.message}`)));
+  assert.ok(result.issues.some((issue) => /effects\/0\/id$/.test(issue.path) && issue.code === "SCHEMA_REQUIRED"), JSON.stringify(result.issues));
 });

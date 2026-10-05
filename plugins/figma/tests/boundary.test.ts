@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
 import { compactEffects, compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
-import { effectFromData } from "../src/plugin/paints";
+import { clearEffectWarnings, effectFromData, effectsFromData, effectWarnings } from "../src/plugin/paints";
 import {
   collectStyleIdsFromNode,
   compactStyleExportId,
@@ -485,7 +485,7 @@ test("compactEffects preserves NOISE, TEXTURE, GLASS and classic four", () => {
     { type: "NOISE", noiseType: "MULTITONE", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true, blendMode: "OVERLAY", noiseSize: 2, density: 0.5, opacity: 0.8 },
     { type: "TEXTURE", visible: true, noiseSize: 3, radius: 1, clipToShape: false },
     { type: "GLASS", visible: true, lightIntensity: 0.6, lightAngle: -45, refraction: 0.3, depth: 2, dispersion: 0.1, radius: 4 },
-    { type: "SHADER", visible: true, id: "ignored" }
+    { type: "SHADER", visible: true, id: "shader-1" }
   ] as Effect[]), [
     { type: "DROP_SHADOW", color: "#0000004D", offset: { x: 0, y: 4 }, blur: 8, spread: 0, visible: true },
     { type: "INNER_SHADOW", color: "#00000033", offset: { x: 1, y: 2 }, blur: 4, spread: 1, visible: true },
@@ -493,8 +493,30 @@ test("compactEffects preserves NOISE, TEXTURE, GLASS and classic four", () => {
     { type: "BACKGROUND_BLUR", blur: 20, visible: true, blurType: "PROGRESSIVE", startRadius: 0, startOffset: { x: 0.5, y: 0 }, endOffset: { x: 0.5, y: 1 } },
     { type: "NOISE", noiseType: "MULTITONE", color: "#FF0000", noiseSize: 2, density: 0.5, visible: true, blendMode: "OVERLAY", opacity: 0.8 },
     { type: "TEXTURE", noiseSize: 3, radius: 1, clipToShape: false, visible: true },
-    { type: "GLASS", lightIntensity: 0.6, lightAngle: -45, refraction: 0.3, depth: 2, dispersion: 0.1, radius: 4, visible: true }
+    { type: "GLASS", lightIntensity: 0.6, lightAngle: -45, refraction: 0.3, depth: 2, dispersion: 0.1, radius: 4, visible: true },
+    { type: "SHADER", id: "shader-1", visible: true }
   ]);
+});
+
+test("compactEffects exports SHADER id, visible, and properties verbatim", () => {
+  const properties = {
+    "def:amount": 0.25,
+    "def:tint": { r: 1, g: 0, b: 0, a: 0.5 },
+    "def:center": { x: 0.5, y: 0.5 },
+    "def:bound": { type: "VARIABLE_ALIAS", id: "VariableID:1:2" }
+  };
+  const exported = compactEffects([
+    { type: "SHADER", visible: true, id: "shader-props", properties },
+    { type: "SHADER", visible: true, id: "shader-empty", properties: {} },
+    { type: "SHADER", visible: false, id: "shader-hidden" }
+  ] as Effect[]);
+  assert.deepEqual(exported, [
+    { type: "SHADER", id: "shader-props", visible: true, properties },
+    { type: "SHADER", id: "shader-empty", visible: true }
+  ]);
+  assert.notEqual((exported[0] as { properties: unknown }).properties, properties);
+  const result = validate({ canvas: { width: 100, height: 100 }, nodes: [{ id: "fx", type: "FRAME", w: 40, h: 40, effects: exported as never }] });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
 });
 
 test("effectFromData builds Figma Effect objects for NOISE, TEXTURE, GLASS", () => {
@@ -515,9 +537,50 @@ test("effectFromData builds Figma Effect objects for NOISE, TEXTURE, GLASS", () 
     type: "GLASS", lightIntensity: 0.7, lightAngle: -30, refraction: 0.4, depth: 2, dispersion: 0.2, radius: 8, visible: true
   });
   assert.equal(effectFromData({ type: "SHADER", visible: true }), null);
+  assert.deepEqual(effectFromData({ type: "SHADER", id: "shader-1", visible: false, properties: { "def:amount": 0.5 } }), {
+    type: "SHADER", id: "shader-1", visible: false, properties: { "def:amount": 0.5 }
+  });
   assert.deepEqual(effectFromData({
     type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true, showShadowBehindNode: true
   }), {
     type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true, blendMode: "NORMAL", showShadowBehindNode: true
   });
+});
+
+test("effectsFromData imports each SHADER before applying and maps id/properties", async () => {
+  clearEffectWarnings();
+  const imported: string[] = [];
+  const effects = await effectsFromData([
+    { type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true },
+    { type: "SHADER", id: "shader-1", visible: true, properties: { "def:amount": 0.5, "def:center": { x: 0.5, y: 0.5 } } },
+    { type: "SHADER", id: "shader-1", visible: false }
+  ], "Card", async (id) => { imported.push(id); return { id, imported: true }; });
+  assert.deepEqual(imported, ["shader-1"], "importShaderById should be awaited once per shader id per import run");
+  assert.deepEqual(effects.map((effect) => effect.type), ["DROP_SHADOW", "SHADER", "SHADER"]);
+  assert.deepEqual(effects[1], { type: "SHADER", id: "shader-1", visible: true, properties: { "def:amount": 0.5, "def:center": { x: 0.5, y: 0.5 } } });
+  assert.deepEqual(effects[2], { type: "SHADER", id: "shader-1", visible: false });
+  assert.equal(effectWarnings.size, 0);
+});
+
+test("effectsFromData skips SHADER effects that fail to import and records a warning", async () => {
+  clearEffectWarnings();
+  const effects = await effectsFromData([
+    { type: "SHADER", id: "missing", visible: true },
+    { type: "LAYER_BLUR", radius: 4, visible: true },
+    { type: "SHADER", id: "ok", visible: true },
+    { type: "SHADER", visible: true }
+  ], "Hero", async (id) => {
+    if (id === "missing") throw new Error("Shader not found");
+    return { id, imported: true };
+  });
+  assert.deepEqual(effects, [
+    { type: "LAYER_BLUR", radius: 4, visible: true },
+    { type: "SHADER", id: "ok", visible: true }
+  ]);
+  const warnings = [...effectWarnings];
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /Hero: skipped SHADER 'missing'.*Shader not found/);
+  assert.match(warnings[1], /Hero: skipped a SHADER effect without an id/);
+  clearEffectWarnings();
+  assert.equal(effectWarnings.size, 0);
 });

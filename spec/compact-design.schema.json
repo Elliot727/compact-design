@@ -230,7 +230,7 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "enum": ["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR", "NOISE", "TEXTURE", "GLASS"] },
+        "type": { "enum": ["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR", "NOISE", "TEXTURE", "GLASS", "SHADER"] },
         "color": { "oneOf": [{ "$ref": "#/$defs/hexColor" }, { "$ref": "#/$defs/color" }] },
         "offset": { "$ref": "#/$defs/vector" },
         "blur": { "$ref": "#/$defs/nonNegativeNumber" },
@@ -253,8 +253,20 @@
         "lightAngle": { "type": "number" },
         "refraction": { "type": "number", "minimum": 0, "maximum": 1 },
         "depth": { "type": "number", "minimum": 1 },
-        "dispersion": { "type": "number", "minimum": 0, "maximum": 1 }
-      }
+        "dispersion": { "type": "number", "minimum": 0, "maximum": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "properties": {
+          "type": "object",
+          "description": "SHADER property assignments keyed by Figma property-definition id. Values pass through verbatim (numbers, booleans, strings, colors, points, gradients, or variable aliases).",
+          "additionalProperties": { "type": ["boolean", "string", "number", "object"] }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "SHADER" } }, "required": ["type"] },
+          "then": { "required": ["id"] }
+        }
+      ]
     },
     "shadow": {
       "type": "object",
