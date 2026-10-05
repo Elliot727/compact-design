@@ -83,6 +83,20 @@ async function compactPaints(values: readonly Paint[] | PluginAPI["mixed"]): Pro
   return (await Promise.all(values.filter((paint) => paint.visible !== false).map(compactPaint))).filter(Boolean);
 }
 
+export function compactStrokeAppearance(
+  node: {
+    strokeAlign?: "CENTER" | "INSIDE" | "OUTSIDE";
+    strokeCap?: string | symbol;
+    strokeJoin?: string | symbol;
+  },
+  mixed: unknown
+): CompactValue {
+  const result: CompactValue = {};
+  if ("strokeAlign" in node && node.strokeAlign !== undefined && node.strokeAlign !== "CENTER") result.strokeAlign = node.strokeAlign;
+  if ("strokeCap" in node && node.strokeCap !== undefined && node.strokeCap !== mixed && node.strokeCap !== "NONE") result.strokeCap = node.strokeCap;
+  if ("strokeJoin" in node && node.strokeJoin !== undefined && node.strokeJoin !== mixed && node.strokeJoin !== "MITER") result.strokeJoin = node.strokeJoin;
+  return result;
+}
 
 export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[] {
   return values.map((grid) => {
@@ -142,6 +156,7 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
     if (strokes.length === 1) result.stroke = strokes[0]; else if (strokes.length) result.strokes = strokes;
     if (strokes.length && "strokeWeight" in node && node.strokeWeight !== figma.mixed) result.strokeWeight = node.strokeWeight;
     if (strokes.length && "dashPattern" in node && node.dashPattern.length) result.dashPattern = [...node.dashPattern];
+    if (strokes.length) Object.assign(result, compactStrokeAppearance(node, figma.mixed));
   }
   if ("effects" in node && node.effects.length) result.effects = compactEffects(node.effects);
   if ("layoutGrids" in node && node.layoutGrids.length) result.layoutGrids = compactLayoutGrids(node.layoutGrids);
