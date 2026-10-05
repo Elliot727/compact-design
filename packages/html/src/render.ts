@@ -243,7 +243,7 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...childSizingDeclarations(props, state.parent?.properties.layout?.direction),
     ...overflowDeclarations(props),
     ...radiusDeclarations(props),
-    ...(node.type === "ARC" ? [] : boundStrokeDeclarations(resolvedProps(props, ctx, modes), ctx)),
+    ...(node.type === "ARC" || node.type === "LINE" ? [] : boundStrokeDeclarations(resolvedProps(props, ctx, modes), ctx)),
     ...paintDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
     ...effectDeclarations(node.type, props),
     ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
@@ -315,14 +315,14 @@ function paintDeclarations(type: string, props: DesignProperties, ctx: RenderCon
   if (fillBinding && isColorBinding(fillBinding, ctx)) {
     const value = `var(--cd-${cssVar(fillBinding)})`;
     if (type === "TEXT") return [`color: ${value}`];
-    if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC") return [];
+    if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC" || type === "LINE") return [];
     return [`background: ${value}`];
   }
   if (type === "TEXT") {
     const color = paintColor(props.styles.fills[0]);
     return color ? [`color: ${color}`] : [];
   }
-  if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC") return [];
+  if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC" || type === "LINE") return [];
   const layers = backgroundLayers(props.styles.fills);
   return layers.length ? [`background: ${layers.join(", ")}`] : [];
 }
@@ -603,7 +603,37 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
     const paths = props.vectorPaths.map((path) => `<path d="${escapeHtml(path.data)}" fill-rule="${path.windingRule === "EVENODD" ? "evenodd" : "nonzero"}" fill="${escapeHtml(fill)}"/>`).join("");
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" aria-hidden="true">${paths}</svg>`;
   }
+  if (type === "LINE") {
+    const width = Math.max(1, finite(props.size.width, 1));
+    const height = Math.max(1, finite(props.size.height, 1));
+    const horizontal = width >= height;
+    const x1 = horizontal ? 0 : width / 2;
+    const y1 = horizontal ? height / 2 : 0;
+    const x2 = horizontal ? width : width / 2;
+    const y2 = horizontal ? height / 2 : height;
+    const stroke = shapeStroke(props, ctx) || fill;
+    const weight = finite(props.strokeWeight, 1);
+    const attrs = [
+      `x1="${x1}"`,
+      `y1="${y1}"`,
+      `x2="${x2}"`,
+      `y2="${y2}"`,
+      `stroke="${escapeHtml(stroke)}"`,
+      `stroke-width="${weight}"`
+    ];
+    if (props.dashPattern?.length) attrs.push(`stroke-dasharray="${props.dashPattern.map((n) => finite(n, 0)).join(" ")}"`);
+    const linecap = strokeLinecapCss(props.strokeCap);
+    if (linecap) attrs.push(`stroke-linecap="${linecap}"`);
+    return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><line ${attrs.join(" ")}/></svg>`;
+  }
   return "";
+}
+
+function strokeLinecapCss(cap: string | undefined): string | undefined {
+  if (cap === "ROUND") return "round";
+  if (cap === "SQUARE") return "square";
+  if (cap === "NONE") return "butt";
+  return undefined;
 }
 
 function fontLinks(families: Set<string>): string {
