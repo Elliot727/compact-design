@@ -186,7 +186,7 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
     modes
   };
   const inner = [
-    shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props),
+    shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props, ctx),
     ...childrenSource.map((child) => renderNode(applyInstanceText(child, node), ctx, childState, css))
   ].join("");
 
@@ -199,7 +199,7 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
   if (link.timeout) attrs.push(`data-cd-timeout="${link.timeout.seconds}"`, `data-cd-navigate="${escapeHtml(htmlId(link.timeout.destination))}"`);
   if (link.back) attrs.push(`data-cd-back="true"`);
   if (link.setMode) {
-    attrs.push(`data-cd-set-collection="${escapeHtml(link.setMode.collection)}"`, `data-cd-set-mode="${escapeHtml(link.setMode.mode)}"`);
+    attrs.push(`data-cd-set-collection="${escapeHtml(cssVar(link.setMode.collection))}"`, `data-cd-set-mode="${escapeHtml(link.setMode.mode)}"`);
   }
 
   const tag = link.href || link.back || link.setMode ? "a" : "div";
@@ -247,7 +247,6 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...paintDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
     ...effectDeclarations(node.type, props),
     ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
-    ...variableCustomProperties(props, modes, ctx)
   ];
   if (node.type === "ELLIPSE") declarations.push("border-radius: 50%");
   if (typeof props.opacity === "number") declarations.push(`opacity: ${props.opacity}`);
@@ -427,10 +426,6 @@ function runFill(value: unknown): string | undefined {
   return undefined;
 }
 
-function variableCustomProperties(_props: DesignProperties, _modes: Record<string, string>, _ctx: RenderContext): string[] {
-  return [];
-}
-
 function boundStrokeDeclarations(props: DesignProperties, ctx: RenderContext): string[] {
   const strokeBinding = props.bindings?.stroke;
   if (strokeBinding && isColorBinding(strokeBinding, ctx)) {
@@ -571,8 +566,20 @@ function prototypeLink(value: DesignProperties["prototype"], ctx: RenderContext,
   return link;
 }
 
-function shapeMarkup(type: string, props: DesignProperties): string {
-  const fill = paintColor(props.styles.fills[0]) || "currentColor";
+function shapeFill(props: DesignProperties, ctx: RenderContext): string {
+  const fillBinding = props.bindings?.fill;
+  if (fillBinding && isColorBinding(fillBinding, ctx)) return `var(--cd-${cssVar(fillBinding)})`;
+  return paintColor(props.styles.fills[0]) || "currentColor";
+}
+
+function shapeStroke(props: DesignProperties, ctx: RenderContext): string | undefined {
+  const strokeBinding = props.bindings?.stroke;
+  if (strokeBinding && isColorBinding(strokeBinding, ctx)) return `var(--cd-${cssVar(strokeBinding)})`;
+  return paintColor(props.styles.strokes[0]);
+}
+
+function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext): string {
+  const fill = shapeFill(props, ctx);
   if (type === "ELLIPSE") {
     return "";
   }
@@ -580,7 +587,7 @@ function shapeMarkup(type: string, props: DesignProperties): string {
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
     const d = arcPath(width, height, finite(props.startingAngle, 0), finite(props.endingAngle, Math.PI * 1.5), finite(props.innerRadiusRatio, 0));
-    const stroke = paintColor(props.styles.strokes[0]);
+    const stroke = shapeStroke(props, ctx);
     const strokeAttrs = stroke ? ` stroke="${escapeHtml(stroke)}" stroke-width="${finite(props.strokeWeight, 1)}"` : "";
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><path d="${d}" fill-rule="evenodd" fill="${escapeHtml(fill)}"${strokeAttrs}/></svg>`;
   }
@@ -614,7 +621,7 @@ function runtimeScript(_timeouts: RenderContext["timeouts"]): string {
   document.querySelectorAll("[data-cd-set-mode]").forEach((node) => {
     node.addEventListener("click", (event) => {
       event.preventDefault();
-      const collection = node.getAttribute("data-cd-set-collection");
+      const collection = (node.getAttribute("data-cd-set-collection") || "").replace(/[^a-zA-Z0-9_-]+/g, "-");
       const mode = node.getAttribute("data-cd-set-mode");
       const board = node.closest(".cd-board");
       if (!board || !collection || !mode) return;
