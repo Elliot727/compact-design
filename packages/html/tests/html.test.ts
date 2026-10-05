@@ -303,6 +303,92 @@ test("paragraphSpacing splits runs at newlines and keeps in-line run styles", ()
   assert.match(result.html, /href="https:\/\/example\.com\/w"/);
 });
 
+test("SMALL_CAPS and SMALL_CAPS_FORCED map to font-variant-caps", () => {
+  for (const [textCase, expected] of [
+    ["SMALL_CAPS", "small-caps"],
+    ["SMALL_CAPS_FORCED", "all-small-caps"]
+  ] as const) {
+    const result = render({
+      canvas: { id: "caps", width: 400, height: 80, fill: "#FFFFFF" },
+      nodes: [{
+        id: "label",
+        type: "TEXT",
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 40,
+        text: "Small Caps",
+        fill: "#23221E",
+        font: { family: "Arial", style: "Regular", size: 16 },
+        textCase
+      }]
+    });
+    assert.match(result.css, new RegExp(`#n-label \\{[^}]*font-variant-caps: ${expected}`));
+    assert.doesNotMatch(result.css, /#n-label \{[^}]*text-transform:/);
+  }
+});
+
+test("hangingPunctuation true emits hanging-punctuation: first", () => {
+  // hanging-punctuation has limited browser support (notably Safari).
+  const result = render({
+    canvas: { id: "hang", width: 400, height: 80, fill: "#FFFFFF" },
+    nodes: [{
+      id: "quote",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 40,
+      text: '"Hanging"',
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      hangingPunctuation: true
+    }]
+  });
+  assert.match(result.css, /#n-quote \{[^}]*hanging-punctuation: first/);
+});
+
+test("hangingPunctuation false or absent omits hanging-punctuation", () => {
+  for (const extra of [{}, { hangingPunctuation: false }]) {
+    const result = render({
+      canvas: { id: "nohang", width: 400, height: 80, fill: "#FFFFFF" },
+      nodes: [{
+        id: "plain",
+        type: "TEXT",
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 40,
+        text: "Plain",
+        fill: "#23221E",
+        font: { family: "Arial", style: "Regular", size: 16 },
+        ...extra
+      }]
+    });
+    assert.doesNotMatch(result.css, /#n-plain \{[^}]*hanging-punctuation:/);
+  }
+});
+
+test("UPPER textCase still maps to text-transform without font-variant-caps", () => {
+  const result = render({
+    canvas: { id: "upper", width: 400, height: 80, fill: "#FFFFFF" },
+    nodes: [{
+      id: "shout",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 40,
+      text: "Upper",
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      textCase: "UPPER"
+    }]
+  });
+  assert.match(result.css, /#n-shout \{[^}]*text-transform: uppercase/);
+  assert.doesNotMatch(result.css, /#n-shout \{[^}]*font-variant-caps:/);
+});
+
 test("text runs emit link, textDecoration, and letterSpacing", () => {
   const result = render({
     canvas: { id: "runs", width: 400, height: 80, fill: "#FFFFFF" },
