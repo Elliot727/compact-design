@@ -90,6 +90,33 @@ test("maintained documents render; patches are rejected", () => {
   }
 });
 
+test("text runs emit link, textDecoration, and letterSpacing", () => {
+  const result = render({
+    canvas: { id: "runs", width: 400, height: 80, fill: "#FFFFFF" },
+    nodes: [{
+      id: "rich",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 40,
+      text: "linked underlined spaced",
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      runs: [
+        { text: "linked", link: "https://example.com/path?q=1&x=2" },
+        { text: " " },
+        { text: "underlined", textDecoration: "UNDERLINE" },
+        { text: " " },
+        { text: "spaced", letterSpacing: { unit: "PIXELS", value: 2 } }
+      ]
+    }]
+  });
+  assert.match(result.html, /href="https:\/\/example\.com\/path\?q=1&x=2"/);
+  assert.match(result.html, /text-decoration: underline/);
+  assert.match(result.html, /letter-spacing: 2px/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
