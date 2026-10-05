@@ -188,3 +188,50 @@ test("canvas variableModes and bindings pass through to the root frame", () => {
   assert.deepEqual(document.nodes[0].properties.variableModes, { Theme: "Dark" });
   assert.deepEqual(document.nodes[0].properties.bindings, { fill: "surface" });
 });
+
+test("rejects unknown bindings and variableModes against document.variables", () => {
+  const missingBinding = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "card", type: "FRAME", w: 50, h: 50, bindings: { fill: "missing-token" } }],
+    variables: [{ name: "Theme", items: [{ id: "surface", name: "colour/surface", type: "COLOR", value: { r: 1, g: 1, b: 1, a: 1 } }] }]
+  });
+  assert.equal(missingBinding.valid, false);
+  assert.ok(missingBinding.issues.some((issue) => issue.path.includes("bindings.fill") && /missing-token/.test(issue.message)));
+
+  const missingMode = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "screen", type: "FRAME", w: 100, h: 100, variableModes: { Theme: "Midnight" } }],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "surface", name: "colour/surface", type: "COLOR", values: { Light: { r: 248, g: 245, b: 238, a: 1 }, Dark: { r: 26, g: 27, b: 24, a: 1 } } }]
+    }]
+  });
+  assert.equal(missingMode.valid, false);
+  assert.ok(missingMode.issues.some((issue) => issue.path.includes("variableModes.Theme") && /Midnight/.test(issue.message)));
+
+  const missingCollection = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "card", type: "FRAME", w: 50, h: 50, variableModes: { Brand: "Default" } }],
+    variables: [{ name: "Theme", items: [{ id: "surface", name: "colour/surface", type: "COLOR", value: { r: 1, g: 1, b: 1, a: 1 } }] }]
+  });
+  assert.equal(missingCollection.valid, false);
+  assert.ok(missingCollection.issues.some((issue) => /Brand/.test(issue.message)));
+});
+
+test("accepts Theme Dark and bindings.fill surface when variables are declared", () => {
+  const result = validate({
+    canvas: { id: "screen", width: 390, height: 844, fill: "#F8F5EE" },
+    nodes: [
+      { id: "shell", type: "FRAME", w: 390, h: 844, variableModes: { Theme: "Dark" }, bindings: { fill: "surface" }, children: [
+        { id: "card", type: "FRAME", w: 100, h: 40, bindings: { fill: "colour/surface" } }
+      ] }
+    ],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "surface", name: "colour/surface", type: "COLOR", values: { Light: { r: 248, g: 245, b: 238, a: 1 }, Dark: { r: 26, g: 27, b: 24, a: 1 } } }]
+    }]
+  });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+});

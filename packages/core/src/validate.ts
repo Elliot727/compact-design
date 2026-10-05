@@ -88,13 +88,24 @@ export function validateDocument(document: InternalDocument): string[] {
     node.children.forEach((child, index) => references(child, `${path}.children[${index}]`));
   }
   document.nodes.forEach((node, index) => references(node, `nodes[${index}]`));
+  const variableKeys = new Set<string>();
+  const collectionNames = new Set<string>();
+  const modesByCollection = new Map<string, string[]>();
   for (const [collectionIndex, collection] of (document.variables || []).entries()) {
     const modes = Array.isArray(collection.modes) && collection.modes.length ? collection.modes : [];
     if (collection.modes !== undefined && (!modes.length || modes.some((mode: unknown) => typeof mode !== "string"))) add(`variables[${collectionIndex}].modes`, "must be a non-empty array of mode names");
+    if (typeof collection.name === "string" && collection.name) {
+      collectionNames.add(collection.name);
+      if (collection.modes !== undefined && modes.length && modes.every((mode: unknown) => typeof mode === "string")) {
+        modesByCollection.set(collection.name, modes as string[]);
+      }
+    }
     for (const [variableIndex, variable] of (collection.items || []).entries()) {
       const path = `variables[${collectionIndex}].items[${variableIndex}]`;
       if (!variable.name || typeof variable.name !== "string") add(`${path}.name`, "must be a non-empty string");
       if (!['COLOR', 'FLOAT', 'STRING', 'BOOLEAN'].includes(variable.type)) add(`${path}.type`, "must be COLOR, FLOAT, STRING, or BOOLEAN");
+      if (typeof variable.id === "string" && variable.id) variableKeys.add(variable.id);
+      if (typeof variable.name === "string" && variable.name) variableKeys.add(variable.name);
       const values = variable.values || (variable.value !== undefined ? { default: variable.value } : {});
       if (!Object.keys(values).length) add(`${path}`, "requires value or values");
       if (variable.values && modes.length) for (const mode of modes) if (!(mode in variable.values)) add(`${path}.values.${mode}`, "missing value for declared mode");
@@ -107,5 +118,34 @@ export function validateDocument(document: InternalDocument): string[] {
       }
     }
   }
+  function tokenReferences(node: InternalNode, path: string): void {
+    const bindings = node.properties.bindings;
+    if (bindings) {
+      for (const [field, key] of Object.entries(bindings)) {
+        if (typeof key !== "string" || !key) {
+          add(`${path}.bindings.${field}`, "must be a non-empty variable id or name");
+          continue;
+        }
+        if (!variableKeys.has(key)) add(`${path}.bindings.${field}`, `variable '${key}' is not defined in this document`);
+      }
+    }
+    const variableModes = node.properties.variableModes;
+    if (variableModes) {
+      for (const [collectionName, modeName] of Object.entries(variableModes)) {
+        if (!collectionNames.has(collectionName)) {
+          add(`${path}.variableModes.${collectionName}`, `variable collection '${collectionName}' is not defined in this document`);
+          continue;
+        }
+        if (typeof modeName !== "string" || !modeName) {
+          add(`${path}.variableModes.${collectionName}`, "must be a non-empty mode name");
+          continue;
+        }
+        const declared = modesByCollection.get(collectionName);
+        if (declared && !declared.includes(modeName)) add(`${path}.variableModes.${collectionName}`, `mode '${modeName}' is not declared on collection '${collectionName}'`);
+      }
+    }
+    node.children.forEach((child, index) => tokenReferences(child, `${path}.children[${index}]`));
+  }
+  document.nodes.forEach((node, index) => tokenReferences(node, `nodes[${index}]`));
   return errors;
 }
