@@ -702,6 +702,9 @@
         "overflowDirection": {
           "enum": [
             "NONE",
+            "HORIZONTAL",
+            "VERTICAL",
+            "BOTH",
             "HORIZONTAL_SCROLLING",
             "VERTICAL_SCROLLING",
             "HORIZONTAL_AND_VERTICAL_SCROLLING"

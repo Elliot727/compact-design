@@ -20,6 +20,7 @@ Common fields: id, name, type, x, y, w, h, fill, stroke, strokeWeight, strokeAli
 \`layoutGrids\`: frame grids — GRID (sectionSize) or COLUMNS/ROWS (alignment, count, gutterSize).
 \`strokeAlign\`: CENTER | INSIDE | OUTSIDE. \`strokeCap\` / \`strokeJoin\` set line ends and corners.
 \`isMask\`: true masks following siblings — put the mask before the masked siblings.
+\`overflowDirection\`: authored \`*_SCROLLING\` or short \`NONE\`|\`HORIZONTAL\`|\`VERTICAL\`|\`BOTH\` (both forms normalize to the short set).
 
 ## Layout
 { "direction": "HORIZONTAL" | "VERTICAL" | "GRID", "itemSpacing": 8, "padding": { "left": 16, "top": 16, "right": 16, "bottom": 16 } }

@@ -92,6 +92,9 @@ function normalizeNode(node: CompactNode, parent: { x: number; y: number }, path
   if (typeof raw.overflowDirection === "string") {
     const overflowDirections: Record<string, DesignProperties["overflowDirection"]> = {
       NONE: "NONE",
+      HORIZONTAL: "HORIZONTAL",
+      VERTICAL: "VERTICAL",
+      BOTH: "BOTH",
       HORIZONTAL_SCROLLING: "HORIZONTAL",
       VERTICAL_SCROLLING: "VERTICAL",
       HORIZONTAL_AND_VERTICAL_SCROLLING: "BOTH"
