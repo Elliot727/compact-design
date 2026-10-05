@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { compactLayoutGrids, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { compactLayoutGrids, compactStrokeAppearance, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
 import {
   assembleVariableGroups,
   buildExplicitVariableModes,
@@ -60,6 +60,25 @@ test("export layoutGrids maps Figma grids to Compact shape with 0-255 color", ()
     { pattern: "ROWS", alignment: "MIN", count: 4, gutterSize: 8, offset: 16, sectionSize: 64, color: { r: 0, g: 128, b: 0, a: 1 }, visible: false }
   ]);
   assert.deepEqual(compactLayoutGrids([]), []);
+});
+
+
+test("export stroke appearance omits defaults and skips mixed values", () => {
+  const mixed = Symbol("mixed");
+  assert.deepEqual(compactStrokeAppearance({ strokeAlign: "CENTER", strokeCap: "NONE", strokeJoin: "MITER" }, mixed), {});
+  assert.deepEqual(compactStrokeAppearance({ strokeAlign: "INSIDE", strokeCap: "ROUND", strokeJoin: "ROUND" }, mixed), {
+    strokeAlign: "INSIDE",
+    strokeCap: "ROUND",
+    strokeJoin: "ROUND"
+  });
+  assert.deepEqual(compactStrokeAppearance({ strokeAlign: "OUTSIDE", strokeCap: mixed, strokeJoin: mixed }, mixed), {
+    strokeAlign: "OUTSIDE"
+  });
+  assert.deepEqual(compactStrokeAppearance({ strokeCap: "SQUARE", strokeJoin: "BEVEL" }, mixed), {
+    strokeCap: "SQUARE",
+    strokeJoin: "BEVEL"
+  });
+  assert.deepEqual(compactStrokeAppearance({}, mixed), {});
 });
 
 
