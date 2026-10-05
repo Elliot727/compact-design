@@ -52,6 +52,9 @@ test("normalizes canonical text, paints, gradients, and coordinates", () => {
 test("normalizes compact scrolling names to canonical overflow directions", () => {
   const cases = [
     ["NONE", "NONE"],
+    ["HORIZONTAL", "HORIZONTAL"],
+    ["VERTICAL", "VERTICAL"],
+    ["BOTH", "BOTH"],
     ["HORIZONTAL_SCROLLING", "HORIZONTAL"],
     ["VERTICAL_SCROLLING", "VERTICAL"],
     ["HORIZONTAL_AND_VERTICAL_SCROLLING", "BOTH"]
@@ -60,6 +63,17 @@ test("normalizes compact scrolling names to canonical overflow directions", () =
     const document = normalize({ canvas: { width: 100, height: 100 }, nodes: [{ type: "FRAME", w: 50, h: 50, overflowDirection: authored }] });
     assert.equal(document.nodes[0].children[0].properties.overflowDirection, canonical);
   }
+});
+
+test("validate accepts authored and short overflowDirection names", () => {
+  for (const authored of ["VERTICAL_SCROLLING", "VERTICAL"] as const) {
+    const result = validate({ canvas: { width: 100, height: 100 }, nodes: [{ type: "FRAME", w: 50, h: 50, overflowDirection: authored }] });
+    assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path} ${issue.message}`).join("; "));
+    assert.equal(result.document?.nodes[0].children[0].properties.overflowDirection, "VERTICAL");
+  }
+  const rejected = validate({ canvas: { width: 100, height: 100 }, nodes: [{ type: "FRAME", w: 50, h: 50, overflowDirection: "DIAGONAL" }] });
+  assert.equal(rejected.valid, false);
+  assert.ok(rejected.issues.some((issue) => issue.path.includes("overflowDirection")));
 });
 
 test("rejects removed text aliases", () => {

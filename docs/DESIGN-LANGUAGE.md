@@ -540,7 +540,7 @@ Conditions use expression functions and variable references:
 
 Expression functions include arithmetic, comparison, Boolean, negation, and variable-mode lookup operations supported by Figma. The final condition block may omit `condition` to act as `else`.
 
-Scrolling frames also support `overflowDirection` with `NONE`, `HORIZONTAL_SCROLLING`, `VERTICAL_SCROLLING`, or `HORIZONTAL_AND_VERTICAL_SCROLLING`, plus `numberOfFixedChildren`. Core normalizes these authoring names to canonical `NONE`, `HORIZONTAL`, `VERTICAL`, or `BOTH` values before an adapter receives them. Figma represents fixed layers as the final children in a scrolling frame.
+Scrolling frames also support `overflowDirection` with authored `NONE` / `*_SCROLLING` names or canonical `NONE` / `HORIZONTAL` / `VERTICAL` / `BOTH` (both forms are accepted and normalize to the short set), plus `numberOfFixedChildren`. Figma represents fixed layers as the final children in a scrolling frame.
 
 The plugin uses Figma's current `actions[]` reaction API. Prototype reactions are exported back into the same compact structure. Figma's overlay-position, overlay-background, and click-outside properties are currently read-only in the public Plugin API and therefore cannot be authored by this language.
 
