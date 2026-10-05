@@ -303,22 +303,23 @@ async function compactReactions(node: SceneNode): Promise<CompactValue[] | null>
   return reactions.filter((reaction) => reaction.actions.length > 0);
 }
 
-export function collectExportCandidates(page: PageNode): { candidates: ExportCandidate[]; nodes: Map<string, SceneNode> } {
+export async function collectExportCandidates(page: PageNode): Promise<{ candidates: ExportCandidate[]; nodes: Map<string, SceneNode> }> {
   const candidates: ExportCandidate[] = [];
   const nodes = new Map<string, SceneNode>();
-  const visit = (node: SceneNode, parentFigmaId: string | null): void => {
+  const visit = async (node: SceneNode, parentFigmaId: string | null): Promise<void> => {
     nodes.set(node.id, node);
+    const mainComponent = node.type === "INSTANCE" ? await node.getMainComponentAsync() : null;
     candidates.push({
       figmaId: node.id,
       compactId: node.getPluginData("compactDesignId") || node.id,
       type: node.type,
       name: node.name,
       parentFigmaId,
-      mainComponentFigmaId: node.type === "INSTANCE" ? node.mainComponent?.id ?? null : undefined
+      mainComponentFigmaId: node.type === "INSTANCE" ? mainComponent?.id ?? null : undefined
     });
-    if ("children" in node) for (const child of node.children) if ("x" in child) visit(child as SceneNode, node.id);
+    if ("children" in node) for (const child of node.children) if ("x" in child) await visit(child as SceneNode, node.id);
   };
-  for (const child of page.children) if ("x" in child) visit(child as SceneNode, null);
+  for (const child of page.children) if ("x" in child) await visit(child as SceneNode, null);
   return { candidates, nodes };
 }
 
