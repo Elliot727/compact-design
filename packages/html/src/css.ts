@@ -210,6 +210,27 @@ export function overflowDeclarations(props: DesignProperties): string[] {
   return [];
 }
 
+/** True when overflowDirection is a scrolling mode after core normalize. */
+export function isScrollingOverflow(direction: DesignProperties["overflowDirection"]): direction is "HORIZONTAL" | "VERTICAL" | "BOTH" {
+  return direction === "HORIZONTAL" || direction === "VERTICAL" || direction === "BOTH";
+}
+
+/** Clamp numberOfFixedChildren to [0, childCount], matching Figma import. */
+export function clampedFixedChildCount(value: unknown, childCount: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || childCount <= 0) return 0;
+  return Math.max(0, Math.min(childCount, Math.round(value)));
+}
+
+/**
+ * Sticky pin for the last N children of a scrolling frame (numberOfFixedChildren).
+ * Vertical → bottom; horizontal → right; BOTH → bottom+right (v1).
+ */
+export function fixedChildStickyDeclarations(overflow: "HORIZONTAL" | "VERTICAL" | "BOTH"): string[] {
+  if (overflow === "VERTICAL") return ["position: sticky", "bottom: 0"];
+  if (overflow === "HORIZONTAL") return ["position: sticky", "right: 0"];
+  return ["position: sticky", "bottom: 0", "right: 0"];
+}
+
 export function radiusDeclarations(props: DesignProperties): string[] {
   if (Array.isArray(props.cornerRadii) && props.cornerRadii.length === 4) {
     return [`border-radius: ${props.cornerRadii.map((value) => `${finite(value, 0)}px`).join(" ")}`];

@@ -22,13 +22,16 @@ import {
   escapeHtml,
   finite,
   fontDeclarations,
+  fixedChildStickyDeclarations,
   htmlId,
   isDesignColor,
   isRecord,
+  isScrollingOverflow,
   isWebSafeFont,
   layoutDeclarations,
   letterSpacingCss,
   lineHeightCss,
+  clampedFixedChildCount,
   overflowDeclarations,
   paintColor,
   radiusDeclarations,
@@ -81,6 +84,8 @@ interface WalkState {
   mask?: InternalNode;
   /** True when this node is an isMask layer (geometry kept, paint suppressed). */
   asMask?: boolean;
+  /** Scrolling parent's overflow when this node is among the last numberOfFixedChildren. */
+  fixedSticky?: "HORIZONTAL" | "VERTICAL" | "BOTH";
 }
 
 interface PrototypeLink {
@@ -185,20 +190,29 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
   css.push(nodeRule(id, node, props, state, modes, ctx));
 
   const childrenSource = instanceOf ? instanceOf.children : node.children;
+  const parentVisual = instanceOf || node;
+  const stickyOverflow = isScrollingOverflow(parentVisual.properties.overflowDirection)
+    ? parentVisual.properties.overflowDirection
+    : undefined;
+  const fixedCount = stickyOverflow
+    ? clampedFixedChildCount(parentVisual.properties.numberOfFixedChildren, childrenSource.length)
+    : 0;
+  const fixedFrom = childrenSource.length - fixedCount;
   const childState: WalkState = {
-    parent: instanceOf || node,
-    parentHasLayout: Boolean((instanceOf || node).properties.layout?.direction),
+    parent: parentVisual,
+    parentHasLayout: Boolean(parentVisual.properties.layout?.direction),
     modes
   };
   let activeMask: InternalNode | undefined;
-  const childMarkup = childrenSource.map((child) => {
+  const childMarkup = childrenSource.map((child, index) => {
     const applied = applyInstanceText(child, node);
+    const fixedSticky = index >= fixedFrom && stickyOverflow ? stickyOverflow : undefined;
     const maskVisual = maskVisualNode(applied, ctx);
     if (maskVisual) {
       activeMask = maskVisual;
-      return renderNode(applied, ctx, { ...childState, mask: undefined, asMask: true }, css);
+      return renderNode(applied, ctx, { ...childState, mask: undefined, asMask: true, fixedSticky }, css);
     }
-    return renderNode(applied, ctx, { ...childState, mask: activeMask, asMask: false }, css);
+    return renderNode(applied, ctx, { ...childState, mask: activeMask, asMask: false, fixedSticky }, css);
   });
   const shape = state.asMask ? "" : shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props, ctx);
   const inner = [shape, ...childMarkup].join("");
@@ -277,12 +291,14 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
   }
   const blend = blendModeCss(props.blendMode);
   if (blend) declarations.push(`mix-blend-mode: ${blend}`);
-  if (props.layoutPositioning === "ABSOLUTE") declarations.push("position: absolute");
+  // Fixed sticky chrome wins over layoutPositioning ABSOLUTE.
+  if (props.layoutPositioning === "ABSOLUTE" && !state.fixedSticky) declarations.push("position: absolute");
   const merged = coalesceBoxShadows(declarations.filter(Boolean));
   return `#${cssEscape(id)} { ${merged.join("; ")} }`;
 }
 
 function positionDeclarations(props: DesignProperties, state: WalkState): string[] {
+  if (state.fixedSticky) return fixedChildStickyDeclarations(state.fixedSticky);
   if (!state.parent) {
     return [
       "position: absolute",
