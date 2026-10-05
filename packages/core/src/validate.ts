@@ -88,6 +88,11 @@ export function validateDocument(document: InternalDocument): string[] {
     node.children.forEach((child, index) => references(child, `${path}.children[${index}]`));
   }
   document.nodes.forEach((node, index) => references(node, `nodes[${index}]`));
+  const styleKeys = new Map<string, "PAINT" | "TEXT">();
+  for (const style of document.styles || []) {
+    if (typeof style.id === "string" && style.id) styleKeys.set(style.id, style.type);
+    if (typeof style.name === "string" && style.name) styleKeys.set(style.name, style.type);
+  }
   const variableKeys = new Set<string>();
   const collectionNames = new Set<string>();
   const modesByCollection = new Map<string, string[]>();
@@ -142,6 +147,25 @@ export function validateDocument(document: InternalDocument): string[] {
         }
         const declared = modesByCollection.get(collectionName);
         if (declared && !declared.includes(modeName)) add(`${path}.variableModes.${collectionName}`, `mode '${modeName}' is not declared on collection '${collectionName}'`);
+      }
+    }
+    const styleRefs = node.properties.styleRefs;
+    if (styleRefs) {
+      for (const [field, key] of Object.entries(styleRefs)) {
+        if (typeof key !== "string" || !key) {
+          add(`${path}.styleRefs.${field}`, "must be a non-empty style id or name");
+          continue;
+        }
+        const styleType = styleKeys.get(key);
+        if (!styleType) {
+          add(`${path}.styleRefs.${field}`, `style '${key}' is not defined in this document`);
+          continue;
+        }
+        if ((field === "fill" || field === "stroke") && styleType !== "PAINT") {
+          add(`${path}.styleRefs.${field}`, `style '${key}' has type ${styleType} but ${field} requires PAINT`);
+        } else if (field === "text" && styleType !== "TEXT") {
+          add(`${path}.styleRefs.${field}`, `style '${key}' has type ${styleType} but text requires TEXT`);
+        }
       }
     }
     node.children.forEach((child, index) => tokenReferences(child, `${path}.children[${index}]`));
