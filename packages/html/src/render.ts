@@ -82,6 +82,7 @@ interface PrototypeLink {
   href?: string;
   timeout?: { seconds: number; destination: string };
   back?: boolean;
+  setMode?: { collection: string; mode: string };
 }
 
 export function render(input: unknown, options: RenderOptions = {}): RenderResult {
@@ -93,13 +94,15 @@ export function render(input: unknown, options: RenderOptions = {}): RenderResul
 
 export function renderDocument(document: InternalDocument, options: RenderOptions = {}): RenderResult {
   const ctx = createContext(document);
-  const css: string[] = [baseCss(options.background || "#d8d4cb")];
-  const body = document.nodes.map((node) => renderNode(node, ctx, { parent: undefined, parentHasLayout: false, modes: {} }, css)).join("\n");
+  const modes = initialBoardModes(document);
+  const css: string[] = [baseCss(options.background || "#d8d4cb"), themeCss(document)];
+  const body = document.nodes.map((node) => renderNode(node, ctx, { parent: undefined, parentHasLayout: false, modes: { ...modes } }, css)).join("\n");
   const board = boardCss(document.nodes);
   const fonts = fontLinks(ctx.fonts);
   const script = runtimeScript(ctx.timeouts);
-  const stylesheet = [board, ...css].join("\n");
+  const stylesheet = [board, ...css].filter(Boolean).join("\n");
   const title = escapeHtml(options.title || document.nodes[0]?.name || "Compact Design");
+  const modeAttrs = Object.entries(modes).map(([collection, mode]) => `data-cd-mode-${cssVar(collection)}="${escapeHtml(mode)}"`).join(" ");
   const page = `<!doctype html>
 <html lang="en">
 <head>
@@ -112,7 +115,7 @@ ${stylesheet}
 </style>
 </head>
 <body>
-<main class="cd-board">
+<main class="cd-board"${modeAttrs ? ` ${modeAttrs}` : ""}>
 ${body}
 </main>
 ${script}
@@ -183,7 +186,7 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
     modes
   };
   const inner = [
-    shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props),
+    shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props, ctx),
     ...childrenSource.map((child) => renderNode(applyInstanceText(child, node), ctx, childState, css))
   ].join("");
 
@@ -195,9 +198,13 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
   ];
   if (link.timeout) attrs.push(`data-cd-timeout="${link.timeout.seconds}"`, `data-cd-navigate="${escapeHtml(htmlId(link.timeout.destination))}"`);
   if (link.back) attrs.push(`data-cd-back="true"`);
+  if (link.setMode) {
+    attrs.push(`data-cd-set-collection="${escapeHtml(cssVar(link.setMode.collection))}"`, `data-cd-set-mode="${escapeHtml(link.setMode.mode)}"`);
+  }
 
-  const tag = link.href ? "a" : "div";
+  const tag = link.href || link.back || link.setMode ? "a" : "div";
   if (link.href) attrs.push(`href="${escapeHtml(link.href)}"`);
+  else if (link.back || link.setMode) attrs.push(`href="#"`);
   if (node.type === "TEXT") return `<${tag} ${attrs.join(" ")}>${textInner(props, ctx)}</${tag}>`;
   if (node.type === "SVG" && props.svg) return `<${tag} ${attrs.join(" ")}>${sanitizeSvg(props.svg)}</${tag}>`;
   return `<${tag} ${attrs.join(" ")}>${inner}</${tag}>`;
@@ -236,11 +243,10 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...childSizingDeclarations(props, state.parent?.properties.layout?.direction),
     ...overflowDeclarations(props),
     ...radiusDeclarations(props),
-    ...(node.type === "ARC" ? [] : strokeDeclarations(resolvedProps(props, ctx, modes))),
-    ...paintDeclarations(node.type, resolvedProps(props, ctx, modes)),
+    ...(node.type === "ARC" ? [] : boundStrokeDeclarations(resolvedProps(props, ctx, modes), ctx)),
+    ...paintDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
     ...effectDeclarations(node.type, props),
     ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
-    ...variableCustomProperties(props, modes, ctx)
   ];
   if (node.type === "ELLIPSE") declarations.push("border-radius: 50%");
   if (typeof props.opacity === "number") declarations.push(`opacity: ${props.opacity}`);
@@ -292,19 +298,26 @@ function resolvedProps(props: DesignProperties, ctx: RenderContext, modes: Recor
   }
   const next: DesignProperties = { ...props, styles: { ...props.styles, fills, strokes } };
   const fillBinding = props.bindings?.fill;
-  if (fillBinding) {
+  if (fillBinding && !isColorBinding(fillBinding, ctx)) {
     const color = resolveColor(fillBinding, modes, ctx);
     if (color) next.styles = { ...next.styles, fills: [{ type: "SOLID", color, opacity: 1 }, ...fills.slice(1)] };
   }
   const strokeBinding = props.bindings?.stroke;
-  if (strokeBinding) {
+  if (strokeBinding && !isColorBinding(strokeBinding, ctx)) {
     const color = resolveColor(strokeBinding, modes, ctx);
     if (color) next.styles = { ...next.styles, strokes: [{ type: "SOLID", color, opacity: 1 }, ...strokes.slice(1)] };
   }
   return next;
 }
 
-function paintDeclarations(type: string, props: DesignProperties): string[] {
+function paintDeclarations(type: string, props: DesignProperties, ctx: RenderContext): string[] {
+  const fillBinding = props.bindings?.fill;
+  if (fillBinding && isColorBinding(fillBinding, ctx)) {
+    const value = `var(--cd-${cssVar(fillBinding)})`;
+    if (type === "TEXT") return [`color: ${value}`];
+    if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC") return [];
+    return [`background: ${value}`];
+  }
   if (type === "TEXT") {
     const color = paintColor(props.styles.fills[0]);
     return color ? [`color: ${color}`] : [];
@@ -413,23 +426,80 @@ function runFill(value: unknown): string | undefined {
   return undefined;
 }
 
-function variableCustomProperties(props: DesignProperties, modes: Record<string, string>, ctx: RenderContext): string[] {
-  const declarations: string[] = [];
-  for (const [collection, mode] of Object.entries(props.variableModes || {})) {
-    for (const [key, ref] of ctx.variables) {
-      if (ref.collection !== collection) continue;
-      if (ref.item.id !== key) continue;
-      const value = resolveVariableValue(ref, modes);
-      if (isDesignColor(value)) declarations.push(`--cd-${cssVar(ref.item.id || ref.item.name)}: ${cssColor(value)}`);
-    }
+function boundStrokeDeclarations(props: DesignProperties, ctx: RenderContext): string[] {
+  const strokeBinding = props.bindings?.stroke;
+  if (strokeBinding && isColorBinding(strokeBinding, ctx)) {
+    const color = `var(--cd-${cssVar(strokeBinding)})`;
+    const style = props.dashPattern?.length ? "dashed" : "solid";
+    const weight = finite(props.strokeWeight, 1);
+    if (weight <= 0) return [];
+    return [`border: ${weight}px ${style} ${color}`];
   }
-  const fill = props.bindings?.fill;
-  if (fill) declarations.push(`--cd-bound-fill: var(--cd-${cssVar(fill)})`);
-  return declarations;
+  return strokeDeclarations(props);
+}
+
+function isColorBinding(key: string, ctx: RenderContext): boolean {
+  const ref = ctx.variables.get(key);
+  return Boolean(ref && ref.item.type === "COLOR");
 }
 
 function cssVar(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]+/g, "-");
+}
+
+function initialBoardModes(document: InternalDocument): Record<string, string> {
+  const modes: Record<string, string> = {};
+  for (const collection of document.variables) {
+    if (collection.modes?.length) modes[collection.name] = collection.modes[0];
+    else {
+      for (const item of collection.items) {
+        if (item.values) {
+          const first = Object.keys(item.values)[0];
+          if (first) {
+            modes[collection.name] = first;
+            break;
+          }
+        }
+      }
+    }
+  }
+  const walk = (nodes: InternalNode[]): void => {
+    for (const node of nodes) {
+      Object.assign(modes, node.properties.variableModes || {});
+      walk(node.children);
+    }
+  };
+  walk(document.nodes);
+  return modes;
+}
+
+function themeCss(document: InternalDocument): string {
+  const values: string[] = [];
+  const selectors: string[] = [];
+  for (const collection of document.variables) {
+    const modeNames = collection.modes?.length
+      ? collection.modes
+      : [...new Set(collection.items.flatMap((item) => item.values ? Object.keys(item.values) : []))];
+    if (!modeNames.length) continue;
+    const colorItems = collection.items.filter((item) => item.type === "COLOR");
+    if (!colorItems.length) continue;
+    for (const item of colorItems) {
+      const key = cssVar(item.id || item.name);
+      for (const mode of modeNames) {
+        const raw = item.values?.[mode] ?? item.value;
+        if (isDesignColor(raw)) values.push(`--cd-${key}-${cssVar(mode)}: ${cssColor(raw)}`);
+      }
+    }
+    for (const mode of modeNames) {
+      const active = colorItems.map((item) => {
+        const key = cssVar(item.id || item.name);
+        return `--cd-${key}: var(--cd-${key}-${cssVar(mode)})`;
+      });
+      selectors.push(`.cd-board[data-cd-mode-${cssVar(collection.name)}="${mode}"] { ${active.join("; ")} }`);
+    }
+  }
+  if (!values.length) return "";
+  return [`.cd-board { ${values.join("; ")} }`, ...selectors].join("\n");
 }
 
 function resolveColor(key: string, modes: Record<string, string>, ctx: RenderContext) {
@@ -465,24 +535,51 @@ function prototypeLink(value: DesignProperties["prototype"], ctx: RenderContext,
   if (!reaction) return {};
   const trigger = isRecord(reaction.trigger) ? reaction.trigger : {};
   const actions = Array.isArray(reaction.actions) ? reaction.actions : [];
-  const action = actions.find(isRecord);
-  if (!action) return {};
-  const type = String(action.type || "").toUpperCase();
-  if (type === "URL" && typeof action.url === "string") return { href: action.url };
-  if (type === "BACK") return { href: "#", back: true };
-  if ((type === "NAVIGATE" || type === "SWAP" || type === "OVERLAY") && typeof action.destination === "string") {
-    if (String(trigger.type || "").toUpperCase() === "AFTER_TIMEOUT") {
-      const seconds = finite(trigger.timeout, 1);
-      ctx.timeouts.push({ id: sourceId, seconds, destination: action.destination });
-      return { timeout: { seconds, destination: action.destination } };
+  if (!actions.some(isRecord)) return {};
+  const triggerType = String(trigger.type || "ON_CLICK").toUpperCase();
+  const link: PrototypeLink = {};
+  for (const candidate of actions.filter(isRecord)) {
+    const type = String(candidate.type || "").toUpperCase();
+    if (type === "SET_VARIABLE_MODE" && triggerType !== "AFTER_TIMEOUT") {
+      const collection = typeof candidate.collection === "string" ? candidate.collection
+        : typeof candidate.variableCollectionId === "string" ? candidate.variableCollectionId : "";
+      const mode = typeof candidate.mode === "string" ? candidate.mode
+        : typeof candidate.variableModeId === "string" ? candidate.variableModeId : "";
+      if (collection && mode) link.setMode = { collection, mode };
+      continue;
     }
-    return { href: `#${htmlId(action.destination)}` };
+    if (type === "URL" && typeof candidate.url === "string" && !link.href) link.href = candidate.url;
+    if (type === "BACK") {
+      link.href = link.href || "#";
+      link.back = true;
+    }
+    if ((type === "NAVIGATE" || type === "SWAP" || type === "OVERLAY") && typeof candidate.destination === "string") {
+      if (triggerType === "AFTER_TIMEOUT") {
+        const seconds = finite(trigger.timeout, 1);
+        ctx.timeouts.push({ id: sourceId, seconds, destination: candidate.destination });
+        link.timeout = { seconds, destination: candidate.destination };
+      } else if (!link.href) {
+        link.href = `#${htmlId(candidate.destination)}`;
+      }
+    }
   }
-  return {};
+  return link;
 }
 
-function shapeMarkup(type: string, props: DesignProperties): string {
-  const fill = paintColor(props.styles.fills[0]) || "currentColor";
+function shapeFill(props: DesignProperties, ctx: RenderContext): string {
+  const fillBinding = props.bindings?.fill;
+  if (fillBinding && isColorBinding(fillBinding, ctx)) return `var(--cd-${cssVar(fillBinding)})`;
+  return paintColor(props.styles.fills[0]) || "currentColor";
+}
+
+function shapeStroke(props: DesignProperties, ctx: RenderContext): string | undefined {
+  const strokeBinding = props.bindings?.stroke;
+  if (strokeBinding && isColorBinding(strokeBinding, ctx)) return `var(--cd-${cssVar(strokeBinding)})`;
+  return paintColor(props.styles.strokes[0]);
+}
+
+function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext): string {
+  const fill = shapeFill(props, ctx);
   if (type === "ELLIPSE") {
     return "";
   }
@@ -490,7 +587,7 @@ function shapeMarkup(type: string, props: DesignProperties): string {
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
     const d = arcPath(width, height, finite(props.startingAngle, 0), finite(props.endingAngle, Math.PI * 1.5), finite(props.innerRadiusRatio, 0));
-    const stroke = paintColor(props.styles.strokes[0]);
+    const stroke = shapeStroke(props, ctx);
     const strokeAttrs = stroke ? ` stroke="${escapeHtml(stroke)}" stroke-width="${finite(props.strokeWeight, 1)}"` : "";
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><path d="${d}" fill-rule="evenodd" fill="${escapeHtml(fill)}"${strokeAttrs}/></svg>`;
   }
@@ -518,23 +615,19 @@ function fontLinks(families: Set<string>): string {
 <link href="https://fonts.googleapis.com/css2?${query}&display=swap" rel="stylesheet">`;
 }
 
-function runtimeScript(timeouts: RenderContext["timeouts"]): string {
-  if (!timeouts.length) {
-    return `<script>
-(() => {
-  const stack = [];
-  addEventListener("hashchange", () => stack.push(location.hash));
-  document.querySelectorAll("[data-cd-back]").forEach((node) => {
-    node.addEventListener("click", (event) => {
-      event.preventDefault();
-      history.back();
-    });
-  });
-})();
-</script>`;
-  }
+function runtimeScript(_timeouts: RenderContext["timeouts"]): string {
   return `<script>
 (() => {
+  document.querySelectorAll("[data-cd-set-mode]").forEach((node) => {
+    node.addEventListener("click", (event) => {
+      event.preventDefault();
+      const collection = (node.getAttribute("data-cd-set-collection") || "").replace(/[^a-zA-Z0-9_-]+/g, "-");
+      const mode = node.getAttribute("data-cd-set-mode");
+      const board = node.closest(".cd-board");
+      if (!board || !collection || !mode) return;
+      board.setAttribute("data-cd-mode-" + collection, mode);
+    });
+  });
   document.querySelectorAll("[data-cd-timeout]").forEach((node) => {
     const seconds = Number(node.getAttribute("data-cd-timeout"));
     const destination = node.getAttribute("data-cd-navigate");

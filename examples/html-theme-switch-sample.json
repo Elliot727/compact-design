@@ -1,0 +1,147 @@
+{
+  "$schema": "../spec/compact-design.schema.json",
+  "canvas": {
+    "id": "theme-live",
+    "name": "HTML Theme Switch",
+    "width": 420,
+    "height": 240,
+    "fill": "#FFFFFF"
+  },
+  "variables": [
+    {
+      "name": "Theme",
+      "modes": [
+        "Light",
+        "Dark"
+      ],
+      "items": [
+        {
+          "id": "surface",
+          "name": "colour/surface",
+          "type": "COLOR",
+          "values": {
+            "Light": {
+              "r": 248,
+              "g": 245,
+              "b": 238,
+              "a": 1
+            },
+            "Dark": {
+              "r": 27,
+              "g": 30,
+              "b": 26,
+              "a": 1
+            }
+          }
+        },
+        {
+          "id": "ink",
+          "name": "colour/ink",
+          "type": "COLOR",
+          "values": {
+            "Light": {
+              "r": 35,
+              "g": 34,
+              "b": 30,
+              "a": 1
+            },
+            "Dark": {
+              "r": 243,
+              "g": 236,
+              "b": 222,
+              "a": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "panel",
+      "type": "FRAME",
+      "x": 20,
+      "y": 20,
+      "w": 380,
+      "h": 200,
+      "fill": "#F8F5EE",
+      "bindings": {
+        "fill": "surface"
+      },
+      "variableModes": {
+        "Theme": "Light"
+      },
+      "cornerRadius": 16,
+      "children": [
+        {
+          "id": "label",
+          "type": "TEXT",
+          "x": 24,
+          "y": 24,
+          "w": 320,
+          "h": 28,
+          "text": "Click to switch Theme mode.",
+          "fill": "#23221E",
+          "bindings": {
+            "fill": "ink"
+          },
+          "font": {
+            "family": "Arial",
+            "style": "Regular",
+            "size": 16
+          }
+        },
+        {
+          "id": "to-dark",
+          "type": "FRAME",
+          "x": 24,
+          "y": 80,
+          "w": 120,
+          "h": 40,
+          "fill": "#23221E",
+          "cornerRadius": 8,
+          "prototype": [
+            {
+              "trigger": {
+                "type": "ON_CLICK"
+              },
+              "actions": [
+                {
+                  "type": "SET_VARIABLE_MODE",
+                  "collection": "Theme",
+                  "mode": "Dark"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "to-light",
+          "type": "FRAME",
+          "x": 160,
+          "y": 80,
+          "w": 120,
+          "h": 40,
+          "fill": "#F8F5EE",
+          "cornerRadius": 8,
+          "stroke": "#23221E",
+          "strokeWeight": 1,
+          "prototype": [
+            {
+              "trigger": {
+                "type": "ON_CLICK"
+              },
+              "actions": [
+                {
+                  "type": "SET_VARIABLE_MODE",
+                  "collection": "Theme",
+                  "mode": "Light"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -74,6 +74,142 @@ test("variable bindings emit resolved colours", () => {
   const result = render(fixture("update-patch-theme-sample.json"));
   assert.match(result.css, /#n-theme-card/);
   assert.match(result.html, /One design\./);
+  assert.match(result.css, /--cd-surface-Light:\s*rgba\(248, 245, 238, 1\)/);
+  assert.match(result.css, /--cd-surface-Dark:\s*rgba\(27, 30, 26, 1\)/);
+  assert.match(result.css, /--cd-ink-Light:/);
+  assert.match(result.css, /--cd-ink-Dark:/);
+  assert.match(result.css, /\.cd-board\[data-cd-mode-Theme="Dark"\]/);
+  assert.match(result.css, /#n-theme-card \{[^}]*background: var\(--cd-surface\)/);
+  assert.match(result.css, /#n-theme-title \{[^}]*color: var\(--cd-ink\)/);
+  assert.match(result.html, /class="cd-board" data-cd-mode-Theme="Dark"/);
+});
+
+test("SET_VARIABLE_MODE switches live theme modes", () => {
+  const result = render({
+    canvas: { id: "theme-live", width: 400, height: 200, fill: "#FFFFFF" },
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [
+        { id: "surface", name: "colour/surface", type: "COLOR", values: {
+          Light: { r: 248, g: 245, b: 238, a: 1 },
+          Dark: { r: 27, g: 30, b: 26, a: 1 }
+        } },
+        { id: "ink", name: "colour/ink", type: "COLOR", values: {
+          Light: { r: 35, g: 34, b: 30, a: 1 },
+          Dark: { r: 243, g: 236, b: 222, a: 1 }
+        } }
+      ]
+    }],
+    nodes: [{
+      id: "panel",
+      type: "FRAME",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 200,
+      fill: "#F8F5EE",
+      bindings: { fill: "surface" },
+      variableModes: { Theme: "Light" },
+      children: [
+        {
+          id: "label",
+          type: "TEXT",
+          x: 16,
+          y: 16,
+          w: 200,
+          h: 24,
+          text: "Theme",
+          fill: "#23221E",
+          bindings: { fill: "ink" },
+          font: { family: "Arial", style: "Regular", size: 16 }
+        },
+        {
+          id: "to-dark",
+          type: "FRAME",
+          x: 16,
+          y: 60,
+          w: 100,
+          h: 32,
+          fill: "#23221E",
+          prototype: [{
+            trigger: { type: "ON_CLICK" },
+            actions: [{ type: "SET_VARIABLE_MODE", collection: "Theme", mode: "Dark" }]
+          }]
+        },
+        {
+          id: "to-light",
+          type: "FRAME",
+          x: 130,
+          y: 60,
+          w: 100,
+          h: 32,
+          fill: "#F8F5EE",
+          prototype: [{
+            trigger: { type: "ON_CLICK" },
+            actions: [{ type: "SET_VARIABLE_MODE", collection: "Theme", mode: "Light" }]
+          }]
+        }
+      ]
+    }]
+  });
+  assert.match(result.css, /--cd-surface-Light:/);
+  assert.match(result.css, /--cd-surface-Dark:/);
+  assert.match(result.css, /\.cd-board\[data-cd-mode-Theme="Light"\] \{[^}]*--cd-surface: var\(--cd-surface-Light\)/);
+  assert.match(result.css, /\.cd-board\[data-cd-mode-Theme="Dark"\] \{[^}]*--cd-surface: var\(--cd-surface-Dark\)/);
+  assert.match(result.html, /data-cd-set-collection="Theme" data-cd-set-mode="Dark"/);
+  assert.match(result.html, /data-cd-set-collection="Theme" data-cd-set-mode="Light"/);
+  assert.match(result.html, /data-cd-mode-Theme="Light"/);
+  assert.match(result.html, /board\.setAttribute\("data-cd-mode-" \+ collection, mode\)/);
+  assert.match(result.html, /\.replace\(\/\[\^a-zA-Z0-9_-\]\+\/g, "-"\)/);
+});
+
+test("bound COLOR fills reach SVG shapes", () => {
+  const result = render({
+    canvas: { id: "shapes", width: 240, height: 120, fill: "#FFFFFF" },
+    variables: [{
+      name: "Brand Theme",
+      modes: ["Light", "Dark"],
+      items: [
+        { id: "accent", name: "colour/accent", type: "COLOR", values: {
+          Light: { r: 220, g: 36, b: 31, a: 1 },
+          Dark: { r: 255, g: 120, b: 80, a: 1 }
+        } }
+      ]
+    }],
+    nodes: [
+      {
+        id: "star",
+        type: "STAR",
+        x: 10,
+        y: 10,
+        w: 80,
+        h: 80,
+        pointCount: 5,
+        innerRadius: 0.5,
+        fill: "#DC241F",
+        bindings: { fill: "accent" },
+        variableModes: { "Brand Theme": "Light" }
+      },
+      {
+        id: "to-dark",
+        type: "FRAME",
+        x: 120,
+        y: 20,
+        w: 80,
+        h: 32,
+        fill: "#23221E",
+        prototype: [{
+          trigger: { type: "ON_CLICK" },
+          actions: [{ type: "SET_VARIABLE_MODE", collection: "Brand Theme", mode: "Dark" }]
+        }]
+      }
+    ]
+  });
+  assert.match(result.html, /id="n-star"[^>]*>[\s\S]*?<polygon[^>]*fill="var\(--cd-accent\)"/);
+  assert.match(result.css, /\.cd-board\[data-cd-mode-Brand-Theme="Light"\]/);
+  assert.match(result.html, /data-cd-set-collection="Brand-Theme" data-cd-set-mode="Dark"/);
+  assert.match(result.html, /data-cd-mode-Brand-Theme="Light"/);
 });
 
 test("maintained documents render; patches are rejected", () => {
