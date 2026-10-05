@@ -1,1 +1,132 @@
-PLACEHOLDER
+name: Batch release publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    types: [closed]
+
+jobs:
+  tag:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout merge commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p "require('./packages/core/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push release tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists — skipping push."
+            exit 0
+          fi
+          git tag "$TAG" "${{ github.event.pull_request.merge_commit_sha }}"
+          git push origin "$TAG"
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # setup-node writes //registry…/:_authToken=${NODE_AUTH_TOKEN}; an empty
+      # expansion blocks npm OIDC Trusted Publishing (actions/setup-node#1551).
+      - name: Strip empty npm auth for OIDC
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            for f in "${NPM_CONFIG_USERCONFIG:-}" "${HOME}/.npmrc"; do
+              if [ -n "$f" ] && [ -f "$f" ]; then
+                sed -i '/:_authToken=/d' "$f"
+              fi
+            done
+          fi
+
+      - name: Install and build publishable packages
+        run: |
+          npm ci
+          npm run build -w @compact-design/core
+          npm run build -w @compact-design/html
+          npm run build -w @compact-design/mcp
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p "require('./packages/core/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        id: publish
+        env:
+          # Prefer OIDC Trusted Publishing when unset; classic token fallback when set
+          # (bootstrap / first publish of packages that do not exist on npm yet).
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish -w @compact-design/core --access public
+          npm publish -w @compact-design/html --access public
+          npm publish -w @compact-design/mcp --access public
+
+      - name: Manual publish / OIDC troubleshooting
+        if: failure() && steps.publish.outcome == 'failure'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat <<MD
+          ## Publish failed
+
+          Prefer npm Trusted Publishing (OIDC). On npmjs.com, for each of
+          \`@compact-design/core\`, \`@compact-design/html\`, and \`@compact-design/mcp\`,
+          configure a Trusted Publisher with:
+
+          - Owner: \`Elliot727\`
+          - Repository: \`compact-design\`
+          - Workflow filename: \`batch-release-publish.yml\`
+          - Allow: \`npm publish\`
+
+          \`@compact-design/mcp\` must already exist on npm (or first-publish once with
+          an \`NPM_TOKEN\`) before OIDC can publish it. Optional fallback: set the
+          repository secret \`NPM_TOKEN\` for classic auth.
+
+          Manual publish from a clean checkout of the release commit:
+
+          \`\`\`bash
+          npm ci
+          npm run build -w @compact-design/core
+          npm run build -w @compact-design/html
+          npm run build -w @compact-design/mcp
+          npm publish -w @compact-design/core --access public
+          npm publish -w @compact-design/html --access public
+          npm publish -w @compact-design/mcp --access public
+          \`\`\`
+
+          Do not publish \`@compact-design/figma-plugin\`. Tag: \`v${VERSION}\`.
+          MD
