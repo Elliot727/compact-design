@@ -303,6 +303,97 @@ test("lines render as SVG strokes, not bordered boxes", () => {
   assert.doesNotMatch(result.css, /#n-solid \{[^}]*(border:|background:)/);
 });
 
+test("isMask hides mask paint and clips following siblings", () => {
+  const result = render({
+    canvas: { id: "masks", width: 400, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "frame",
+      type: "FRAME",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 200,
+      children: [
+        {
+          id: "rect-mask",
+          type: "RECTANGLE",
+          x: 40,
+          y: 20,
+          w: 120,
+          h: 80,
+          cornerRadius: 16,
+          fill: "#000000",
+          isMask: true
+        },
+        {
+          id: "rect-content",
+          type: "RECTANGLE",
+          x: 0,
+          y: 0,
+          w: 200,
+          h: 120,
+          fill: "#6C5CFF"
+        },
+        {
+          id: "ellipse-mask",
+          type: "ELLIPSE",
+          x: 260,
+          y: 40,
+          w: 80,
+          h: 80,
+          fill: "#000000",
+          isMask: true
+        },
+        {
+          id: "ellipse-content",
+          type: "RECTANGLE",
+          x: 220,
+          y: 20,
+          w: 160,
+          h: 120,
+          fill: "#DC241F"
+        }
+      ]
+    }]
+  });
+
+  assert.match(result.css, /#n-rect-mask \{[^}]*opacity: 0/);
+  assert.doesNotMatch(result.css, /#n-rect-mask \{[^}]*background:/);
+  assert.match(result.css, /#n-rect-content \{[^}]*clip-path: xywh\(40px 20px 120px 80px round 16px\)/);
+
+  assert.match(result.css, /#n-ellipse-mask \{[^}]*opacity: 0/);
+  assert.doesNotMatch(result.css, /#n-ellipse-mask \{[^}]*background:/);
+  assert.match(
+    result.css,
+    /#n-ellipse-content \{[^}]*clip-path: ellipse\(40px 40px at 80px 60px\)/
+  );
+  assert.match(result.css, /#n-ellipse-content \{[^}]*background:/);
+});
+
+test("isMask without corner radius uses CSS mask geometry", () => {
+  const result = render({
+    canvas: { id: "mask-box", width: 240, height: 160, fill: "#FFFFFF" },
+    nodes: [{
+      id: "group",
+      type: "FRAME",
+      x: 0,
+      y: 0,
+      w: 240,
+      h: 160,
+      children: [
+        { id: "hole", type: "RECTANGLE", x: 20, y: 30, w: 100, h: 60, fill: "#000000", isMask: true },
+        { id: "photo", type: "RECTANGLE", x: 0, y: 0, w: 240, h: 160, fill: "#263047" }
+      ]
+    }]
+  });
+  assert.match(result.css, /#n-hole \{[^}]*opacity: 0/);
+  assert.doesNotMatch(result.css, /#n-hole \{[^}]*background:/);
+  assert.match(result.css, /#n-photo \{[^}]*mask-image: linear-gradient\(#000 0 0\)/);
+  assert.match(result.css, /#n-photo \{[^}]*mask-size: 100px 60px/);
+  assert.match(result.css, /#n-photo \{[^}]*mask-position: 20px 30px/);
+  assert.match(result.css, /#n-photo \{[^}]*-webkit-mask-image: linear-gradient\(#000 0 0\)/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
