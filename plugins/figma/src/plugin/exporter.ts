@@ -1,5 +1,5 @@
 import type { ExportCandidate } from "./export-plan";
-import { VariableExportContext } from "./export-variables";
+import { VariableExportContext, exportColorChannels } from "./export-variables";
 
 type CompactValue = Record<string, unknown>;
 let activeExportIds = new Map<string, string>();
@@ -83,6 +83,24 @@ async function compactPaints(values: readonly Paint[] | PluginAPI["mixed"]): Pro
   return (await Promise.all(values.filter((paint) => paint.visible !== false).map(compactPaint))).filter(Boolean);
 }
 
+
+export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[] {
+  return values.map((grid) => {
+    const color = exportColorChannels(grid.color ?? { r: 0, g: 0, b: 0, a: 0.1 });
+    if (grid.pattern === "GRID") return { pattern: "GRID", sectionSize: grid.sectionSize, color, visible: grid.visible };
+    return {
+      pattern: grid.pattern,
+      alignment: grid.alignment,
+      count: grid.count,
+      gutterSize: grid.gutterSize,
+      offset: grid.offset,
+      ...(grid.alignment === "STRETCH" ? {} : { sectionSize: grid.sectionSize }),
+      color,
+      visible: grid.visible
+    };
+  });
+}
+
 function compactEffects(values: readonly Effect[]): unknown[] {
   return values.filter((effect) => effect.visible !== false).map((effect) => {
     if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") return { type: effect.type, color: rgba(effect.color), offset: effect.offset, blur: effect.radius, spread: effect.spread, visible: effect.visible };
@@ -126,6 +144,7 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
     if (strokes.length && "dashPattern" in node && node.dashPattern.length) result.dashPattern = [...node.dashPattern];
   }
   if ("effects" in node && node.effects.length) result.effects = compactEffects(node.effects);
+  if ("layoutGrids" in node && node.layoutGrids.length) result.layoutGrids = compactLayoutGrids(node.layoutGrids);
   if ("cornerRadius" in node && node.cornerRadius !== figma.mixed && node.cornerRadius) result.cornerRadius = node.cornerRadius;
   else if ("topLeftRadius" in node && [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius].some(Boolean)) result.cornerRadii = [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius];
   if ("clipsContent" in node && node.clipsContent) result.clipsContent = true;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { compactLayoutGrids, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
 import {
   assembleVariableGroups,
   buildExplicitVariableModes,
@@ -47,6 +47,21 @@ test("non-frame export roots get a canvas id that does not collide with the laye
   assert.equal(exportCanvasId("button", "FRAME"), "button");
   assert.equal(exportCanvasId("button", "COMPONENT"), "button-canvas");
 });
+
+
+test("export layoutGrids maps Figma grids to Compact shape with 0-255 color", () => {
+  assert.deepEqual(compactLayoutGrids([
+    { pattern: "GRID", sectionSize: 8, visible: true, color: { r: 1, g: 0, b: 0, a: 0.1 } },
+    { pattern: "COLUMNS", alignment: "STRETCH", count: 12, gutterSize: 20, offset: 0, visible: true, color: { r: 0, g: 0, b: 1, a: 0.1 } },
+    { pattern: "ROWS", alignment: "MIN", count: 4, gutterSize: 8, offset: 16, sectionSize: 64, visible: false, color: { r: 0, g: 0.5, b: 0, a: 1 } }
+  ] as LayoutGrid[]), [
+    { pattern: "GRID", sectionSize: 8, color: { r: 255, g: 0, b: 0, a: 0.1 }, visible: true },
+    { pattern: "COLUMNS", alignment: "STRETCH", count: 12, gutterSize: 20, offset: 0, color: { r: 0, g: 0, b: 255, a: 0.1 }, visible: true },
+    { pattern: "ROWS", alignment: "MIN", count: 4, gutterSize: 8, offset: 16, sectionSize: 64, color: { r: 0, g: 128, b: 0, a: 1 }, visible: false }
+  ]);
+  assert.deepEqual(compactLayoutGrids([]), []);
+});
+
 
 function layer(partial: ExportCandidate): ExportCandidate {
   return partial;
