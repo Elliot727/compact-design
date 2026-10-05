@@ -31,6 +31,10 @@ export interface DesignEffect {
   showShadowBehindNode?: boolean; blurType?: string; startRadius?: number; startOffset?: DesignPoint; endOffset?: DesignPoint;
   noiseType?: string; noiseSize?: number; density?: number; secondaryColor?: DesignColor; opacity?: number; clipToShape?: boolean;
   lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number;
+  /** SHADER only: Figma shader id (from listAvailableShaders / importShaderById). */
+  id?: string;
+  /** SHADER only: property assignments keyed by property-definition id, passed through verbatim. */
+  properties?: Record<string, JsonValue>;
 }
 export interface DesignStyles { fills: DesignPaint[]; strokes: DesignPaint[]; effects: DesignEffect[]; }
 export interface DesignLayout {

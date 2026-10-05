@@ -76,7 +76,8 @@ test("get_language covers effect types and BOOLEAN_OPERATION operation", async (
   assert.match(guide, /NOISE/);
   assert.match(guide, /TEXTURE/);
   assert.match(guide, /GLASS/);
-  assert.match(guide, /SHADER is not yet supported/);
+  assert.match(guide, /SHADER is supported with a required Figma shader id/);
+  assert.doesNotMatch(guide, /SHADER is not yet supported/);
   assert.match(guide, /showShadowBehindNode/);
   assert.match(guide, /blurType/);
   assert.match(guide, /startRadius/);

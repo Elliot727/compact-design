@@ -1,7 +1,7 @@
 import type { InternalPatchDocument, PatchOperation } from "@compact-design/core";
 import { applyAutoLayout, applyChildLayout, applyGeometry, applyGrids } from "./layout";
 import { createNode, type ImportContext } from "./nodes";
-import { applyAppearance } from "./paints";
+import { applyAppearance, clearEffectWarnings, effectWarnings } from "./paints";
 import { applyText } from "./text";
 
 function indexNodes(): Map<string, SceneNode> {
@@ -49,6 +49,7 @@ async function applySet(node: SceneNode, operation: PatchOperation): Promise<voi
 }
 
 export async function applyPatch(document: InternalPatchDocument, context: ImportContext): Promise<{ affected: SceneNode[]; warnings: string[] }> {
+  clearEffectWarnings();
   const nodes = indexNodes();
   for (const [index, operation] of document.patch.operations.entries()) {
     if ((operation.op === "SET" || operation.op === "REMOVE") && !nodes.has(operation.id!)) throw new Error(`patch.operations[${index}]: node '${operation.id}' was not found`);
@@ -78,5 +79,5 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
     for (const { original, backup } of backups) { if (!original.removed) original.remove(); }
     throw error;
   }
-  return { affected, warnings: [] };
+  return { affected, warnings: [...effectWarnings] };
 }

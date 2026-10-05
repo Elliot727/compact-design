@@ -159,7 +159,7 @@ export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[
 }
 
 export function compactEffects(values: readonly Effect[]): unknown[] {
-  return values.filter((effect) => effect.visible !== false && effect.type !== "SHADER").map((effect) => {
+  return values.filter((effect) => effect.visible !== false).map((effect) => {
     if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") {
       const result: CompactValue = {
         type: effect.type,
@@ -217,7 +217,14 @@ export function compactEffects(values: readonly Effect[]): unknown[] {
         visible: effect.visible
       };
     }
-    return { type: effect.type, visible: effect.visible };
+    if (effect.type === "SHADER") {
+      const result: CompactValue = { type: "SHADER", id: effect.id, visible: effect.visible };
+      // Property values are keyed by Figma property-definition id; pass them
+      // through verbatim so import can re-apply them after importShaderById.
+      if (effect.properties && Object.keys(effect.properties).length) result.properties = JSON.parse(JSON.stringify(effect.properties));
+      return result;
+    }
+    return { type: (effect as Effect).type, visible: (effect as Effect).visible };
   });
 }
 

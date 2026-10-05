@@ -1,4 +1,4 @@
-import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, LetterSpacing, LineHeight, PatchOperation, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
+import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, JsonValue, LetterSpacing, LineHeight, PatchOperation, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
 
 interface RawPaint extends JsonObject { type?: string; image?: string; fit?: string; opacity?: number; transform?: Transform; gradient?: string; angle?: number; stops?: Array<{ at: number; color: string | DesignColor }>; }
 interface RawEffect extends JsonObject {
@@ -7,6 +7,7 @@ interface RawEffect extends JsonObject {
   blendMode?: string; showShadowBehindNode?: boolean; blurType?: string; startRadius?: number; startOffset?: { x: number; y: number }; endOffset?: { x: number; y: number };
   noiseType?: string; noiseSize?: number; density?: number; opacity?: number; clipToShape?: boolean;
   lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number;
+  id?: string; properties?: Record<string, JsonValue>;
 }
 interface RawNode extends CompactNode { coordinateMode?: string; fill?: RawPaint | string; fills?: Array<RawPaint | string>; stroke?: RawPaint | string; strokes?: Array<RawPaint | string>; effects?: RawEffect[]; elevation?: string; shadow?: RawEffect | RawEffect[]; rotation?: number; font?: Partial<{ family: string; style: string; size: number }>; text?: string; runs?: Array<JsonObject & { text?: string }>; lineHeight?: number | LineHeight; align?: string; alignment?: unknown; fontSize?: unknown; }
 
@@ -115,6 +116,14 @@ function effect(value: RawEffect): DesignEffect {
       depth: value.depth ?? 1,
       dispersion: value.dispersion ?? 0.1,
       radius: value.blur ?? value.radius ?? 0
+    };
+  }
+  if (type === "SHADER") {
+    return {
+      type,
+      id: typeof value.id === "string" ? value.id : "",
+      visible,
+      ...(value.properties && typeof value.properties === "object" && !Array.isArray(value.properties) ? { properties: value.properties } : {})
     };
   }
   return {
