@@ -466,6 +466,63 @@ test("lines render as SVG strokes, not bordered boxes", () => {
   assert.doesNotMatch(result.css, /#n-solid \{[^}]*(border:|background:)/);
 });
 
+test("STAR and POLYGON emit SVG stroke color, width, dash, and join", () => {
+  const result = render({
+    canvas: { id: "shape-strokes", width: 320, height: 160, fill: "#FFFFFF" },
+    nodes: [
+      {
+        id: "star",
+        type: "STAR",
+        x: 10,
+        y: 10,
+        w: 80,
+        h: 80,
+        pointCount: 5,
+        innerRadius: 0.45,
+        fill: "#F8F5EE",
+        stroke: "#7D5CFF",
+        strokeWeight: 3,
+        strokeJoin: "ROUND",
+        dashPattern: [6, 4]
+      },
+      {
+        id: "hex",
+        type: "POLYGON",
+        x: 120,
+        y: 20,
+        w: 90,
+        h: 90,
+        pointCount: 6,
+        fill: "#FFFFFF",
+        stroke: "#DC241F",
+        strokeWeight: 2,
+        strokeJoin: "BEVEL"
+      },
+      {
+        id: "glyph",
+        type: "VECTOR",
+        x: 230,
+        y: 40,
+        w: 60,
+        h: 40,
+        vectorPaths: [{ windingRule: "NONZERO", data: "M 0 40 L 30 0 L 60 40 Z" }],
+        fill: "#FFFFFF",
+        stroke: "#263047",
+        strokeWeight: 4,
+        strokeCap: "SQUARE",
+        strokeJoin: "MITER"
+      }
+    ]
+  });
+  assert.match(result.html, /id="n-star"[^>]*>[\s\S]*?<polygon[^>]*stroke="rgba\(125, 92, 255, 1\)"[^>]*stroke-width="3"/);
+  assert.match(result.html, /id="n-star"[^>]*>[\s\S]*?<polygon[^>]*stroke-dasharray="6 4"[^>]*stroke-linejoin="round"/);
+  assert.match(result.html, /id="n-hex"[^>]*>[\s\S]*?<polygon[^>]*stroke="rgba\(220, 36, 31, 1\)"[^>]*stroke-width="2"[^>]*stroke-linejoin="bevel"/);
+  assert.match(result.html, /id="n-glyph"[^>]*>[\s\S]*?<path[^>]*stroke="rgba\(38, 48, 71, 1\)"[^>]*stroke-width="4"[^>]*stroke-linecap="square"[^>]*stroke-linejoin="miter"/);
+  assert.doesNotMatch(result.css, /#n-star \{[^}]*(border:|border-width)/);
+  assert.doesNotMatch(result.css, /#n-hex \{[^}]*(border:|border-width)/);
+});
+
+
 test("isMask hides mask paint and clips following siblings", () => {
   const result = render({
     canvas: { id: "masks", width: 400, height: 200, fill: "#FFFFFF" },

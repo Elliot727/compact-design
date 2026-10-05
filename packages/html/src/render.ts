@@ -278,7 +278,7 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     // Keep mask geometry in the tree; suppress visible fills/strokes/effects.
     declarations.push("opacity: 0");
   } else {
-    if (node.type !== "ARC" && node.type !== "LINE") declarations.push(...boundStrokeDeclarations(resolved, ctx));
+    if (node.type !== "ARC" && node.type !== "LINE" && node.type !== "STAR" && node.type !== "POLYGON" && node.type !== "VECTOR") declarations.push(...boundStrokeDeclarations(resolved, ctx));
     declarations.push(
       ...paintDeclarations(node.type, resolved, ctx),
       ...effectDeclarations(node.type, props),
@@ -739,12 +739,14 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
     const points = regularPolygon(width / 2, height / 2, Math.min(width, height) / 2, finite(props.pointCount, type === "STAR" ? 5 : 6), type === "STAR" ? finite(props.innerRadius, 0.5) : undefined);
-    return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" aria-hidden="true"><polygon points="${points}" fill="${escapeHtml(fill)}"/></svg>`;
+    const strokeAttrs = svgPaintStrokeAttrs(props, ctx);
+    return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" aria-hidden="true"><polygon points="${points}" fill="${escapeHtml(fill)}"${strokeAttrs}/></svg>`;
   }
   if (type === "VECTOR" && props.vectorPaths?.length) {
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
-    const paths = props.vectorPaths.map((path) => `<path d="${escapeHtml(path.data)}" fill-rule="${path.windingRule === "EVENODD" ? "evenodd" : "nonzero"}" fill="${escapeHtml(fill)}"/>`).join("");
+    const strokeAttrs = svgPaintStrokeAttrs(props, ctx);
+    const paths = props.vectorPaths.map((path) => `<path d="${escapeHtml(path.data)}" fill-rule="${path.windingRule === "EVENODD" ? "evenodd" : "nonzero"}" fill="${escapeHtml(fill)}"${strokeAttrs}/>`).join("");
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" aria-hidden="true">${paths}</svg>`;
   }
   if (type === "LINE") {
@@ -756,27 +758,49 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
     const x2 = horizontal ? width : width / 2;
     const y2 = horizontal ? height / 2 : height;
     const stroke = shapeStroke(props, ctx) || fill;
-    const weight = finite(props.strokeWeight, 1);
     const attrs = [
       `x1="${x1}"`,
       `y1="${y1}"`,
       `x2="${x2}"`,
       `y2="${y2}"`,
-      `stroke="${escapeHtml(stroke)}"`,
-      `stroke-width="${weight}"`
+      ...svgStrokeAttrList(props, stroke)
     ];
-    if (props.dashPattern?.length) attrs.push(`stroke-dasharray="${props.dashPattern.map((n) => finite(n, 0)).join(" ")}"`);
-    const linecap = strokeLinecapCss(props.strokeCap);
-    if (linecap) attrs.push(`stroke-linecap="${linecap}"`);
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><line ${attrs.join(" ")}/></svg>`;
   }
   return "";
+}
+
+/** Stroke attrs only when a stroke paint is present (VECTOR / POLYGON / STAR). */
+function svgPaintStrokeAttrs(props: DesignProperties, ctx: RenderContext): string {
+  const stroke = shapeStroke(props, ctx);
+  if (!stroke) return "";
+  return ` ${svgStrokeAttrList(props, stroke).join(" ")}`;
+}
+
+function svgStrokeAttrList(props: DesignProperties, stroke: string): string[] {
+  const attrs = [
+    `stroke="${escapeHtml(stroke)}"`,
+    `stroke-width="${finite(props.strokeWeight, 1)}"`
+  ];
+  if (props.dashPattern?.length) attrs.push(`stroke-dasharray="${props.dashPattern.map((n) => finite(n, 0)).join(" ")}"`);
+  const linecap = strokeLinecapCss(props.strokeCap);
+  if (linecap) attrs.push(`stroke-linecap="${linecap}"`);
+  const linejoin = strokeLinejoinCss(props.strokeJoin);
+  if (linejoin) attrs.push(`stroke-linejoin="${linejoin}"`);
+  return attrs;
 }
 
 function strokeLinecapCss(cap: string | undefined): string | undefined {
   if (cap === "ROUND") return "round";
   if (cap === "SQUARE") return "square";
   if (cap === "NONE") return "butt";
+  return undefined;
+}
+
+function strokeLinejoinCss(join: string | undefined): string | undefined {
+  if (join === "MITER") return "miter";
+  if (join === "BEVEL") return "bevel";
+  if (join === "ROUND") return "round";
   return undefined;
 }
 
