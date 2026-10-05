@@ -76,6 +76,10 @@ interface WalkState {
   parent: InternalNode | undefined;
   parentHasLayout: boolean;
   modes: Record<string, string>;
+  /** Preceding sibling mask that clips this node, if any. */
+  mask?: InternalNode;
+  /** True when this node is an isMask layer (geometry kept, paint suppressed). */
+  asMask?: boolean;
 }
 
 interface PrototypeLink {
@@ -185,10 +189,18 @@ function renderNode(node: InternalNode, ctx: RenderContext, state: WalkState, cs
     parentHasLayout: Boolean((instanceOf || node).properties.layout?.direction),
     modes
   };
-  const inner = [
-    shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props, ctx),
-    ...childrenSource.map((child) => renderNode(applyInstanceText(child, node), ctx, childState, css))
-  ].join("");
+  let activeMask: InternalNode | undefined;
+  const childMarkup = childrenSource.map((child) => {
+    const applied = applyInstanceText(child, node);
+    const maskVisual = maskVisualNode(applied, ctx);
+    if (maskVisual) {
+      activeMask = maskVisual;
+      return renderNode(applied, ctx, { ...childState, mask: undefined, asMask: true }, css);
+    }
+    return renderNode(applied, ctx, { ...childState, mask: activeMask, asMask: false }, css);
+  });
+  const shape = state.asMask ? "" : shapeMarkup(node.type === "INSTANCE" ? visual.type : node.type, props, ctx);
+  const inner = [shape, ...childMarkup].join("");
 
   const attrs = [
     `id="${escapeHtml(id)}"`,
@@ -236,6 +248,7 @@ function applyInstanceText(child: InternalNode, instance: InternalNode): Interna
 }
 
 function nodeRule(id: string, node: InternalNode, props: DesignProperties, state: WalkState, modes: Record<string, string>, ctx: RenderContext): string {
+  const resolved = resolvedProps(props, ctx, modes);
   const declarations = [
     ...positionDeclarations(props, state),
     ...sizeDeclarations(props, state),
@@ -243,13 +256,21 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...childSizingDeclarations(props, state.parent?.properties.layout?.direction),
     ...overflowDeclarations(props),
     ...radiusDeclarations(props),
-    ...(node.type === "ARC" || node.type === "LINE" ? [] : boundStrokeDeclarations(resolvedProps(props, ctx, modes), ctx)),
-    ...paintDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
-    ...effectDeclarations(node.type, props),
-    ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
   ];
-  if (node.type === "ELLIPSE") declarations.push("border-radius: 50%");
-  if (typeof props.opacity === "number") declarations.push(`opacity: ${props.opacity}`);
+  if (state.asMask) {
+    // Keep mask geometry in the tree; suppress visible fills/strokes/effects.
+    declarations.push("opacity: 0");
+  } else {
+    if (node.type !== "ARC" && node.type !== "LINE") declarations.push(...boundStrokeDeclarations(resolved, ctx));
+    declarations.push(
+      ...paintDeclarations(node.type, resolved, ctx),
+      ...effectDeclarations(node.type, props),
+      ...textDeclarations(node.type, resolved, ctx),
+    );
+    if (node.type === "ELLIPSE") declarations.push("border-radius: 50%");
+    if (typeof props.opacity === "number") declarations.push(`opacity: ${props.opacity}`);
+    if (state.mask) declarations.push(...siblingMaskDeclarations(state.mask, node));
+  }
   if (typeof props.rotation === "number" && props.rotation !== 0) {
     declarations.push("transform-origin: center center", `transform: rotate(${props.rotation}deg)`);
   }
@@ -564,6 +585,60 @@ function prototypeLink(value: DesignProperties["prototype"], ctx: RenderContext,
     }
   }
   return link;
+}
+
+/** Return a mask visual node when `isMask` is set, using the component type for INSTANCE masks. */
+function maskVisualNode(node: InternalNode, ctx: RenderContext): InternalNode | undefined {
+  const instanceOf = node.type === "INSTANCE" && node.properties.componentId
+    ? ctx.components.get(node.properties.componentId)
+    : undefined;
+  const props = mergeInstance(node, instanceOf);
+  if (props.isMask !== true) return undefined;
+  if (instanceOf) return { ...node, type: instanceOf.type, properties: props };
+  return { ...node, properties: props };
+}
+
+/** CSS mask/clip for a sibling, derived from a RECTANGLE or ELLIPSE mask box. */
+function siblingMaskDeclarations(mask: InternalNode, sibling: InternalNode): string[] {
+  const mw = finite(mask.properties.size.width, 0);
+  const mh = finite(mask.properties.size.height, 0);
+  if (mw <= 0 || mh <= 0) return [];
+  const x = finite(mask.properties.position.x, 0) - finite(sibling.properties.position.x, 0);
+  const y = finite(mask.properties.position.y, 0) - finite(sibling.properties.position.y, 0);
+
+  if (mask.type === "ELLIPSE") {
+    return [`clip-path: ellipse(${mw / 2}px ${mh / 2}px at ${x + mw / 2}px ${y + mh / 2}px)`];
+  }
+
+  if (mask.type !== "RECTANGLE") return [];
+
+  const round = rectangleMaskRound(mask.properties);
+  if (round) {
+    return [`clip-path: xywh(${x}px ${y}px ${mw}px ${mh}px${round})`];
+  }
+
+  return [
+    "-webkit-mask-image: linear-gradient(#000 0 0)",
+    "mask-image: linear-gradient(#000 0 0)",
+    `-webkit-mask-size: ${mw}px ${mh}px`,
+    `mask-size: ${mw}px ${mh}px`,
+    `-webkit-mask-position: ${x}px ${y}px`,
+    `mask-position: ${x}px ${y}px`,
+    "-webkit-mask-repeat: no-repeat",
+    "mask-repeat: no-repeat"
+  ];
+}
+
+function rectangleMaskRound(props: DesignProperties): string {
+  if (Array.isArray(props.cornerRadii) && props.cornerRadii.length === 4) {
+    const radii = props.cornerRadii.map((value) => finite(value, 0));
+    if (radii.some((value) => value > 0)) return ` round ${radii.map((value) => `${value}px`).join(" ")}`;
+    return "";
+  }
+  if (typeof props.cornerRadius === "number" && props.cornerRadius > 0) {
+    return ` round ${props.cornerRadius}px`;
+  }
+  return "";
 }
 
 function shapeFill(props: DesignProperties, ctx: RenderContext): string {
