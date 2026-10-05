@@ -71,6 +71,7 @@ export function validateDocument(document: InternalDocument): string[] {
     if (node.type === "SVG" && typeof props.svg !== "string") add(`${path}.svg`, "SVG requires markup");
     if (node.type === "VECTOR" && !Array.isArray(props.vectorPaths)) add(`${path}.vectorPaths`, "VECTOR requires vectorPaths");
     if (node.type === "INSTANCE" && typeof props.componentId !== "string") add(`${path}.componentId`, "INSTANCE requires componentId");
+    if (node.type === "BOOLEAN_OPERATION" && (typeof props.operation !== "string" || !["UNION", "SUBTRACT", "INTERSECT", "EXCLUDE"].includes(props.operation))) add(`${path}.operation`, "BOOLEAN_OPERATION requires operation UNION, SUBTRACT, INTERSECT, or EXCLUDE");
     if (node.type === "COMPONENT_SET" && (!node.children.length || node.children.some((child) => child.type !== "COMPONENT"))) add(`${path}.children`, "COMPONENT_SET requires COMPONENT children");
     if (node.type === "COMPONENT_SET" && props.variantAxes) {
       for (const [axis, options] of Object.entries(props.variantAxes)) if (!axis || !Array.isArray(options) || !options.length || options.some((option) => typeof option !== "string")) add(`${path}.variantAxes.${axis}`, "must be a non-empty string array");
