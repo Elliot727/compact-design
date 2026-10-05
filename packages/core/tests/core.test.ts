@@ -295,3 +295,29 @@ test("accepts styleRefs by id and name when styles are declared", () => {
   });
   assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
 });
+
+test("BOOLEAN_OPERATION requires a valid operation enum", () => {
+  const children = [
+    { id: "a", type: "RECTANGLE", w: 20, h: 20 },
+    { id: "b", type: "RECTANGLE", w: 20, h: 20 }
+  ];
+  const missing = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "bool", type: "BOOLEAN_OPERATION", w: 40, h: 40, children }]
+  });
+  assert.equal(missing.valid, false);
+  assert.ok(missing.issues.some((issue) => issue.path.includes("operation")));
+
+  const badDocument = normalizeDocument({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "bool", type: "BOOLEAN_OPERATION", w: 40, h: 40, operation: "MERGE", children }]
+  });
+  const badErrors = validateDocument(badDocument);
+  assert.ok(badErrors.some((value) => value.includes("operation") && /UNION|SUBTRACT|INTERSECT|EXCLUDE/.test(value)));
+
+  const valid = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "bool", type: "BOOLEAN_OPERATION", w: 40, h: 40, operation: "UNION", children }]
+  });
+  assert.equal(valid.valid, true, valid.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+});
