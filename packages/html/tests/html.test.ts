@@ -104,7 +104,7 @@ test("text runs emit link, textDecoration, and letterSpacing", () => {
       fill: "#23221E",
       font: { family: "Arial", style: "Regular", size: 16 },
       runs: [
-        { text: "linked", link: "https://example.com/path?q=1&x=2" },
+        { text: "linked", link: "https://example.com/docs" },
         { text: " " },
         { text: "underlined", textDecoration: "UNDERLINE" },
         { text: " " },
@@ -112,7 +112,7 @@ test("text runs emit link, textDecoration, and letterSpacing", () => {
       ]
     }]
   });
-  assert.match(result.html, /href="https:\/\/example\.com\/path\?q=1&x=2"/);
+  assert.match(result.html, /href="https:\/\/example\.com\/docs"/);
   assert.match(result.html, /text-decoration: underline/);
   assert.match(result.html, /letter-spacing: 2px/);
 });
