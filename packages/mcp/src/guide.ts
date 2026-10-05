@@ -7,7 +7,8 @@ Write one JSON object. Do not call Figma primitive APIs. Validate, then import.
   "$schema": "https://github.com/Elliot727/compact-design/blob/main/spec/compact-design.schema.json",
   "canvas": { "id": "home", "name": "Home", "width": 1440, "height": 900, "fill": "#F6F0E4" },
   "nodes": [ /* top-level frames on that canvas */ ],
-  "variables": []
+  "variables": [],
+  "styles": []
 }
 
 Use \`canvases\` for multiple screens. Give every layer that may be patched a stable \`id\`.
@@ -15,7 +16,10 @@ Use \`canvases\` for multiple screens. Give every layer that may be patched a st
 ## Nodes
 type: FRAME | GROUP | RECTANGLE | ELLIPSE | LINE | TEXT | VECTOR | SVG | COMPONENT | COMPONENT_SET | INSTANCE | BOOLEAN_OPERATION | POLYGON | STAR | SECTION | SLICE | ARC
 
-Common fields: id, name, type, x, y, w, h, fill, stroke, strokeWeight, cornerRadius, opacity, rotation, layout, children, text, font, effects, componentId, variant, bindings, variableModes.
+Common fields: id, name, type, x, y, w, h, fill, stroke, strokeWeight, strokeAlign, strokeCap, strokeJoin, cornerRadius, opacity, rotation, layout, layoutGrids, children, text, font, effects, componentId, variant, bindings, variableModes, styleRefs, isMask.
+\`layoutGrids\`: frame grids — GRID (sectionSize) or COLUMNS/ROWS (alignment, count, gutterSize).
+\`strokeAlign\`: CENTER | INSIDE | OUTSIDE. \`strokeCap\` / \`strokeJoin\` set line ends and corners.
+\`isMask\`: true masks following siblings — put the mask before the masked siblings.
 
 ## Layout
 { "direction": "HORIZONTAL" | "VERTICAL" | "GRID", "itemSpacing": 8, "padding": { "left": 16, "top": 16, "right": 16, "bottom": 16 } }
@@ -27,6 +31,16 @@ Images: https://…, file:photo.jpg (resolved from the MCP working directory), o
 
 ## Text
 { "type": "TEXT", "text": "Hello", "font": { "family": "Inter", "style": "Bold", "size": 24 }, "fill": "#111" }
+
+## Styles and styleRefs
+Document \`styles\` hold reusable PAINT and TEXT styles. Nodes reference them via \`styleRefs\` keys \`fill\` / \`stroke\` (PAINT) and \`text\` (TEXT), by id or name:
+{ "styles": [
+  { "id": "ink", "name": "Ink", "type": "PAINT", "paints": ["#112233"] },
+  { "id": "body", "name": "Body", "type": "TEXT", "font": { "family": "Inter", "style": "Regular", "size": 14 } }
+],
+  "nodes": [{ "type": "FRAME", "w": 50, "h": 50, "styleRefs": { "fill": "ink", "stroke": "Ink" },
+    "children": [{ "type": "TEXT", "w": 40, "h": 16, "text": "Hi", "styleRefs": { "text": "Body" } }] }] }
+validate returns ERROR if a styleRef is missing or the wrong type (same class as bindings).
 
 ## Variables and modes
 Collections live under document \`variables\`. Types: COLOR | FLOAT | STRING | BOOLEAN.
@@ -66,9 +80,9 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
 
 ## Workflow
 1. Author Compact Design JSON for the request.
-2. Call validate. Fix every ERROR using path + message (unknown binding/mode refs are ERROR).
+2. Call validate. Fix every ERROR using path + message (unknown binding/mode/styleRefs are ERROR).
 3. Optionally lint (advisory).
 4. Call figma_import (or figma_patch). The Compact Design plugin must be open in Figma Desktop.
-5. To edit what is already in the file, prefer figma_export (scope "page", or id set to a Compact Design id) then figma_patch on that JSON. Do not regenerate the whole screen for a small edit. Export round-trips variables, modes, and bindings when present.
+5. To edit what is already in the file, prefer figma_export (scope "page", or id set to a Compact Design id) then figma_patch on that JSON. Do not regenerate the whole screen for a small edit. Export round-trips variables, modes, bindings, styles/styleRefs, and layout grids when present.
 6. If figma_status.pluginConnected is false, tell the user to run the plugin and retry.
 `;
