@@ -374,7 +374,18 @@ function textInner(props: DesignProperties, ctx: RenderContext): string {
       }
       const fill = runFill(run.fill);
       if (fill) style.push(`color: ${fill}`);
-      return `<span${style.length ? ` style="${escapeHtml(style.join("; "))}"` : ""}>${escapeHtml(text)}</span>`;
+      if (run.textDecoration === "UNDERLINE") style.push("text-decoration: underline");
+      if (run.textDecoration === "STRIKETHROUGH") style.push("text-decoration: line-through");
+      if (isRecord(run.letterSpacing)) {
+        const spacing = letterSpacingCss({
+          unit: run.letterSpacing.unit === "PERCENT" ? "PERCENT" : "PIXELS",
+          value: finite(run.letterSpacing.value, 0)
+        });
+        if (spacing) style.push(`letter-spacing: ${spacing}`);
+      }
+      let markup = `<span${style.length ? ` style="${escapeHtml(style.join("; "))}"` : ""}>${escapeHtml(text)}</span>`;
+      if (typeof run.link === "string") markup = `<a href="${escapeHtml(run.link)}">${markup}</a>`;
+      return markup;
     }).join("");
   }
   return escapeHtml(props.text || "");
