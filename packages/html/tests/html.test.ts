@@ -451,6 +451,34 @@ test("arcs render as SVG paths, not round boxes", () => {
   assert.doesNotMatch(result.css, /#n-ring \{[^}]*(border-radius|background)/);
 });
 
+test("ARC emits SVG stroke dash, linecap, and linejoin", () => {
+  const result = render({
+    canvas: { id: "arc-stroke", width: 200, height: 140, fill: "#FFFFFF" },
+    nodes: [
+      {
+        id: "ring",
+        type: "ARC",
+        x: 20,
+        y: 20,
+        w: 100,
+        h: 100,
+        startingAngle: 0,
+        endingAngle: Math.PI * 1.5,
+        innerRadiusRatio: 0.5,
+        fill: "#F8F5EE",
+        stroke: "#7D5CFF",
+        strokeWeight: 3,
+        strokeCap: "ROUND",
+        strokeJoin: "ROUND",
+        dashPattern: [6, 4]
+      }
+    ]
+  });
+  assert.match(result.html, /id="n-ring"[^>]*>[\s\S]*?<path[^>]*stroke="rgba\(125, 92, 255, 1\)"[^>]*stroke-width="3"/);
+  assert.match(result.html, /id="n-ring"[^>]*>[\s\S]*?<path[^>]*stroke-dasharray="6 4"[^>]*stroke-linecap="round"[^>]*stroke-linejoin="round"/);
+  assert.match(result.html, /id="n-ring"[^>]*>[\s\S]*?<path[^>]*fill-rule="evenodd"/);
+});
+
 test("lines render as SVG strokes, not bordered boxes", () => {
   const result = render({
     canvas: { id: "lines", width: 400, height: 80, fill: "#FFFFFF" },
