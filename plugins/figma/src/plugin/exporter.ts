@@ -128,7 +128,15 @@ export function compactOverflow(
   }
 ): CompactValue {
   const result: CompactValue = {};
-  if (typeof node.overflowDirection === "string" && node.overflowDirection !== "NONE") result.overflowDirection = node.overflowDirection;
+  const overflowDirections: Record<string, string> = {
+    HORIZONTAL: "HORIZONTAL_SCROLLING",
+    VERTICAL: "VERTICAL_SCROLLING",
+    BOTH: "HORIZONTAL_AND_VERTICAL_SCROLLING"
+  };
+  if (typeof node.overflowDirection === "string") {
+    const authored = overflowDirections[node.overflowDirection];
+    if (authored) result.overflowDirection = authored;
+  }
   if (typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) result.numberOfFixedChildren = node.numberOfFixedChildren;
   return result;
 }

@@ -137,20 +137,20 @@ test("export overflow and fixed children emits Probe brief fields and skips defa
     overflowDirection: "VERTICAL",
     numberOfFixedChildren: 2
   }), {
-    overflowDirection: "VERTICAL",
+    overflowDirection: "VERTICAL_SCROLLING",
     numberOfFixedChildren: 2
   });
   assert.deepEqual(compactOverflow({
     overflowDirection: "HORIZONTAL",
     numberOfFixedChildren: 0
   }), {
-    overflowDirection: "HORIZONTAL"
+    overflowDirection: "HORIZONTAL_SCROLLING"
   });
   assert.deepEqual(compactOverflow({
     overflowDirection: "BOTH",
     numberOfFixedChildren: 1
   }), {
-    overflowDirection: "BOTH",
+    overflowDirection: "HORIZONTAL_AND_VERTICAL_SCROLLING",
     numberOfFixedChildren: 1
   });
   assert.deepEqual(compactOverflow({
