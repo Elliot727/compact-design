@@ -288,6 +288,21 @@ test("arcs render as SVG paths, not round boxes", () => {
   assert.doesNotMatch(result.css, /#n-ring \{[^}]*(border-radius|background)/);
 });
 
+test("lines render as SVG strokes, not bordered boxes", () => {
+  const result = render({
+    canvas: { id: "lines", width: 400, height: 80, fill: "#FFFFFF" },
+    nodes: [
+      { id: "rule", type: "LINE", x: 0, y: 20, w: 360, h: 1, stroke: "#263047", strokeWeight: 1, dashPattern: [4, 6] },
+      { id: "solid", type: "LINE", x: 0, y: 50, w: 200, h: 1, stroke: "#7D5CFF", strokeWeight: 2, strokeCap: "ROUND" }
+    ]
+  });
+  assert.match(result.html, /id="n-rule"[^>]*><svg class="cd-shape"[^>]*overflow="visible"[^>]*><line[^>]*stroke-dasharray="4 6"/);
+  assert.match(result.html, /id="n-rule"[^>]*>[\s\S]*?<line[^>]*x1="0"[^>]*y1="0\.5"[^>]*x2="360"[^>]*y2="0\.5"/);
+  assert.match(result.html, /id="n-solid"[^>]*>[\s\S]*?<line[^>]*stroke-linecap="round"/);
+  assert.doesNotMatch(result.css, /#n-rule \{[^}]*(border:|background:)/);
+  assert.doesNotMatch(result.css, /#n-solid \{[^}]*(border:|background:)/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
