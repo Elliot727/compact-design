@@ -731,8 +731,7 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
     const d = arcPath(width, height, finite(props.startingAngle, 0), finite(props.endingAngle, Math.PI * 1.5), finite(props.innerRadiusRatio, 0));
-    const stroke = shapeStroke(props, ctx);
-    const strokeAttrs = stroke ? ` stroke="${escapeHtml(stroke)}" stroke-width="${finite(props.strokeWeight, 1)}"` : "";
+    const strokeAttrs = svgPaintStrokeAttrs(props, ctx);
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><path d="${d}" fill-rule="evenodd" fill="${escapeHtml(fill)}"${strokeAttrs}/></svg>`;
   }
   if (type === "POLYGON" || type === "STAR") {
@@ -770,7 +769,7 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
   return "";
 }
 
-/** Stroke attrs only when a stroke paint is present (VECTOR / POLYGON / STAR). */
+/** Stroke attrs only when a stroke paint is present (VECTOR / POLYGON / STAR / ARC). */
 function svgPaintStrokeAttrs(props: DesignProperties, ctx: RenderContext): string {
   const stroke = shapeStroke(props, ctx);
   if (!stroke) return "";
