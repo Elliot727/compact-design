@@ -357,12 +357,8 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
       const exportedFills = Array.isArray(exported.fills) ? exported.fills : [];
       const fill = canBecomeCanvas ? (exported.fill ?? exportedFills[0] ?? "#FFFFFF") : "#FFFFFF";
       const children = canBecomeCanvas && Array.isArray(exported.children) ? exported.children : [{ ...exported, x: 0, y: 0 }];
+      // Canvas schema forbids node-only props (bindings, variableModes, styleRefs).
       const canvas: CompactValue = { id: exportCanvasId(compactId(node), node.type), name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children };
-      if (canBecomeCanvas) {
-        if (exported.bindings) canvas.bindings = exported.bindings;
-        if (exported.variableModes) canvas.variableModes = exported.variableModes;
-        if (exported.styleRefs) canvas.styleRefs = exported.styleRefs;
-      }
       canvases.push(canvas);
       if (node.type === "INSTANCE") {
         const mainComponent = await instanceMainComponent(node);
