@@ -226,6 +226,83 @@ test("maintained documents render; patches are rejected", () => {
   }
 });
 
+test("paragraphSpacing splits TEXT lines into spaced blocks", () => {
+  const result = render({
+    canvas: { id: "paras", width: 400, height: 120, fill: "#FFFFFF" },
+    nodes: [{
+      id: "copy",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 80,
+      text: "First paragraph\nSecond paragraph",
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      paragraphSpacing: 12,
+      paragraphIndent: 8,
+      textCase: "UPPER"
+    }]
+  });
+  assert.match(result.css, /#n-copy \{[^}]*display: flex/);
+  assert.match(result.css, /#n-copy \{[^}]*flex-direction: column/);
+  assert.match(result.css, /#n-copy \{[^}]*gap: 12px/);
+  assert.match(result.css, /#n-copy \{[^}]*text-indent: 8px/);
+  assert.match(result.css, /#n-copy \{[^}]*text-transform: uppercase/);
+  assert.match(result.html, /<p style="margin: 0">First paragraph<\/p><p style="margin: 0">Second paragraph<\/p>/);
+});
+
+test("paragraphSpacing absent or zero keeps single pre-wrap TEXT node", () => {
+  for (const extra of [{}, { paragraphSpacing: 0 }]) {
+    const result = render({
+      canvas: { id: "plain", width: 400, height: 80, fill: "#FFFFFF" },
+      nodes: [{
+        id: "line",
+        type: "TEXT",
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 40,
+        text: "One\nTwo",
+        fill: "#23221E",
+        font: { family: "Arial", style: "Regular", size: 16 },
+        ...extra
+      }]
+    });
+    assert.doesNotMatch(result.css, /#n-line \{[^}]*gap:/);
+    assert.doesNotMatch(result.html, /<p /);
+    assert.match(result.html, /One\nTwo/);
+  }
+});
+
+test("paragraphSpacing splits runs at newlines and keeps in-line run styles", () => {
+  const result = render({
+    canvas: { id: "run-paras", width: 400, height: 100, fill: "#FFFFFF" },
+    nodes: [{
+      id: "rich",
+      type: "TEXT",
+      x: 0,
+      y: 0,
+      w: 400,
+      h: 60,
+      text: "Hello\nWorld",
+      fill: "#23221E",
+      font: { family: "Arial", style: "Regular", size: 16 },
+      paragraphSpacing: 10,
+      runs: [
+        { text: "Hel", textDecoration: "UNDERLINE" },
+        { text: "lo\nWo", letterSpacing: { unit: "PIXELS", value: 1 } },
+        { text: "rld", link: "https://example.com/w" }
+      ]
+    }]
+  });
+  assert.match(result.css, /#n-rich \{[^}]*gap: 10px/);
+  assert.match(result.html, /<p style="margin: 0">.*Hel.*lo.*<\/p><p style="margin: 0">.*Wo.*rld.*<\/p>/);
+  assert.match(result.html, /text-decoration: underline/);
+  assert.match(result.html, /letter-spacing: 1px/);
+  assert.match(result.html, /href="https:\/\/example\.com\/w"/);
+});
+
 test("text runs emit link, textDecoration, and letterSpacing", () => {
   const result = render({
     canvas: { id: "runs", width: 400, height: 80, fill: "#FFFFFF" },
