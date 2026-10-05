@@ -342,3 +342,109 @@ export function arcPath(width: number, height: number, startingAngle: number, en
   if (ratio === 0) return `${outer} L ${round(rx)} ${round(ry)} Z`;
   return `${outer} L ${point(end, ratio)} A ${round(rx * ratio)} ${round(ry * ratio)} 0 ${large} 0 ${point(startingAngle, ratio)} Z`;
 }
+
+export interface LayoutGridLayer {
+  image: string;
+  size: string;
+  position: string;
+  repeat: string;
+}
+
+function layoutGridColor(color: unknown): string {
+  if (isDesignColor(color)) return cssColor(color);
+  return cssColor({ r: 0, g: 0, b: 0, a: 0.1 });
+}
+
+/** Background layers for visible layoutGrids (GRID lattice, COLUMNS / ROWS bands). */
+export function layoutGridLayers(grids: unknown): LayoutGridLayer[] {
+  if (!Array.isArray(grids)) return [];
+  const layers: LayoutGridLayer[] = [];
+  for (const grid of grids) {
+    if (!isRecord(grid) || grid.visible === false) continue;
+    const color = layoutGridColor(grid.color);
+    if (grid.pattern === "GRID") {
+      const size = Math.max(1, finite(grid.sectionSize, 8));
+      for (const angle of [0, 90] as const) {
+        layers.push({
+          image: `repeating-linear-gradient(${angle}deg, ${color} 0, ${color} 1px, transparent 1px, transparent ${size}px)`,
+          size: "auto",
+          position: "0 0",
+          repeat: "repeat"
+        });
+      }
+      continue;
+    }
+    if (grid.pattern === "COLUMNS" || grid.pattern === "ROWS") {
+      const layer = rowsColsGridLayer(grid.pattern, grid, color);
+      if (layer) layers.push(layer);
+    }
+  }
+  return layers;
+}
+
+function rowsColsGridLayer(pattern: "COLUMNS" | "ROWS", grid: Record<string, unknown>, color: string): LayoutGridLayer | undefined {
+  const count = Math.max(1, Math.round(finite(grid.count, 12)));
+  const gutter = Math.max(0, finite(grid.gutterSize, 20));
+  const offset = Math.max(0, finite(grid.offset, 0));
+  const alignment = typeof grid.alignment === "string" ? grid.alignment : "STRETCH";
+  const horizontal = pattern === "COLUMNS";
+  const axis = horizontal ? "to right" : "to bottom";
+
+  if (alignment === "STRETCH") {
+    // Gradient box is already inset by offset via background-size/position.
+    const section = `(100% - ${(count - 1) * gutter}px) / ${count}`;
+    return {
+      image: `repeating-linear-gradient(${axis}, ${color} 0, ${color} calc(${section}), transparent calc(${section}), transparent calc(${section} + ${gutter}px))`,
+      size: horizontal ? `calc(100% - ${2 * offset}px) 100%` : `100% calc(100% - ${2 * offset}px)`,
+      position: horizontal ? `${offset}px 0` : `0 ${offset}px`,
+      repeat: "no-repeat"
+    };
+  }
+
+  const sectionSize = Math.max(1, finite(grid.sectionSize, 64));
+  const span = count * sectionSize + Math.max(0, count - 1) * gutter;
+  const image = `repeating-linear-gradient(${axis}, ${color} 0, ${color} ${sectionSize}px, transparent ${sectionSize}px, transparent ${sectionSize + gutter}px)`;
+  const size = horizontal ? `${span}px 100%` : `100% ${span}px`;
+
+  if (alignment === "MAX") {
+    return {
+      image,
+      size,
+      position: horizontal
+        ? `calc(100% - ${offset}px - ${span}px) 0`
+        : `0 calc(100% - ${offset}px - ${span}px)`,
+      repeat: "no-repeat"
+    };
+  }
+  if (alignment === "CENTER") {
+    return { image, size, position: "center", repeat: "no-repeat" };
+  }
+  // MIN (Left / Top)
+  return {
+    image,
+    size,
+    position: horizontal ? `${offset}px 0` : `0 ${offset}px`,
+    repeat: "no-repeat"
+  };
+}
+
+/**
+ * Non-interactive ::after overlay declarations for visible layoutGrids.
+ * Does not affect layout or hit-testing (pointer-events: none, absolute).
+ */
+export function layoutGridOverlayDeclarations(grids: unknown): string[] {
+  const layers = layoutGridLayers(grids);
+  if (!layers.length) return [];
+  return [
+    'content: ""',
+    "position: absolute",
+    "inset: 0",
+    "pointer-events: none",
+    "border-radius: inherit",
+    "z-index: 9999",
+    `background-image: ${layers.map((layer) => layer.image).join(", ")}`,
+    `background-size: ${layers.map((layer) => layer.size).join(", ")}`,
+    `background-position: ${layers.map((layer) => layer.position).join(", ")}`,
+    `background-repeat: ${layers.map((layer) => layer.repeat).join(", ")}`
+  ];
+}

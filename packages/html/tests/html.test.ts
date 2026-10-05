@@ -644,6 +644,143 @@ test("numberOfFixedChildren is ignored without scrolling overflow and clamped to
   assert.match(clamped.css, /#n-second \{[^}]*bottom: 0/);
 });
 
+test("layoutGrids GRID paints a non-interactive lattice overlay", () => {
+  const result = render({
+    canvas: { id: "grid-canvas", width: 200, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "board",
+      type: "FRAME",
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 200,
+      fill: "#FFFFFF",
+      layoutGrids: [{
+        pattern: "GRID",
+        sectionSize: 8,
+        color: { r: 0, g: 25, b: 168, a: 0.1 }
+      }]
+    }]
+  });
+  assert.match(result.css, /#n-board::after \{[^}]*pointer-events: none/);
+  assert.match(result.css, /#n-board::after \{[^}]*content: ""/);
+  assert.match(result.css, /#n-board::after \{[^}]*repeating-linear-gradient\(0deg/);
+  assert.match(result.css, /#n-board::after \{[^}]*repeating-linear-gradient\(90deg/);
+  assert.match(result.css, /#n-board::after \{[^}]*transparent 8px/);
+  assert.match(result.css, /#n-board::after \{[^}]*rgba\(0, 25, 168, 0\.1\)/);
+});
+
+test("layoutGrids COLUMNS and ROWS honour stretch and fixed alignments", () => {
+  const columns = render({
+    canvas: { id: "cols-canvas", width: 400, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "cols",
+      type: "FRAME",
+      w: 400,
+      h: 200,
+      fill: "#FFFFFF",
+      layoutGrids: [{
+        pattern: "COLUMNS",
+        alignment: "STRETCH",
+        count: 12,
+        gutterSize: 20,
+        offset: 32,
+        color: { r: 0, g: 25, b: 168, a: 0.1 }
+      }]
+    }]
+  });
+  assert.match(columns.css, /#n-cols::after \{[^}]*pointer-events: none/);
+  assert.match(columns.css, /#n-cols::after \{[^}]*repeating-linear-gradient\(to right/);
+  assert.match(columns.css, /#n-cols::after \{[^}]*background-size: calc\(100% - 64px\) 100%/);
+  assert.match(columns.css, /#n-cols::after \{[^}]*background-position: 32px 0/);
+  assert.match(columns.css, /#n-cols::after \{[^}]*\(100% - 220px\) \/ 12/);
+
+  const rows = render({
+    canvas: { id: "rows-canvas", width: 200, height: 400, fill: "#FFFFFF" },
+    nodes: [{
+      id: "rows",
+      type: "FRAME",
+      w: 200,
+      h: 400,
+      fill: "#FFFFFF",
+      layoutGrids: [{
+        pattern: "ROWS",
+        alignment: "MIN",
+        count: 4,
+        gutterSize: 8,
+        offset: 16,
+        sectionSize: 64,
+        color: { r: 255, g: 0, b: 0, a: 0.2 }
+      }]
+    }]
+  });
+  assert.match(rows.css, /#n-rows::after \{[^}]*repeating-linear-gradient\(to bottom/);
+  assert.match(rows.css, /#n-rows::after \{[^}]*64px/);
+  assert.match(rows.css, /#n-rows::after \{[^}]*background-size: 100% 280px/);
+  assert.match(rows.css, /#n-rows::after \{[^}]*background-position: 0 16px/);
+  assert.match(rows.css, /#n-rows::after \{[^}]*rgba\(255, 0, 0, 0\.2\)/);
+
+  const centered = render({
+    canvas: { id: "center-canvas", width: 300, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "centered",
+      type: "FRAME",
+      w: 300,
+      h: 200,
+      fill: "#FFFFFF",
+      layoutGrids: [{
+        pattern: "COLUMNS",
+        alignment: "CENTER",
+        count: 3,
+        gutterSize: 10,
+        sectionSize: 40,
+        color: { r: 0, g: 128, b: 0, a: 0.15 }
+      }]
+    }]
+  });
+  assert.match(centered.css, /#n-centered::after \{[^}]*background-size: 140px 100%/);
+  assert.match(centered.css, /#n-centered::after \{[^}]*background-position: center/);
+});
+
+test("layoutGrids skips invisible grids and omits empty overlays", () => {
+  const hidden = render({
+    canvas: { id: "hidden-canvas", width: 200, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "hidden",
+      type: "FRAME",
+      w: 200,
+      h: 200,
+      fill: "#FFFFFF",
+      layoutGrids: [{
+        pattern: "GRID",
+        sectionSize: 8,
+        visible: false,
+        color: { r: 0, g: 25, b: 168, a: 0.1 }
+      }]
+    }]
+  });
+  assert.doesNotMatch(hidden.css, /#n-hidden::after/);
+
+  const mixed = render({
+    canvas: { id: "mixed-canvas", width: 200, height: 200, fill: "#FFFFFF" },
+    nodes: [{
+      id: "mixed",
+      type: "FRAME",
+      w: 200,
+      h: 200,
+      fill: "#FFFFFF",
+      layoutGrids: [
+        { pattern: "GRID", sectionSize: 10, visible: false, color: { r: 0, g: 0, b: 0, a: 0.1 } },
+        { pattern: "COLUMNS", alignment: "MAX", count: 2, gutterSize: 8, offset: 4, sectionSize: 40, color: { r: 0, g: 0, b: 255, a: 0.1 } }
+      ]
+    }]
+  });
+  assert.match(mixed.css, /#n-mixed::after \{[^}]*repeating-linear-gradient\(to right/);
+  assert.doesNotMatch(mixed.css, /#n-mixed::after \{[^}]*repeating-linear-gradient\(0deg/);
+  assert.match(mixed.css, /#n-mixed::after \{[^}]*background-size: 88px 100%/);
+  assert.match(mixed.css, /#n-mixed::after \{[^}]*calc\(100% - 4px - 88px\)/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
