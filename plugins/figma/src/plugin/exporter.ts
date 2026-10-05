@@ -1,11 +1,13 @@
 import type { ExportCandidate } from "./export-plan";
 import { VariableExportContext, exportColorChannels } from "./export-variables";
+import { StyleExportContext } from "./export-styles";
 
 type CompactValue = Record<string, unknown>;
 let activeExportIds = new Map<string, string>();
 let activeNodeExportIds = new WeakMap<SceneNode, string>();
 let activeMainComponents = new WeakMap<InstanceNode, ComponentNode | null>();
 let activeVariables: VariableExportContext | null = null;
+let activeStyles: StyleExportContext | null = null;
 function storedCompactId(node: SceneNode): string { return node.getPluginData("compactDesignId") || node.id; }
 function compactId(node: SceneNode): string { return activeNodeExportIds.get(node) || activeExportIds.get(node.id) || storedCompactId(node); }
 
@@ -202,6 +204,10 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
     const variableModes = await activeVariables.variableModesForNode(node);
     if (variableModes) result.variableModes = variableModes;
   }
+  if (activeStyles) {
+    const styleRefs = activeStyles.styleRefsForNode(node);
+    if (styleRefs) result.styleRefs = styleRefs;
+  }
   if ("children" in node) result.children = await Promise.all(node.children.filter((child): child is SceneNode => child.type !== "STICKY" && child.type !== "CONNECTOR" && child.type !== "SHAPE_WITH_TEXT" && child.type !== "CODE_BLOCK" && child.type !== "STAMP" && child.type !== "WIDGET" && child.type !== "EMBED" && child.type !== "LINK_UNFURL" && child.type !== "MEDIA").map((child) => compactNode(child, exportedIds)));
   return result;
 }
@@ -284,6 +290,7 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   activeNodeExportIds = new WeakMap();
   activeMainComponents = new WeakMap();
   activeVariables = new VariableExportContext();
+  activeStyles = new StyleExportContext();
   exportedNodes.forEach((node, index) => {
     const assigned = assignedIds[index];
     activeNodeExportIds.set(node, assigned);
@@ -292,9 +299,14 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
   const warnings: string[] = [];
   const canvases: CompactValue[] = [];
   try {
-    for (const node of selection) await activeVariables.collectRefsFromNode(node);
+    for (const node of selection) {
+      await activeVariables.collectRefsFromNode(node);
+      await activeStyles.collectRefsFromNode(node);
+    }
     const variables = await activeVariables.buildVariablesArray();
     warnings.push(...activeVariables.warnings);
+    const styles = await activeStyles.buildStylesArray(compactPaints);
+    warnings.push(...activeStyles.warnings);
     for (const [index, node] of selection.entries()) {
       const canBecomeCanvas = node.type === "FRAME";
       const exported = await compactNode(node, exportedIds);
@@ -305,6 +317,7 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
       if (canBecomeCanvas) {
         if (exported.bindings) canvas.bindings = exported.bindings;
         if (exported.variableModes) canvas.variableModes = exported.variableModes;
+        if (exported.styleRefs) canvas.styleRefs = exported.styleRefs;
       }
       canvases.push(canvas);
       if (node.type === "INSTANCE") {
@@ -314,10 +327,11 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
     }
     if (canvases.length === 1) {
       const { nodes, ...canvas } = canvases[0];
-      return { document: { canvas, nodes, ...(variables.length ? { variables } : {}) }, warnings };
+      return { document: { canvas, nodes, ...(styles.length ? { styles } : {}), ...(variables.length ? { variables } : {}) }, warnings };
     }
-    return { document: { canvases, ...(variables.length ? { variables } : {}) }, warnings };
+    return { document: { canvases, ...(styles.length ? { styles } : {}), ...(variables.length ? { variables } : {}) }, warnings };
   } finally {
     activeVariables = null;
+    activeStyles = null;
   }
 }
