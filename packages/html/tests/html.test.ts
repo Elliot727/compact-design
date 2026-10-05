@@ -139,14 +139,16 @@ test("text shadows emit text-shadow, not box-shadow", () => {
 
 test("arcs render as SVG paths, not round boxes", () => {
   const result = render({
-    canvas: { id: "arcs", width: 300, height: 140, fill: "#FFFFFF" },
+    canvas: { id: "arcs", width: 360, height: 140, fill: "#FFFFFF" },
     nodes: [
       { id: "ring", type: "ARC", x: 0, y: 0, w: 100, h: 100, startingAngle: 0, endingAngle: Math.PI / 2, innerRadiusRatio: 0.5, fill: "#DC241F" },
-      { id: "donut", type: "ARC", x: 120, y: 0, w: 100, h: 100, startingAngle: 0, endingAngle: Math.PI * 2, innerRadiusRatio: 0.5, fill: "#DC241F" }
+      { id: "donut", type: "ARC", x: 120, y: 0, w: 100, h: 100, startingAngle: 0, endingAngle: Math.PI * 2, innerRadiusRatio: 0.5, fill: "#DC241F" },
+      { id: "wedge", type: "ARC", x: 240, y: 0, w: 100, h: 100, startingAngle: 0, endingAngle: Math.PI * 1.5, innerRadiusRatio: 0, fill: "#DC241F" }
     ]
   });
   assert.match(result.html, /id="n-ring"[^>]*><svg class="cd-shape"[^>]*><path d="M 100 50 A 50 50 0 0 1 50 100 L 50 75 A 25 25 0 0 0 75 50 Z"/);
   assert.match(result.html, /id="n-donut"[^>]*><svg[^>]*><path d="M 100 50 A 50 50 0 1 1 0 50 A 50 50 0 1 1 100 50 Z M 75 50 A 25 25 0 1 1 25 50 A 25 25 0 1 1 75 50 Z" fill-rule="evenodd"/);
+  assert.match(result.html, /id="n-wedge"[^>]*><svg[^>]*><path d="M 100 50 A 50 50 0 1 1 50 0 L 50 50 Z"/);
   assert.doesNotMatch(result.css, /#n-ring \{[^}]*(border-radius|background)/);
 });
 
