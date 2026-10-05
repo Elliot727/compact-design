@@ -120,6 +120,19 @@ export function compactTextTypography(
   return result;
 }
 
+
+export function compactOverflow(
+  node: {
+    overflowDirection?: string;
+    numberOfFixedChildren?: number;
+  }
+): CompactValue {
+  const result: CompactValue = {};
+  if (typeof node.overflowDirection === "string" && node.overflowDirection !== "NONE") result.overflowDirection = node.overflowDirection;
+  if (typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) result.numberOfFixedChildren = node.numberOfFixedChildren;
+  return result;
+}
+
 export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[] {
   return values.map((grid) => {
     const color = exportColorChannels(grid.color ?? { r: 0, g: 0, b: 0, a: 0.1 });
@@ -185,6 +198,7 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
   if ("cornerRadius" in node && node.cornerRadius !== figma.mixed && node.cornerRadius) result.cornerRadius = node.cornerRadius;
   else if ("topLeftRadius" in node && [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius].some(Boolean)) result.cornerRadii = [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius];
   if ("clipsContent" in node && node.clipsContent) result.clipsContent = true;
+  if (node.type === "FRAME" || node.type === "COMPONENT" || node.type === "INSTANCE") Object.assign(result, compactOverflow(node));
   if ("isMask" in node && node.isMask) result.isMask = true;
   if ("constraints" in node) result.constraints = node.constraints;
   if ("layoutSizingHorizontal" in node) result.layoutSizingHorizontal = node.layoutSizingHorizontal;
