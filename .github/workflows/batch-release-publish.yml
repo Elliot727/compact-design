@@ -7,10 +7,6 @@ on:
   pull_request:
     types: [closed]
 
-permissions:
-  contents: write
-  id-token: write
-
 jobs:
   tag:
     if: >-
@@ -18,6 +14,8 @@ jobs:
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@v4
@@ -44,6 +42,9 @@ jobs:
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout tag
         uses: actions/checkout@v4
@@ -54,9 +55,23 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: npm
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+          # No package-manager cache on release publishes (Trusted Publisher guidance)
+
+      # setup-node writes //registry…/:_authToken=${NODE_AUTH_TOKEN}; an empty
+      # expansion blocks npm OIDC Trusted Publishing (actions/setup-node#1551).
+      - name: Strip empty npm auth for OIDC
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            for f in "${NPM_CONFIG_USERCONFIG:-}" "${HOME}/.npmrc"; do
+              if [ -n "$f" ] && [ -f "$f" ]; then
+                sed -i '/:_authToken=/d' "$f"
+              fi
+            done
+          fi
 
       - name: Install and build publishable packages
         run: |
@@ -72,27 +87,40 @@ jobs:
       - name: Publish to npm
         id: publish
         env:
+          # Prefer OIDC Trusted Publishing when unset; classic token fallback when set
+          # (bootstrap / first publish of packages that do not exist on npm yet).
+          # Empty string is not "unset" — clear it so npm takes the OIDC path.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN secret is not set — skipping publish."
-            echo "manual=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            unset NODE_AUTH_TOKEN
           fi
           npm publish -w @compact-design/core --access public
           npm publish -w @compact-design/html --access public
           npm publish -w @compact-design/mcp --access public
-          echo "manual=false" >> "$GITHUB_OUTPUT"
 
-      - name: Manual publish instructions
-        if: steps.publish.outputs.manual == 'true'
+      - name: Manual publish / OIDC troubleshooting
+        if: failure() && steps.publish.outcome == 'failure'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           cat <<MD
-          ## Manual publish (NPM_TOKEN missing)
+          ## Publish failed
 
-          From a clean checkout of the release commit:
+          Prefer npm Trusted Publishing (OIDC). On npmjs.com, for each of
+          \`@compact-design/core\`, \`@compact-design/html\`, and \`@compact-design/mcp\`,
+          configure a Trusted Publisher with:
+
+          - Owner: \`Elliot727\`
+          - Repository: \`compact-design\`
+          - Workflow filename: \`batch-release-publish.yml\`
+          - Allow: \`npm publish\`
+
+          \`@compact-design/mcp\` must already exist on npm (or first-publish once with
+          an \`NPM_TOKEN\`) before OIDC can publish it. Optional fallback: set the
+          repository secret \`NPM_TOKEN\` for classic auth.
+
+          Manual publish from a clean checkout of the release commit:
 
           \`\`\`bash
           npm ci
