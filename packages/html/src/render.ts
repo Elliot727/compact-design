@@ -11,6 +11,7 @@ import {
   type VariableDefinition
 } from "@compact-design/core";
 import {
+  arcPath,
   backgroundLayers,
   blendModeCss,
   blurFilters,
@@ -235,13 +236,13 @@ function nodeRule(id: string, node: InternalNode, props: DesignProperties, state
     ...childSizingDeclarations(props, state.parent?.properties.layout?.direction),
     ...overflowDeclarations(props),
     ...radiusDeclarations(props),
-    ...strokeDeclarations(resolvedProps(props, ctx, modes)),
+    ...(node.type === "ARC" ? [] : strokeDeclarations(resolvedProps(props, ctx, modes))),
     ...paintDeclarations(node.type, resolvedProps(props, ctx, modes)),
     ...effectDeclarations(node.type, props),
     ...textDeclarations(node.type, resolvedProps(props, ctx, modes), ctx),
     ...variableCustomProperties(props, modes, ctx)
   ];
-  if (node.type === "ELLIPSE" || node.type === "ARC") declarations.push("border-radius: 50%");
+  if (node.type === "ELLIPSE") declarations.push("border-radius: 50%");
   if (typeof props.opacity === "number") declarations.push(`opacity: ${props.opacity}`);
   if (typeof props.rotation === "number" && props.rotation !== 0) {
     declarations.push("transform-origin: center center", `transform: rotate(${props.rotation}deg)`);
@@ -308,7 +309,7 @@ function paintDeclarations(type: string, props: DesignProperties): string[] {
     const color = paintColor(props.styles.fills[0]);
     return color ? [`color: ${color}`] : [];
   }
-  if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG") return [];
+  if (type === "STAR" || type === "POLYGON" || type === "VECTOR" || type === "SVG" || type === "ARC") return [];
   const layers = backgroundLayers(props.styles.fills);
   return layers.length ? [`background: ${layers.join(", ")}`] : [];
 }
@@ -482,8 +483,16 @@ function prototypeLink(value: DesignProperties["prototype"], ctx: RenderContext,
 
 function shapeMarkup(type: string, props: DesignProperties): string {
   const fill = paintColor(props.styles.fills[0]) || "currentColor";
-  if (type === "ELLIPSE" || type === "ARC") {
+  if (type === "ELLIPSE") {
     return "";
+  }
+  if (type === "ARC") {
+    const width = Math.max(1, finite(props.size.width, 1));
+    const height = Math.max(1, finite(props.size.height, 1));
+    const d = arcPath(width, height, finite(props.startingAngle, 0), finite(props.endingAngle, Math.PI * 1.5), finite(props.innerRadiusRatio, 0));
+    const stroke = paintColor(props.styles.strokes[0]);
+    const strokeAttrs = stroke ? ` stroke="${escapeHtml(stroke)}" stroke-width="${finite(props.strokeWeight, 1)}"` : "";
+    return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" overflow="visible" aria-hidden="true"><path d="${d}" fill-rule="evenodd" fill="${escapeHtml(fill)}"${strokeAttrs}/></svg>`;
   }
   if (type === "POLYGON" || type === "STAR") {
     const width = Math.max(1, finite(props.size.width, 1));
