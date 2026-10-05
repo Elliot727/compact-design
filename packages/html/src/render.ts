@@ -371,17 +371,30 @@ function textShadows(effects: DesignProperties["styles"]["effects"]): string[] {
     .map((effect) => `${finite(effect.offset?.x, 0)}px ${finite(effect.offset?.y, 4)}px ${finite(effect.radius, 8)}px ${cssColor(effect.color)}`);
 }
 
+function paragraphSpacingPx(props: DesignProperties): number | undefined {
+  const value = props.paragraphSpacing;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return value;
+}
+
 function textDeclarations(type: string, props: DesignProperties, ctx: RenderContext): string[] {
   if (type !== "TEXT") return [];
   const font = textFont(props, ctx);
   const declarations = fontDeclarations(font);
   const lineHeight = lineHeightCss(props.lineHeight);
   const letterSpacing = letterSpacingCss(props.letterSpacing);
+  const spacing = paragraphSpacingPx(props);
   if (lineHeight) declarations.push(`line-height: ${lineHeight}`);
   if (letterSpacing) declarations.push(`letter-spacing: ${letterSpacing}`);
   if (props.alignment) declarations.push(`text-align: ${props.alignment.toLowerCase()}`);
-  if (props.verticalAlignment === "CENTER") declarations.push("display: flex", "align-items: center");
-  if (props.verticalAlignment === "BOTTOM") declarations.push("display: flex", "align-items: flex-end");
+  if (spacing !== undefined) {
+    declarations.push("display: flex", "flex-direction: column", `gap: ${spacing}px`);
+    if (props.verticalAlignment === "CENTER") declarations.push("justify-content: center");
+    if (props.verticalAlignment === "BOTTOM") declarations.push("justify-content: flex-end");
+  } else {
+    if (props.verticalAlignment === "CENTER") declarations.push("display: flex", "align-items: center");
+    if (props.verticalAlignment === "BOTTOM") declarations.push("display: flex", "align-items: flex-end");
+  }
   if (props.textDecoration === "UNDERLINE") declarations.push("text-decoration: underline");
   if (props.textDecoration === "STRIKETHROUGH") declarations.push("text-decoration: line-through");
   const transform = textCaseCss(props.textCase);
@@ -406,37 +419,66 @@ function textFont(props: DesignProperties, ctx: RenderContext): DesignFont | und
 }
 
 function textInner(props: DesignProperties, ctx: RenderContext): string {
+  const spacing = paragraphSpacingPx(props);
+  if (spacing === undefined) return textContent(props, ctx);
+  // Split on newlines into block pieces; column flex + gap on the TEXT node supplies inter-paragraph space.
+  // Runs that cross newlines are split at the newline (v1): styles apply per piece within each line only.
+  return textParagraphs(props, ctx).map((content) => `<p style="margin: 0">${content}</p>`).join("");
+}
+
+function textContent(props: DesignProperties, ctx: RenderContext): string {
   if (Array.isArray(props.runs) && props.runs.length) {
     return props.runs.map((run) => {
       if (!isRecord(run)) return "";
-      const text = typeof run.text === "string" ? run.text : "";
-      const style: string[] = [];
-      if (isRecord(run.font)) {
-        const font = {
-          family: typeof run.font.family === "string" ? run.font.family : "Arial",
-          style: typeof run.font.style === "string" ? run.font.style : "Regular",
-          size: finite(run.font.size, 16)
-        };
-        ctx.fonts.add(font.family);
-        style.push(...fontDeclarations(font));
-      }
-      const fill = runFill(run.fill);
-      if (fill) style.push(`color: ${fill}`);
-      if (run.textDecoration === "UNDERLINE") style.push("text-decoration: underline");
-      if (run.textDecoration === "STRIKETHROUGH") style.push("text-decoration: line-through");
-      if (isRecord(run.letterSpacing)) {
-        const spacing = letterSpacingCss({
-          unit: run.letterSpacing.unit === "PERCENT" ? "PERCENT" : "PIXELS",
-          value: finite(run.letterSpacing.value, 0)
-        });
-        if (spacing) style.push(`letter-spacing: ${spacing}`);
-      }
-      let markup = `<span${style.length ? ` style="${escapeHtml(style.join("; "))}"` : ""}>${escapeHtml(text)}</span>`;
-      if (typeof run.link === "string") markup = `<a href="${escapeHtml(run.link)}">${markup}</a>`;
-      return markup;
+      return renderRunMarkup(run, typeof run.text === "string" ? run.text : "", ctx);
     }).join("");
   }
   return escapeHtml(props.text || "");
+}
+
+function textParagraphs(props: DesignProperties, ctx: RenderContext): string[] {
+  if (Array.isArray(props.runs) && props.runs.length) {
+    const paragraphs: string[][] = [[]];
+    for (const run of props.runs) {
+      if (!isRecord(run)) continue;
+      const parts = (typeof run.text === "string" ? run.text : "").split("\n");
+      for (let index = 0; index < parts.length; index++) {
+        if (index > 0) paragraphs.push([]);
+        const piece = renderRunMarkup(run, parts[index], ctx);
+        if (piece) paragraphs[paragraphs.length - 1].push(piece);
+      }
+    }
+    return paragraphs.map((pieces) => pieces.join(""));
+  }
+  return (props.text || "").split("\n").map((line) => escapeHtml(line));
+}
+
+function renderRunMarkup(run: Record<string, unknown>, text: string, ctx: RenderContext): string {
+  if (!text) return "";
+  const style: string[] = [];
+  if (isRecord(run.font)) {
+    const font = {
+      family: typeof run.font.family === "string" ? run.font.family : "Arial",
+      style: typeof run.font.style === "string" ? run.font.style : "Regular",
+      size: finite(run.font.size, 16)
+    };
+    ctx.fonts.add(font.family);
+    style.push(...fontDeclarations(font));
+  }
+  const fill = runFill(run.fill);
+  if (fill) style.push(`color: ${fill}`);
+  if (run.textDecoration === "UNDERLINE") style.push("text-decoration: underline");
+  if (run.textDecoration === "STRIKETHROUGH") style.push("text-decoration: line-through");
+  if (isRecord(run.letterSpacing)) {
+    const spacing = letterSpacingCss({
+      unit: run.letterSpacing.unit === "PERCENT" ? "PERCENT" : "PIXELS",
+      value: finite(run.letterSpacing.value, 0)
+    });
+    if (spacing) style.push(`letter-spacing: ${spacing}`);
+  }
+  let markup = `<span${style.length ? ` style="${escapeHtml(style.join("; "))}"` : ""}>${escapeHtml(text)}</span>`;
+  if (typeof run.link === "string") markup = `<a href="${escapeHtml(run.link)}">${markup}</a>`;
+  return markup;
 }
 
 function runFill(value: unknown): string | undefined {
