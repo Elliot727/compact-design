@@ -40,7 +40,8 @@ import {
   coalesceBoxShadows,
   sanitizeSvg,
   strokeDeclarations,
-  textCaseCss
+  textCaseCss,
+  textCaseVariantCss
 } from "./css";
 
 export interface RenderOptions {
@@ -421,6 +422,12 @@ function textDeclarations(type: string, props: DesignProperties, ctx: RenderCont
   if (props.textDecoration === "STRIKETHROUGH") declarations.push("text-decoration: line-through");
   const transform = textCaseCss(props.textCase);
   if (transform) declarations.push(`text-transform: ${transform}`);
+  const variant = textCaseVariantCss(props.textCase);
+  if (variant) declarations.push(`font-variant-caps: ${variant}`);
+  // hanging-punctuation has limited browser support (notably Safari); others may ignore it.
+  if (props.hangingPunctuation === true) declarations.push("hanging-punctuation: first");
+  // listSpacing / hangingList skipped: they need list marker DOM (ul/li). Without inventing
+  // list structure from plain TEXT, no faithful CSS-only map is viable.
   if (typeof props.paragraphIndent === "number") declarations.push(`text-indent: ${props.paragraphIndent}px`);
   if (props.textTruncation === "ENDING" || props.textAutoResize === "TRUNCATE") {
     declarations.push("overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap");

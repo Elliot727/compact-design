@@ -299,6 +299,13 @@ export function textCaseCss(value: string | undefined): string | undefined {
   return undefined;
 }
 
+/** font-variant-caps for SMALL_CAPS / SMALL_CAPS_FORCED; transform cases stay on textCaseCss. */
+export function textCaseVariantCss(value: string | undefined): string | undefined {
+  if (value === "SMALL_CAPS") return "small-caps";
+  if (value === "SMALL_CAPS_FORCED") return "all-small-caps";
+  return undefined;
+}
+
 export function sanitizeSvg(markup: string): string {
   return markup
     .replace(/<script[\s\S]*?<\/script>/gi, "")
