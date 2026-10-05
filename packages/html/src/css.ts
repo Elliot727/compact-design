@@ -218,11 +218,11 @@ export function radiusDeclarations(props: DesignProperties): string[] {
   return [];
 }
 
-export function strokeDeclarations(props: DesignProperties): string[] {
-  const color = paintColor(props.styles.strokes[0]);
+export function strokeDeclarations(props: DesignProperties, colorOverride?: string): string[] {
+  const color = colorOverride ?? paintColor(props.styles.strokes[0]);
   if (!color) return [];
   const style = props.dashPattern?.length ? "dashed" : "solid";
-  const declarations: string[] = [];
+  const align = props.strokeAlign;
   const sides = [
     ["border-top-width", props.strokeTopWeight],
     ["border-right-width", props.strokeRightWeight],
@@ -230,15 +230,40 @@ export function strokeDeclarations(props: DesignProperties): string[] {
     ["border-left-width", props.strokeLeftWeight]
   ] as const;
   const perSide = sides.some(([, value]) => typeof value === "number");
+  // Per-side weights only map cleanly to CSS border; OUTSIDE/CENTER stay on border.
   if (perSide) {
-    declarations.push(`border-style: ${style}`, `border-color: ${color}`, "border-width: 0");
+    const declarations = [`border-style: ${style}`, `border-color: ${color}`, "border-width: 0"];
     for (const [property, value] of sides) if (typeof value === "number") declarations.push(`${property}: ${value}px`);
-  } else {
-    const weight = finite(props.strokeWeight, 1);
-    if (weight <= 0) return [];
-    declarations.push(`border: ${weight}px ${style} ${color}`);
+    return declarations;
   }
-  return declarations;
+  const weight = finite(props.strokeWeight, 1);
+  if (weight <= 0) return [];
+  // INSIDE (and unset): CSS border under border-box — matches prior HTML behaviour.
+  if (align === "OUTSIDE") {
+    // Spread box-shadow sits outside without shrinking content. Dashed OUTSIDE
+    // stays solid here — CSS shadows cannot cheaply reproduce dashPattern.
+    return [`box-shadow: 0 0 0 ${weight}px ${color}`];
+  }
+  if (align === "CENTER") {
+    // Approximate CENTER: half the weight as inside border + half as outer shadow.
+    // Not pixel-perfect Figma, but keeps the stroke straddling the box edge.
+    const half = weight / 2;
+    return [`border: ${half}px ${style} ${color}`, `box-shadow: 0 0 0 ${half}px ${color}`];
+  }
+  return [`border: ${weight}px ${style} ${color}`];
+}
+
+/** Collapse duplicate box-shadow declarations so stroke outlines coexist with effects. */
+export function coalesceBoxShadows(declarations: string[]): string[] {
+  const shadows: string[] = [];
+  const rest: string[] = [];
+  for (const declaration of declarations) {
+    const match = /^box-shadow:\s*(.+)$/i.exec(declaration);
+    if (match) shadows.push(match[1]);
+    else rest.push(declaration);
+  }
+  if (shadows.length) rest.push(`box-shadow: ${shadows.join(", ")}`);
+  return rest;
 }
 
 export function blendModeCss(value: string | undefined): string | undefined {

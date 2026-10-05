@@ -394,6 +394,72 @@ test("isMask without corner radius uses CSS mask geometry", () => {
   assert.match(result.css, /#n-photo \{[^}]*-webkit-mask-image: linear-gradient\(#000 0 0\)/);
 });
 
+
+test("strokeAlign INSIDE and unset emit CSS border", () => {
+  const result = render({
+    canvas: { id: "stroke-inside", width: 240, height: 120, fill: "#FFFFFF" },
+    nodes: [
+      { id: "inside", type: "RECTANGLE", x: 10, y: 10, w: 80, h: 80, fill: "#FFFFFF", stroke: "#6C5CFF", strokeWeight: 4, strokeAlign: "INSIDE" },
+      { id: "unset", type: "RECTANGLE", x: 120, y: 10, w: 80, h: 80, fill: "#FFFFFF", stroke: "#23221E", strokeWeight: 2 }
+    ]
+  });
+  assert.match(result.css, /#n-inside \{[^}]*border: 4px solid rgba\(108, 92, 255, 1\)/);
+  assert.doesNotMatch(result.css, /#n-inside \{[^}]*box-shadow:/);
+  assert.match(result.css, /#n-unset \{[^}]*border: 2px solid rgba\(35, 34, 30, 1\)/);
+});
+
+test("strokeAlign OUTSIDE uses outer box-shadow without content shrink", () => {
+  const result = render({
+    canvas: { id: "stroke-outside", width: 240, height: 120, fill: "#FFFFFF" },
+    nodes: [
+      { id: "outside", type: "FRAME", x: 10, y: 10, w: 100, h: 80, fill: "#FFFFFF", stroke: "#DC241F", strokeWeight: 6, strokeAlign: "OUTSIDE", cornerRadius: 12 },
+      // Dashed OUTSIDE stays solid shadow — CSS cannot cheaply map dashPattern onto box-shadow.
+      { id: "dashed-out", type: "RECTANGLE", x: 130, y: 10, w: 80, h: 80, stroke: "#263047", strokeWeight: 3, strokeAlign: "OUTSIDE", dashPattern: [4, 4] }
+    ]
+  });
+  assert.match(result.css, /#n-outside \{[^}]*width: 100px/);
+  assert.match(result.css, /#n-outside \{[^}]*height: 80px/);
+  assert.match(result.css, /#n-outside \{[^}]*box-shadow: 0 0 0 6px rgba\(220, 36, 31, 1\)/);
+  assert.doesNotMatch(result.css, /#n-outside \{[^}]*border:/);
+  assert.match(result.css, /#n-dashed-out \{[^}]*box-shadow: 0 0 0 3px rgba\(38, 48, 71, 1\)/);
+  assert.doesNotMatch(result.css, /#n-dashed-out \{[^}]*border:/);
+});
+
+test("strokeAlign CENTER approximates with half border and half outer shadow", () => {
+  const result = render({
+    canvas: { id: "stroke-center", width: 200, height: 120, fill: "#FFFFFF" },
+    nodes: [
+      { id: "center", type: "RECTANGLE", x: 20, y: 20, w: 120, h: 60, fill: "#F8F5EE", stroke: "#7D5CFF", strokeWeight: 4, strokeAlign: "CENTER" }
+    ]
+  });
+  assert.match(result.css, /#n-center \{[^}]*border: 2px solid rgba\(125, 92, 255, 1\)/);
+  assert.match(result.css, /#n-center \{[^}]*box-shadow: 0 0 0 2px rgba\(125, 92, 255, 1\)/);
+});
+
+test("OUTSIDE stroke box-shadow coalesces with effect shadows", () => {
+  const result = render({
+    canvas: { id: "stroke-fx", width: 200, height: 120, fill: "#FFFFFF" },
+    nodes: [{
+      id: "ring",
+      type: "RECTANGLE",
+      x: 20,
+      y: 20,
+      w: 100,
+      h: 60,
+      fill: "#FFFFFF",
+      stroke: "#6C5CFF",
+      strokeWeight: 2,
+      strokeAlign: "OUTSIDE",
+      shadow: { x: 0, y: 4, blur: 8, spread: 0, color: "#00000066" }
+    }]
+  });
+  assert.match(
+    result.css,
+    /#n-ring \{[^}]*box-shadow: 0 0 0 2px rgba\(108, 92, 255, 1\), 0px 4px 8px 0px rgba\(0, 0, 0, 0\.4\)/
+  );
+  assert.doesNotMatch(result.css, /#n-ring \{[^}]*border:/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
