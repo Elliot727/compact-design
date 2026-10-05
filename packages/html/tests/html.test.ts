@@ -537,6 +537,113 @@ test("OUTSIDE stroke box-shadow coalesces with effect shadows", () => {
   assert.doesNotMatch(result.css, /#n-ring \{[^}]*border:/);
 });
 
+test("numberOfFixedChildren sticks last N kids in a VERTICAL scroll frame", () => {
+  for (const overflowDirection of ["VERTICAL", "VERTICAL_SCROLLING"] as const) {
+    const result = render({
+      canvas: { id: "scroll-v", width: 200, height: 160, fill: "#FFFFFF" },
+      nodes: [{
+        id: "scroller",
+        type: "FRAME",
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 160,
+        overflowDirection,
+        numberOfFixedChildren: 1,
+        children: [
+          { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 200, h: 80, fill: "#F8F5EE" },
+          { id: "b", type: "RECTANGLE", x: 0, y: 80, w: 200, h: 80, fill: "#E8E4DA" },
+          { id: "chrome", type: "RECTANGLE", x: 0, y: 140, w: 200, h: 40, fill: "#6C5CFF" }
+        ]
+      }]
+    });
+    assert.match(result.css, /#n-scroller \{[^}]*overflow-y: auto/);
+    assert.match(result.css, /#n-chrome \{[^}]*position: sticky/);
+    assert.match(result.css, /#n-chrome \{[^}]*bottom: 0/);
+    assert.doesNotMatch(result.css, /#n-a \{[^}]*position: sticky/);
+    assert.doesNotMatch(result.css, /#n-b \{[^}]*position: sticky/);
+  }
+});
+
+test("numberOfFixedChildren sticks last kids for HORIZONTAL and BOTH", () => {
+  const horizontal = render({
+    canvas: { id: "scroll-h", width: 200, height: 100, fill: "#FFFFFF" },
+    nodes: [{
+      id: "row",
+      type: "FRAME",
+      w: 200,
+      h: 100,
+      overflowDirection: "HORIZONTAL",
+      numberOfFixedChildren: 1,
+      children: [
+        { id: "left", type: "RECTANGLE", x: 0, y: 0, w: 120, h: 100, fill: "#F8F5EE" },
+        { id: "pin-right", type: "RECTANGLE", x: 160, y: 0, w: 40, h: 100, fill: "#6C5CFF" }
+      ]
+    }]
+  });
+  assert.match(horizontal.css, /#n-pin-right \{[^}]*position: sticky/);
+  assert.match(horizontal.css, /#n-pin-right \{[^}]*right: 0/);
+  assert.doesNotMatch(horizontal.css, /#n-left \{[^}]*position: sticky/);
+
+  const both = render({
+    canvas: { id: "scroll-both", width: 200, height: 100, fill: "#FFFFFF" },
+    nodes: [{
+      id: "both",
+      type: "FRAME",
+      w: 200,
+      h: 100,
+      overflowDirection: "BOTH",
+      numberOfFixedChildren: 1,
+      children: [
+        { id: "body", type: "RECTANGLE", x: 0, y: 0, w: 300, h: 200, fill: "#F8F5EE" },
+        { id: "corner", type: "RECTANGLE", x: 160, y: 60, w: 40, h: 40, fill: "#6C5CFF" }
+      ]
+    }]
+  });
+  assert.match(both.css, /#n-corner \{[^}]*position: sticky/);
+  assert.match(both.css, /#n-corner \{[^}]*bottom: 0/);
+  assert.match(both.css, /#n-corner \{[^}]*right: 0/);
+});
+
+test("numberOfFixedChildren is ignored without scrolling overflow and clamped to child count", () => {
+  const ignored = render({
+    canvas: { id: "static", width: 200, height: 120, fill: "#FFFFFF" },
+    nodes: [{
+      id: "frame",
+      type: "FRAME",
+      w: 200,
+      h: 120,
+      numberOfFixedChildren: 2,
+      children: [
+        { id: "one", type: "RECTANGLE", x: 0, y: 0, w: 200, h: 40, fill: "#F8F5EE" },
+        { id: "two", type: "RECTANGLE", x: 0, y: 40, w: 200, h: 40, fill: "#E8E4DA" }
+      ]
+    }]
+  });
+  assert.doesNotMatch(ignored.css, /#n-one \{[^}]*position: sticky/);
+  assert.doesNotMatch(ignored.css, /#n-two \{[^}]*position: sticky/);
+
+  const clamped = render({
+    canvas: { id: "clamp", width: 200, height: 120, fill: "#FFFFFF" },
+    nodes: [{
+      id: "scroll",
+      type: "FRAME",
+      w: 200,
+      h: 120,
+      overflowDirection: "VERTICAL",
+      numberOfFixedChildren: 9,
+      children: [
+        { id: "first", type: "RECTANGLE", x: 0, y: 0, w: 200, h: 40, fill: "#F8F5EE" },
+        { id: "second", type: "RECTANGLE", x: 0, y: 40, w: 200, h: 40, fill: "#6C5CFF" }
+      ]
+    }]
+  });
+  assert.match(clamped.css, /#n-first \{[^}]*position: sticky/);
+  assert.match(clamped.css, /#n-first \{[^}]*bottom: 0/);
+  assert.match(clamped.css, /#n-second \{[^}]*position: sticky/);
+  assert.match(clamped.css, /#n-second \{[^}]*bottom: 0/);
+});
+
 test("invalid documents surface structured issues", () => {
   try {
     render({ canvas: { width: "wide", height: 100 }, nodes: [] });
