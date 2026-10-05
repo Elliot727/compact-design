@@ -158,10 +158,66 @@ export function compactLayoutGrids(values: readonly LayoutGrid[]): CompactValue[
   });
 }
 
-function compactEffects(values: readonly Effect[]): unknown[] {
-  return values.filter((effect) => effect.visible !== false).map((effect) => {
-    if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") return { type: effect.type, color: rgba(effect.color), offset: effect.offset, blur: effect.radius, spread: effect.spread, visible: effect.visible };
-    return { type: effect.type, blur: "radius" in effect ? effect.radius : 0, visible: effect.visible };
+export function compactEffects(values: readonly Effect[]): unknown[] {
+  return values.filter((effect) => effect.visible !== false && effect.type !== "SHADER").map((effect) => {
+    if (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW") {
+      const result: CompactValue = {
+        type: effect.type,
+        color: rgba(effect.color),
+        offset: effect.offset,
+        blur: effect.radius,
+        spread: effect.spread,
+        visible: effect.visible
+      };
+      if (effect.type === "DROP_SHADOW" && effect.showShadowBehindNode) result.showShadowBehindNode = true;
+      return result;
+    }
+    if (effect.type === "LAYER_BLUR" || effect.type === "BACKGROUND_BLUR") {
+      const result: CompactValue = { type: effect.type, blur: effect.radius, visible: effect.visible };
+      if (effect.blurType === "PROGRESSIVE") {
+        result.blurType = "PROGRESSIVE";
+        result.startRadius = effect.startRadius;
+        result.startOffset = effect.startOffset;
+        result.endOffset = effect.endOffset;
+      }
+      return result;
+    }
+    if (effect.type === "NOISE") {
+      const result: CompactValue = {
+        type: "NOISE",
+        noiseType: effect.noiseType,
+        color: rgba(effect.color),
+        noiseSize: effect.noiseSize,
+        density: effect.density,
+        visible: effect.visible,
+        blendMode: effect.blendMode
+      };
+      if (effect.noiseType === "DUOTONE") result.secondaryColor = rgba(effect.secondaryColor);
+      if (effect.noiseType === "MULTITONE") result.opacity = effect.opacity;
+      return result;
+    }
+    if (effect.type === "TEXTURE") {
+      return {
+        type: "TEXTURE",
+        noiseSize: effect.noiseSize,
+        radius: effect.radius,
+        clipToShape: effect.clipToShape,
+        visible: effect.visible
+      };
+    }
+    if (effect.type === "GLASS") {
+      return {
+        type: "GLASS",
+        lightIntensity: effect.lightIntensity,
+        lightAngle: effect.lightAngle,
+        refraction: effect.refraction,
+        depth: effect.depth,
+        dispersion: effect.dispersion,
+        radius: effect.radius,
+        visible: effect.visible
+      };
+    }
+    return { type: effect.type, visible: effect.visible };
   });
 }
 

@@ -26,7 +26,12 @@ export interface DesignPaint {
   scaleMode?: string; imageTransform?: Transform; gradientTransform?: Transform;
   gradientStops?: Array<{ position: number; color: DesignColor }>;
 }
-export interface DesignEffect { type: string; color?: DesignColor; offset?: DesignPoint; radius?: number; spread?: number; visible?: boolean; blendMode?: string; }
+export interface DesignEffect {
+  type: string; color?: DesignColor; offset?: DesignPoint; radius?: number; spread?: number; visible?: boolean; blendMode?: string;
+  showShadowBehindNode?: boolean; blurType?: string; startRadius?: number; startOffset?: DesignPoint; endOffset?: DesignPoint;
+  noiseType?: string; noiseSize?: number; density?: number; secondaryColor?: DesignColor; opacity?: number; clipToShape?: boolean;
+  lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number;
+}
 export interface DesignStyles { fills: DesignPaint[]; strokes: DesignPaint[]; effects: DesignEffect[]; }
 export interface DesignLayout {
   direction?: "HORIZONTAL" | "VERTICAL" | "GRID"; itemSpacing?: number; counterAxisSpacing?: number;
