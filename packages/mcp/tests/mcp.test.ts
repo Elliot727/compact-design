@@ -66,6 +66,24 @@ test("get_language covers styles, styleRefs, grids, strokes, and isMask", async 
   assert.match(guide, /layout grids/);
 });
 
+test("get_language covers effect types and BOOLEAN_OPERATION operation", async () => {
+  const response = await rpc("tools/call", { name: "get_language", arguments: {} });
+  const guide = toolText(response);
+  assert.match(guide, /DROP_SHADOW/);
+  assert.match(guide, /INNER_SHADOW/);
+  assert.match(guide, /LAYER_BLUR/);
+  assert.match(guide, /BACKGROUND_BLUR/);
+  assert.match(guide, /NOISE/);
+  assert.match(guide, /TEXTURE/);
+  assert.match(guide, /GLASS/);
+  assert.match(guide, /SHADER is not yet supported/);
+  assert.match(guide, /showShadowBehindNode/);
+  assert.match(guide, /blurType/);
+  assert.match(guide, /startRadius/);
+  assert.match(guide, /BOOLEAN_OPERATION.*operation/);
+  assert.match(guide, /UNION \| SUBTRACT \| INTERSECT \| EXCLUDE/);
+});
+
 test("validate accepts a compact document and rejects garbage", async () => {
   const ok = await rpc("tools/call", {
     name: "validate",
