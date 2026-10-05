@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { compactLayoutGrids, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
 import {
   collectStyleIdsFromNode,
   compactStyleExportId,
@@ -125,6 +125,41 @@ test("export text typography emits Probe brief fields and skips defaults", () =>
     hangingPunctuation: true
   });
   assert.deepEqual(compactTextTypography({}, mixed), {});
+});
+
+
+test("export overflow and fixed children emits Probe brief fields and skips defaults", () => {
+  assert.deepEqual(compactOverflow({
+    overflowDirection: "NONE",
+    numberOfFixedChildren: 0
+  }), {});
+  assert.deepEqual(compactOverflow({
+    overflowDirection: "VERTICAL",
+    numberOfFixedChildren: 2
+  }), {
+    overflowDirection: "VERTICAL_SCROLLING",
+    numberOfFixedChildren: 2
+  });
+  assert.deepEqual(compactOverflow({
+    overflowDirection: "HORIZONTAL",
+    numberOfFixedChildren: 0
+  }), {
+    overflowDirection: "HORIZONTAL_SCROLLING"
+  });
+  assert.deepEqual(compactOverflow({
+    overflowDirection: "BOTH",
+    numberOfFixedChildren: 1
+  }), {
+    overflowDirection: "HORIZONTAL_AND_VERTICAL_SCROLLING",
+    numberOfFixedChildren: 1
+  });
+  assert.deepEqual(compactOverflow({
+    overflowDirection: "NONE",
+    numberOfFixedChildren: 3
+  }), {
+    numberOfFixedChildren: 3
+  });
+  assert.deepEqual(compactOverflow({}), {});
 });
 
 test("export style ids prefer plugin data then name then figma id", () => {
