@@ -321,3 +321,38 @@ test("BOOLEAN_OPERATION requires a valid operation enum", () => {
   });
   assert.equal(valid.valid, true, valid.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
 });
+
+test("schema accepts NOISE, TEXTURE, and GLASS effects with type-specific fields", () => {
+  const result = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "fx",
+      type: "FRAME",
+      w: 80,
+      h: 80,
+      effects: [
+        { type: "DROP_SHADOW", color: "#00000055", offset: { x: 0, y: 4 }, blur: 8, spread: 0, showShadowBehindNode: true },
+        { type: "LAYER_BLUR", blur: 12, blurType: "PROGRESSIVE", startRadius: 0, startOffset: { x: 0.5, y: 0 }, endOffset: { x: 0.5, y: 1 } },
+        { type: "NOISE", noiseType: "DUOTONE", color: "#112233", secondaryColor: "#AABBCC", noiseSize: 2, density: 0.4, blendMode: "OVERLAY" },
+        { type: "TEXTURE", noiseSize: 3, radius: 1.5, clipToShape: true },
+        { type: "GLASS", lightIntensity: 0.7, lightAngle: -30, refraction: 0.4, depth: 2, dispersion: 0.2, radius: 8 }
+      ]
+    }]
+  });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+  const effects = result.document!.nodes[0].children[0].properties.styles.effects;
+  assert.equal(effects.find((effect) => effect.type === "NOISE")?.noiseType, "DUOTONE");
+  assert.equal(effects.find((effect) => effect.type === "TEXTURE")?.clipToShape, true);
+  assert.equal(effects.find((effect) => effect.type === "GLASS")?.depth, 2);
+  assert.equal(effects.find((effect) => effect.type === "DROP_SHADOW")?.showShadowBehindNode, true);
+  assert.equal(effects.find((effect) => effect.type === "LAYER_BLUR")?.blurType, "PROGRESSIVE");
+});
+
+test("schema rejects SHADER effects until a dedicated brief lands", () => {
+  const result = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "fx", type: "FRAME", w: 40, h: 40, effects: [{ type: "SHADER", id: "shader-1" }] }]
+  });
+  assert.equal(result.valid, false);
+  assert.ok(result.issues.some((issue) => /effect|SHADER|enum/i.test(`${issue.path} ${issue.message}`)));
+});

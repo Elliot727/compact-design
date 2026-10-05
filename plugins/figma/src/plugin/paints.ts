@@ -40,13 +40,85 @@ export async function paints(values: DesignPaint[]): Promise<Paint[]> {
   return result;
 }
 
-function effect(value: DesignEffect): Effect | null {
-  if (["DROP_SHADOW", "INNER_SHADOW"].includes(value?.type)) return {
-    type: value.type, color: { ...color(value.color), a: clamp(finite(value.color?.a, 1), 0, 1) },
-    offset: { x: finite(value.offset?.x, 0), y: finite(value.offset?.y, 4) }, radius: Math.max(0, finite(value.radius, 8)),
-    spread: finite(value.spread, 0), visible: value.visible !== false, blendMode: value.blendMode || "NORMAL"
-  } as DropShadowEffect;
-  if (["LAYER_BLUR", "BACKGROUND_BLUR"].includes(value?.type)) return { type: value.type, radius: Math.max(0, finite(value.radius, 8)), visible: value.visible !== false } as BlurEffect;
+function rgbaColor(value: DesignEffect["color"]): RGBA {
+  return { ...color(value), a: clamp(finite(value?.a, 1), 0, 1) };
+}
+
+/** Map Compact DesignEffect → Figma Effect. SHADER is deferred (needs importShaderById). */
+export function effectFromData(value: DesignEffect): Effect | null {
+  if (!value?.type) return null;
+  if (value.type === "DROP_SHADOW" || value.type === "INNER_SHADOW") {
+    const shadow = {
+      type: value.type,
+      color: rgbaColor(value.color),
+      offset: { x: finite(value.offset?.x, 0), y: finite(value.offset?.y, 4) },
+      radius: Math.max(0, finite(value.radius, 8)),
+      spread: finite(value.spread, 0),
+      visible: value.visible !== false,
+      blendMode: (value.blendMode || "NORMAL") as BlendMode
+    };
+    if (value.type === "DROP_SHADOW" && typeof value.showShadowBehindNode === "boolean") {
+      return { ...shadow, showShadowBehindNode: value.showShadowBehindNode } as DropShadowEffect;
+    }
+    return shadow as DropShadowEffect | InnerShadowEffect;
+  }
+  if (value.type === "LAYER_BLUR" || value.type === "BACKGROUND_BLUR") {
+    const radius = Math.max(0, finite(value.radius, 8));
+    const visible = value.visible !== false;
+    if (value.blurType === "PROGRESSIVE") {
+      return {
+        type: value.type,
+        blurType: "PROGRESSIVE",
+        radius,
+        visible,
+        startRadius: Math.max(0, finite(value.startRadius, 0)),
+        startOffset: { x: finite(value.startOffset?.x, 0), y: finite(value.startOffset?.y, 0) },
+        endOffset: { x: finite(value.endOffset?.x, 0), y: finite(value.endOffset?.y, 1) }
+      } as BlurEffect;
+    }
+    return {
+      type: value.type,
+      radius,
+      visible,
+      ...(value.blurType === "NORMAL" ? { blurType: "NORMAL" as const } : {})
+    } as BlurEffect;
+  }
+  if (value.type === "NOISE") {
+    const noiseType = (value.noiseType === "DUOTONE" || value.noiseType === "MULTITONE" ? value.noiseType : "MONOTONE") as NoiseEffect["noiseType"];
+    const base = {
+      type: "NOISE" as const,
+      color: rgbaColor(value.color),
+      visible: value.visible !== false,
+      blendMode: (value.blendMode || "NORMAL") as BlendMode,
+      noiseSize: Math.max(0, finite(value.noiseSize, 1)),
+      density: clamp(finite(value.density, 1), 0, 1),
+      noiseType
+    };
+    if (noiseType === "DUOTONE") return { ...base, noiseType, secondaryColor: rgbaColor(value.secondaryColor) } as NoiseEffect;
+    if (noiseType === "MULTITONE") return { ...base, noiseType, opacity: clamp(finite(value.opacity, 1), 0, 1) } as NoiseEffect;
+    return { ...base, noiseType: "MONOTONE" } as NoiseEffect;
+  }
+  if (value.type === "TEXTURE") {
+    return {
+      type: "TEXTURE",
+      visible: value.visible !== false,
+      noiseSize: Math.max(0, finite(value.noiseSize, 1)),
+      radius: Math.max(0, finite(value.radius, 0)),
+      clipToShape: value.clipToShape !== false
+    } as TextureEffect;
+  }
+  if (value.type === "GLASS") {
+    return {
+      type: "GLASS",
+      visible: value.visible !== false,
+      lightIntensity: clamp(finite(value.lightIntensity, 0.5), 0, 1),
+      lightAngle: finite(value.lightAngle, -45),
+      refraction: clamp(finite(value.refraction, 0.5), 0, 1),
+      depth: Math.max(1, finite(value.depth, 1)),
+      dispersion: clamp(finite(value.dispersion, 0.1), 0, 1),
+      radius: Math.max(0, finite(value.radius, 0))
+    } as GlassEffect;
+  }
   return null;
 }
 
@@ -54,7 +126,7 @@ export async function applyAppearance(node: SceneNode, props: DesignProperties, 
   const styles = props.styles || {};
   if ("fills" in node) node.fills = styles.fills !== undefined ? await paints(styles.fills) : (isText ? [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }] : []);
   if ("strokes" in node) node.strokes = await paints(styles.strokes || []);
-  if ("effects" in node) node.effects = (styles.effects || []).map(effect).filter(Boolean) as Effect[];
+  if ("effects" in node) node.effects = (styles.effects || []).map(effectFromData).filter(Boolean) as Effect[];
   if ("strokeWeight" in node && typeof props.strokeWeight === "number" && Number.isFinite(props.strokeWeight)) node.strokeWeight = Math.max(0, props.strokeWeight);
   if ("strokeAlign" in node && props.strokeAlign) node.strokeAlign = props.strokeAlign;
   if ("strokeCap" in node && props.strokeCap) node.strokeCap = props.strokeCap as unknown as typeof node.strokeCap;

@@ -1,7 +1,13 @@
 import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, LetterSpacing, LineHeight, PatchOperation, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
 
 interface RawPaint extends JsonObject { type?: string; image?: string; fit?: string; opacity?: number; transform?: Transform; gradient?: string; angle?: number; stops?: Array<{ at: number; color: string | DesignColor }>; }
-interface RawEffect extends JsonObject { type?: string; inner?: boolean; color?: string | DesignColor; x?: number; y?: number; offset?: { x: number; y: number }; blur?: number; radius?: number; spread?: number; visible?: boolean; }
+interface RawEffect extends JsonObject {
+  type?: string; inner?: boolean; color?: string | DesignColor; secondaryColor?: string | DesignColor;
+  x?: number; y?: number; offset?: { x: number; y: number }; blur?: number; radius?: number; spread?: number; visible?: boolean;
+  blendMode?: string; showShadowBehindNode?: boolean; blurType?: string; startRadius?: number; startOffset?: { x: number; y: number }; endOffset?: { x: number; y: number };
+  noiseType?: string; noiseSize?: number; density?: number; opacity?: number; clipToShape?: boolean;
+  lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number;
+}
 interface RawNode extends CompactNode { coordinateMode?: string; fill?: RawPaint | string; fills?: Array<RawPaint | string>; stroke?: RawPaint | string; strokes?: Array<RawPaint | string>; effects?: RawEffect[]; elevation?: string; shadow?: RawEffect | RawEffect[]; rotation?: number; font?: Partial<{ family: string; style: string; size: number }>; text?: string; runs?: Array<JsonObject & { text?: string }>; lineHeight?: number | LineHeight; align?: string; alignment?: unknown; fontSize?: unknown; }
 
 function hexColor(value: unknown): DesignColor | null {
@@ -46,15 +52,78 @@ function effects(raw: RawNode): DesignEffect[] {
   return values.map(effect);
 }
 
+function resolveColor(value: unknown): DesignColor | undefined {
+  return hexColor(value) || (typeof value === "object" && value ? value as DesignColor : undefined);
+}
+
 function effect(value: RawEffect): DesignEffect {
   if (!value || typeof value !== "object") return value;
+  const type = String(value.type || "DROP_SHADOW").toUpperCase();
+  const visible = value.visible !== false;
+  if (type === "DROP_SHADOW" || type === "INNER_SHADOW") {
+    return {
+      type,
+      color: resolveColor(value.color),
+      offset: value.offset || { x: 0, y: 4 },
+      radius: value.blur ?? value.radius ?? 8,
+      spread: value.spread || 0,
+      visible,
+      ...(value.blendMode ? { blendMode: value.blendMode } : {}),
+      ...(type === "DROP_SHADOW" && typeof value.showShadowBehindNode === "boolean" ? { showShadowBehindNode: value.showShadowBehindNode } : {})
+    };
+  }
+  if (type === "LAYER_BLUR" || type === "BACKGROUND_BLUR") {
+    return {
+      type,
+      radius: value.blur ?? value.radius ?? 8,
+      visible,
+      ...(value.blurType ? { blurType: value.blurType } : {}),
+      ...(value.startRadius !== undefined ? { startRadius: value.startRadius } : {}),
+      ...(value.startOffset ? { startOffset: value.startOffset } : {}),
+      ...(value.endOffset ? { endOffset: value.endOffset } : {})
+    };
+  }
+  if (type === "NOISE") {
+    return {
+      type,
+      color: resolveColor(value.color),
+      visible,
+      ...(value.blendMode ? { blendMode: value.blendMode } : {}),
+      noiseType: value.noiseType || "MONOTONE",
+      noiseSize: value.noiseSize ?? 1,
+      density: value.density ?? 1,
+      ...(value.secondaryColor !== undefined ? { secondaryColor: resolveColor(value.secondaryColor) } : {}),
+      ...(value.opacity !== undefined ? { opacity: value.opacity } : {})
+    };
+  }
+  if (type === "TEXTURE") {
+    return {
+      type,
+      visible,
+      noiseSize: value.noiseSize ?? 1,
+      radius: value.blur ?? value.radius ?? 0,
+      clipToShape: value.clipToShape !== false
+    };
+  }
+  if (type === "GLASS") {
+    return {
+      type,
+      visible,
+      lightIntensity: value.lightIntensity ?? 0.5,
+      lightAngle: value.lightAngle ?? -45,
+      refraction: value.refraction ?? 0.5,
+      depth: value.depth ?? 1,
+      dispersion: value.dispersion ?? 0.1,
+      radius: value.blur ?? value.radius ?? 0
+    };
+  }
   return {
-    type: String(value.type || "DROP_SHADOW").toUpperCase(),
-    color: hexColor(value.color) || (typeof value.color === "object" ? value.color : undefined),
+    type,
+    color: resolveColor(value.color),
     offset: value.offset || { x: 0, y: 4 },
     radius: value.blur ?? value.radius ?? 8,
     spread: value.spread || 0,
-    visible: value.visible !== false
+    visible
   };
 }
 

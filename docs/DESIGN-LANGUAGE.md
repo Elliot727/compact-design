@@ -310,7 +310,7 @@ Before import, the UI inspects every remote and local image. Images larger than 
 }
 ```
 
-Effect types: `DROP_SHADOW`, `INNER_SHADOW`, `LAYER_BLUR`, and `BACKGROUND_BLUR`.
+Effect types: `DROP_SHADOW`, `INNER_SHADOW`, `LAYER_BLUR`, `BACKGROUND_BLUR`, `NOISE`, `TEXTURE`, and `GLASS`. (`SHADER` is not yet supported.) Progressive blurs may set `blurType`, `startRadius`, `startOffset`, and `endOffset`. Drop shadows may set `showShadowBehindNode`.
 
 Use `elevation: "NONE|LOW|MEDIUM|HIGH|FLOATING"` for standard presets. Use `shadow` for concise custom shadows:
 

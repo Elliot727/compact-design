@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { compactEffects, compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { effectFromData } from "../src/plugin/paints";
 import {
   collectStyleIdsFromNode,
   compactStyleExportId,
@@ -473,4 +474,50 @@ test("name-fallback variable ids dedupe across collisions", () => {
   assert.equal(groups[1].items[0].id, "colour/surface-2");
   assert.equal(exportIdByFigmaId.get("VariableID:a"), "colour/surface");
   assert.equal(exportIdByFigmaId.get("VariableID:b"), "colour/surface-2");
+});
+
+test("compactEffects preserves NOISE, TEXTURE, GLASS and classic four", () => {
+  assert.deepEqual(compactEffects([
+    { type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true, blendMode: "NORMAL" },
+    { type: "INNER_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.2 }, offset: { x: 1, y: 2 }, radius: 4, spread: 1, visible: true, blendMode: "NORMAL" },
+    { type: "LAYER_BLUR", blurType: "NORMAL", radius: 10, visible: true },
+    { type: "BACKGROUND_BLUR", blurType: "PROGRESSIVE", radius: 20, startRadius: 0, startOffset: { x: 0.5, y: 0 }, endOffset: { x: 0.5, y: 1 }, visible: true },
+    { type: "NOISE", noiseType: "MULTITONE", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true, blendMode: "OVERLAY", noiseSize: 2, density: 0.5, opacity: 0.8 },
+    { type: "TEXTURE", visible: true, noiseSize: 3, radius: 1, clipToShape: false },
+    { type: "GLASS", visible: true, lightIntensity: 0.6, lightAngle: -45, refraction: 0.3, depth: 2, dispersion: 0.1, radius: 4 },
+    { type: "SHADER", visible: true, id: "ignored" }
+  ] as Effect[]), [
+    { type: "DROP_SHADOW", color: "#0000004D", offset: { x: 0, y: 4 }, blur: 8, spread: 0, visible: true },
+    { type: "INNER_SHADOW", color: "#00000033", offset: { x: 1, y: 2 }, blur: 4, spread: 1, visible: true },
+    { type: "LAYER_BLUR", blur: 10, visible: true },
+    { type: "BACKGROUND_BLUR", blur: 20, visible: true, blurType: "PROGRESSIVE", startRadius: 0, startOffset: { x: 0.5, y: 0 }, endOffset: { x: 0.5, y: 1 } },
+    { type: "NOISE", noiseType: "MULTITONE", color: "#FF0000", noiseSize: 2, density: 0.5, visible: true, blendMode: "OVERLAY", opacity: 0.8 },
+    { type: "TEXTURE", noiseSize: 3, radius: 1, clipToShape: false, visible: true },
+    { type: "GLASS", lightIntensity: 0.6, lightAngle: -45, refraction: 0.3, depth: 2, dispersion: 0.1, radius: 4, visible: true }
+  ]);
+});
+
+test("effectFromData builds Figma Effect objects for NOISE, TEXTURE, GLASS", () => {
+  assert.deepEqual(effectFromData({
+    type: "NOISE", noiseType: "DUOTONE", color: { r: 17, g: 34, b: 51, a: 1 }, secondaryColor: { r: 170, g: 187, b: 204, a: 1 },
+    noiseSize: 2, density: 0.4, blendMode: "OVERLAY", visible: true
+  }), {
+    type: "NOISE", noiseType: "DUOTONE", color: { r: 17 / 255, g: 34 / 255, b: 51 / 255, a: 1 },
+    secondaryColor: { r: 170 / 255, g: 187 / 255, b: 204 / 255, a: 1 },
+    noiseSize: 2, density: 0.4, blendMode: "OVERLAY", visible: true
+  });
+  assert.deepEqual(effectFromData({ type: "TEXTURE", noiseSize: 3, radius: 1.5, clipToShape: true, visible: true }), {
+    type: "TEXTURE", noiseSize: 3, radius: 1.5, clipToShape: true, visible: true
+  });
+  assert.deepEqual(effectFromData({
+    type: "GLASS", lightIntensity: 0.7, lightAngle: -30, refraction: 0.4, depth: 2, dispersion: 0.2, radius: 8, visible: true
+  }), {
+    type: "GLASS", lightIntensity: 0.7, lightAngle: -30, refraction: 0.4, depth: 2, dispersion: 0.2, radius: 8, visible: true
+  });
+  assert.equal(effectFromData({ type: "SHADER", visible: true }), null);
+  assert.deepEqual(effectFromData({
+    type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true, showShadowBehindNode: true
+  }), {
+    type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.3 }, offset: { x: 0, y: 4 }, radius: 8, spread: 0, visible: true, blendMode: "NORMAL", showShadowBehindNode: true
+  });
 });

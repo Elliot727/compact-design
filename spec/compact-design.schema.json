@@ -230,14 +230,30 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "enum": ["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"] },
+        "type": { "enum": ["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR", "NOISE", "TEXTURE", "GLASS"] },
         "color": { "oneOf": [{ "$ref": "#/$defs/hexColor" }, { "$ref": "#/$defs/color" }] },
         "offset": { "$ref": "#/$defs/vector" },
         "blur": { "$ref": "#/$defs/nonNegativeNumber" },
         "radius": { "$ref": "#/$defs/nonNegativeNumber" },
         "spread": { "type": "number" },
         "visible": { "type": "boolean" },
-        "blendMode": { "type": "string" }
+        "blendMode": { "type": "string" },
+        "showShadowBehindNode": { "type": "boolean" },
+        "blurType": { "enum": ["NORMAL", "PROGRESSIVE"] },
+        "startRadius": { "$ref": "#/$defs/nonNegativeNumber" },
+        "startOffset": { "$ref": "#/$defs/vector" },
+        "endOffset": { "$ref": "#/$defs/vector" },
+        "noiseType": { "enum": ["MONOTONE", "DUOTONE", "MULTITONE"] },
+        "noiseSize": { "$ref": "#/$defs/nonNegativeNumber" },
+        "density": { "type": "number", "minimum": 0, "maximum": 1 },
+        "secondaryColor": { "oneOf": [{ "$ref": "#/$defs/hexColor" }, { "$ref": "#/$defs/color" }] },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "clipToShape": { "type": "boolean" },
+        "lightIntensity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "lightAngle": { "type": "number" },
+        "refraction": { "type": "number", "minimum": 0, "maximum": 1 },
+        "depth": { "type": "number", "minimum": 1 },
+        "dispersion": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
     "shadow": {
