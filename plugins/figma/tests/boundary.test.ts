@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
 import { compactLayoutGrids, compactStrokeAppearance, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
 import {
+  collectStyleIdsFromNode,
+  compactStyleExportId,
+  isUsableStyleId,
+  styleRefsFromNodeIds,
+  uniqueStyleExportIds
+} from "../src/plugin/export-styles";
+import {
   assembleVariableGroups,
   buildExplicitVariableModes,
   compactVariableExportId,
@@ -79,6 +86,40 @@ test("export stroke appearance omits defaults and skips mixed values", () => {
     strokeJoin: "BEVEL"
   });
   assert.deepEqual(compactStrokeAppearance({}, mixed), {});
+});
+
+test("export style ids prefer plugin data then name then figma id", () => {
+  assert.equal(compactStyleExportId("Northstar/Heading", "heading-style", "S:1"), "heading-style");
+  assert.equal(compactStyleExportId("Northstar/Heading", "", "S:1"), "Northstar/Heading");
+  assert.equal(compactStyleExportId("Northstar/Heading", undefined, "S:1"), "Northstar/Heading");
+  assert.equal(compactStyleExportId("", undefined, "S:1"), "S:1");
+  assert.deepEqual(uniqueStyleExportIds(["surface", "surface", "body"]), ["surface", "surface-2", "body"]);
+});
+
+test("export styleRefs maps fill/stroke/text and skips empty or mixed ids", () => {
+  const mixed = Symbol("mixed");
+  const resolve = (id: string) => ({ "S:fill": "surface-style", "S:stroke": "border-style", "S:text": "heading-style" }[id]);
+  assert.deepEqual(styleRefsFromNodeIds({
+    fillStyleId: "S:fill",
+    strokeStyleId: "S:stroke",
+    textStyleId: "S:text"
+  }, resolve, mixed), { fill: "surface-style", stroke: "border-style", text: "heading-style" });
+  assert.equal(styleRefsFromNodeIds({ fillStyleId: "", strokeStyleId: mixed, textStyleId: mixed }, resolve, mixed), undefined);
+  assert.equal(styleRefsFromNodeIds({ fillStyleId: "S:unknown" }, resolve, mixed), undefined);
+  assert.equal(isUsableStyleId("", mixed), false);
+  assert.equal(isUsableStyleId(mixed, mixed), false);
+  assert.equal(isUsableStyleId("S:fill", mixed), true);
+  assert.deepEqual(collectStyleIdsFromNode({
+    type: "TEXT",
+    fillStyleId: "S:fill",
+    strokeStyleId: "",
+    textStyleId: "S:text"
+  }, mixed), ["S:fill", "S:text"]);
+  assert.deepEqual(collectStyleIdsFromNode({
+    type: "RECTANGLE",
+    fillStyleId: "S:fill",
+    textStyleId: "S:text"
+  }, mixed), ["S:fill"]);
 });
 
 
