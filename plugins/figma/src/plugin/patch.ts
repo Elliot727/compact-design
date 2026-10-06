@@ -1,6 +1,16 @@
 import { assertPrototypePatchRules, buildDuplicateIdMapFromIds, collectSubtreeIds, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
 import { applyGrids, applyLayoutPatch } from "./layout";
-import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
+import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, resolveInstanceSwapTarget, type ImportContext } from "./nodes";
+import {
+  remapFigmaIdReferences,
+  sceneCollectIds,
+  sceneFindDescendant,
+  sceneMatchLayer,
+  sceneReadPropertyValue,
+  sceneStructuralDiff,
+  sceneSubtreeHasPropertyReferences,
+  type ComponentizeProperties
+} from "./patch-componentize-figma";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
 import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma, assertPendingVariantAxesCarried } from "./patch-definitions";
 import { buildReactions, prototypeRoot } from "./prototype";
@@ -458,6 +468,8 @@ function isDescendantSceneNode(ancestor: SceneNode, candidate: BaseNode | null):
 }
 
 /** Resolve only via the compact-design plugin-data index (imported/mapped layers). */
+function compactIdOf(node: SceneNode): string { return node.getPluginData("compactDesignId") || ""; }
+
 function resolveNode(nodes: Map<string, SceneNode>, compactId: string): SceneNode | null {
   return nodes.get(compactId) || null;
 }
@@ -769,6 +781,16 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
         }
       }
       knownIds.delete(operation.id!);
+    }
+    if (operation.op === "COMPONENTIZE") {
+      const path = `patch.operations[${index}]`;
+      if (!knownIds.has(operation.id!)) throw new Error(`${path}: node '${operation.id}' was not found`);
+      const live = known.get(operation.id!);
+      if (live && live.type !== "FRAME") throw new Error(`${path}: componentize only accepts FRAME (received ${live.type}).`);
+      for (const instId of operation.componentizeInstances || []) {
+        if (!knownIds.has(instId)) throw new Error(`${path}: instance '${instId}' was not found`);
+      }
+      // Source stays addressable as the same compact id; later same-patch ops can target it as a COMPONENT.
     }
   }
 }
@@ -1094,6 +1116,241 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         nodes.delete(wrapperId);
         log.push({ kind: "replace", original: wrapper, backup, parent: grandparent, index: wrapperIndex >= 0 ? wrapperIndex : at, counterparts });
         affected.push(wrapper);
+      }
+
+      if (operation.op === "COMPONENTIZE") {
+        const source = resolveNode(nodes, operation.id!)!;
+        if (source.type !== "FRAME") {
+          throw new Error(`patch.operations[${operationIndex}]: componentize only accepts FRAME (received ${source.type}).`);
+        }
+        if (isInsideInstance(source.parent)) {
+          throw new Error(`patch.operations[${operationIndex}]: cannot componentize a node inside an INSTANCE.`);
+        }
+        {
+          let walk: BaseNode | null = source.parent;
+          while (walk && walk.type !== "PAGE" && walk.type !== "DOCUMENT") {
+            if (walk.type === "COMPONENT" || walk.type === "COMPONENT_SET" || walk.type === "INSTANCE") {
+              throw new Error(`patch.operations[${operationIndex}]: cannot componentize a node inside a ${walk.type}.`);
+            }
+            walk = walk.parent;
+          }
+        }
+        if (sceneSubtreeHasComponent(source)) {
+          throw new Error(`patch.operations[${operationIndex}]: cannot componentize a subtree that contains a COMPONENT or COMPONENT_SET.`);
+        }
+        if (sceneSubtreeHasPropertyReferences(source)) {
+          throw new Error(`patch.operations[${operationIndex}]: source already has componentPropertyReferences.`);
+        }
+        if (sceneHasNonZeroRotation(source)) {
+          throw new Error(`patch.operations[${operationIndex}]: componentize does not support rotated nodes or parents (node '${operation.id}' or an ancestor has non-zero rotation).`);
+        }
+
+        const propsDecl: ComponentizeProperties = operation.componentizeProperties || {};
+        const instanceIds = operation.componentizeInstances || [];
+        if (new Set(instanceIds).size !== instanceIds.length) {
+          throw new Error(`patch.operations[${operationIndex}]: instances must not contain duplicates.`);
+        }
+
+        // Validate properties
+        const usedLayers = new Map<string, string>();
+        for (const [name, decl] of Object.entries(propsDecl)) {
+          const layer = sceneFindDescendant(source, decl.layer);
+          if (!layer || compactIdOf(layer) === operation.id) {
+            throw new Error(`patch.operations[${operationIndex}]: property '${name}' layer '${decl.layer}' must be a descendant of '${operation.id}'.`);
+          }
+          if (decl.type === "TEXT" && layer.type !== "TEXT") {
+            throw new Error(`patch.operations[${operationIndex}]: property '${name}' is TEXT but layer '${decl.layer}' is ${layer.type}.`);
+          }
+          if (decl.type === "INSTANCE_SWAP" && layer.type !== "INSTANCE") {
+            throw new Error(`patch.operations[${operationIndex}]: property '${name}' is INSTANCE_SWAP but layer '${decl.layer}' is ${layer.type}.`);
+          }
+          const field = decl.type === "TEXT" ? "characters" : decl.type === "BOOLEAN" ? "visible" : "mainComponent";
+          const key = `${decl.layer}::${field}`;
+          if (usedLayers.has(key)) {
+            throw new Error(`patch.operations[${operationIndex}]: properties '${usedLayers.get(key)}' and '${name}' both bind ${field} on layer '${decl.layer}'.`);
+          }
+          usedLayers.set(key, name);
+        }
+
+        // Validate instances + strict diff
+        for (const instId of instanceIds) {
+          if (instId === operation.id) throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must not be the source.`);
+          const copy = resolveNode(nodes, instId);
+          if (!copy) throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' was not found.`);
+          if (copy.type !== "FRAME") {
+            throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must be a FRAME (received ${copy.type}).`);
+          }
+          if (isInsideInstance(copy.parent)) {
+            throw new Error(`patch.operations[${operationIndex}]: cannot componentize a node inside an INSTANCE.`);
+          }
+          if (isDescendantSceneNode(source, copy) || isDescendantSceneNode(copy, source)) {
+            throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must not be an ancestor or descendant of the source.`);
+          }
+          for (const otherId of instanceIds) {
+            if (otherId === instId) continue;
+            const other = resolveNode(nodes, otherId);
+            if (other && (isDescendantSceneNode(copy, other) || isDescendantSceneNode(other, copy))) {
+              throw new Error(`patch.operations[${operationIndex}]: instances '${instId}' and '${otherId}' must not be ancestors/descendants of each other.`);
+            }
+          }
+          if (sceneHasNonZeroRotation(copy)) {
+            throw new Error(`patch.operations[${operationIndex}]: componentize does not support rotated nodes or parents (node '${instId}' or an ancestor has non-zero rotation).`);
+          }
+          const diff = sceneStructuralDiff(source, copy, { properties: propsDecl });
+          if (diff) {
+            throw new Error(`patch.operations[${operationIndex}]: componentize '${operation.id}': instance '${instId}' differs at ${diff}; declare a property or edit first`);
+          }
+        }
+
+        // Eager: outside refs to copy inner ids
+        for (const instId of instanceIds) {
+          const copy = resolveNode(nodes, instId)!;
+          const innerIds = sceneCollectIds(copy);
+          innerIds.delete(instId);
+          for (const [cid, scene] of nodes) {
+            if (innerIds.has(cid) || cid === instId) continue;
+            if (sceneCollectIds(copy).has(cid)) continue;
+            if (!("reactions" in scene) || !Array.isArray((scene as FrameNode).reactions)) continue;
+            for (const reaction of (scene as FrameNode).reactions) {
+              const actions = reaction.actions || (reaction.action ? [reaction.action] : []);
+              for (const action of actions) {
+                if (!action || typeof action !== "object") continue;
+                const dest = (action as { destinationId?: string | null }).destinationId;
+                if (typeof dest !== "string" || !dest) continue;
+                // Resolve destination compact id via nodes map reverse
+                for (const innerId of innerIds) {
+                  const inner = nodes.get(innerId);
+                  if (inner && dest === inner.id) {
+                    throw new Error(`patch.operations[${operationIndex}]: cannot componentize while a prototype action targets inner layer '${innerId}' of instance '${instId}' (inner ids disappear)`);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Park source FRAME before conversion (rollback restores FRAME).
+        if (!source.parent || !("insertChild" in source.parent)) {
+          throw new Error(`patch.operations[${operationIndex}]: node '${operation.id}' has no parent`);
+        }
+        const sourceParent = source.parent as SceneNode & ChildrenMixin;
+        const sourceIndex = sourceParent.children.indexOf(source);
+        const sourceBackup = park(source);
+        const sourceCounterparts: Array<[SceneNode, SceneNode]> = [];
+        pairSubtree(source, sourceBackup, sourceCounterparts);
+        log.push({ kind: "replace", original: source, backup: sourceBackup, parent: sourceParent, index: sourceIndex, counterparts: sourceCounterparts });
+
+        const oldFigmaId = source.id;
+        // Real Figma may assign a new node id; plugin data (compactDesignId) and reactions survive on the object.
+        const component = figma.createComponentFromNode(source) as ComponentNode;
+        const newFigmaId = component.id;
+        // Re-index: same compact id now points at the COMPONENT (possibly new Figma id).
+        nodes.set(operation.id!, component);
+        registerSubtreeIds(nodes, component);
+        await remapFigmaIdReferences(oldFigmaId, newFigmaId, nodes);
+        // Also rewrite INSTANCE_SWAP defaults / preferred values that stored the old Figma id — handled via compact lookups later.
+
+        // Add component properties + wire refs
+        const propertyKeys = new Map<string, string>();
+        for (const [name, decl] of Object.entries(propsDecl)) {
+          const layer = sceneFindDescendant(component, decl.layer);
+          if (!layer) throw new Error(`patch.operations[${operationIndex}]: property '${name}' layer '${decl.layer}' missing after promote.`);
+          const defaultValue = await sceneReadPropertyValue(layer, decl.type);
+          if (defaultValue === undefined) {
+            throw new Error(`patch.operations[${operationIndex}]: property '${name}' could not read a default from layer '${decl.layer}'.`);
+          }
+          let figmaDefault: string | boolean = defaultValue;
+          if (decl.type === "INSTANCE_SWAP" && typeof defaultValue === "string") {
+            figmaDefault = resolveInstanceSwapTarget(name, "INSTANCE_SWAP", defaultValue, context) as string;
+          }
+          const generatedKey = component.addComponentProperty(name, decl.type, figmaDefault);
+          propertyKeys.set(name, generatedKey);
+          propertyKeys.set(generatedKey, generatedKey);
+          const refs: { characters?: string; visible?: string; mainComponent?: string } = { ...(layer.componentPropertyReferences || {}) };
+          if (decl.type === "TEXT") refs.characters = generatedKey;
+          else if (decl.type === "BOOLEAN") refs.visible = generatedKey;
+          else refs.mainComponent = generatedKey;
+          layer.componentPropertyReferences = refs;
+          affected.push(layer);
+        }
+        if (propertyKeys.size) {
+          context.componentPropertyKeys.set(operation.id!, propertyKeys);
+          const types = new Map<string, string>();
+          for (const [name, decl] of Object.entries(propsDecl)) {
+            const key = propertyKeys.get(name) || name;
+            types.set(name, decl.type);
+            types.set(key, decl.type);
+          }
+          context.componentPropertyTypes.set(operation.id!, types);
+        }
+        affected.push(component);
+
+        // Replace copies with INSTANCEs (same compact id / slot / x/y/w/h; overrides only where differ).
+        for (const instId of instanceIds) {
+          const copy = resolveNode(nodes, instId)!;
+          if (!copy.parent || !("insertChild" in copy.parent)) {
+            throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' has no parent`);
+          }
+          const copyParent = copy.parent as SceneNode & ChildrenMixin;
+          const copyIndex = copyParent.children.indexOf(copy);
+          const copyX = copy.x;
+          const copyY = copy.y;
+          const copyW = copy.width;
+          const copyH = copy.height;
+
+          // Capture overrides before removing the FRAME.
+          const overrides: Record<string, string | boolean> = {};
+          for (const [name, decl] of Object.entries(propsDecl)) {
+            const copyLayer = sceneMatchLayer(component, copy, decl.layer);
+            if (!copyLayer) {
+              throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' has no layer matching '${decl.layer}'.`);
+            }
+            const copyValue = await sceneReadPropertyValue(copyLayer, decl.type);
+            const defaultLayer = sceneFindDescendant(component, decl.layer)!;
+            const defaultValue = await sceneReadPropertyValue(defaultLayer, decl.type);
+            if (copyValue !== undefined && defaultValue !== undefined && copyValue !== defaultValue) {
+              overrides[name] = copyValue;
+            }
+          }
+
+          const copyBackup = park(copy);
+          const copyCounterparts: Array<[SceneNode, SceneNode]> = [];
+          pairSubtree(copy, copyBackup, copyCounterparts);
+          // Remove FRAME; replace undo restores it. Instance is logged as create.
+          if (!copy.removed) copy.remove();
+          nodes.delete(instId);
+          log.push({ kind: "replace", original: copy, backup: copyBackup, parent: copyParent, index: copyIndex, counterparts: copyCounterparts });
+
+          const instance = component.createInstance();
+          instance.setPluginData("compactDesignId", instId);
+          // Clear child compact ids (instance sublayers are not addressable).
+          const clearIds = (node: SceneNode): void => {
+            if (node !== instance) node.setPluginData("compactDesignId", "");
+            if ("children" in node) for (const child of node.children) clearIds(child);
+          };
+          clearIds(instance);
+          copyParent.insertChild(Math.min(copyIndex, copyParent.children.length), instance);
+          instance.x = copyX;
+          instance.y = copyY;
+          if ("resize" in instance && typeof instance.resize === "function") instance.resize(copyW, copyH);
+          instance.name = copyBackup.name;
+
+          if (Object.keys(overrides).length) {
+            const maps = componentPropertyMaps(component);
+            const mapped = mapInstancePropertyOverrides(
+              overrides,
+              maps.keys,
+              maps.types,
+              component.componentPropertyDefinitions || {},
+              context
+            );
+            instance.setProperties(mapped);
+          }
+
+          log.push({ kind: "create", node: instance });
+          nodes.set(instId, instance);
+          affected.push(instance);
+        }
       }
     }
       assertPendingVariantAxesCarried(pendingVariantAxes);

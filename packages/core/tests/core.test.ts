@@ -2299,3 +2299,144 @@ test("wrap then failing later op rolls back (core is pure — document unchanged
   }, { op: "set", id: "ghost", set: { name: "nope" } });
   assert.equal(JSON.stringify(document), before);
 });
+
+// --- componentize -----------------------------------------------------------
+
+const cardTree = (id: string, x: number, extras: Record<string, unknown> = {}) => ({
+  id, type: "FRAME", name: `Card ${id}`, x, y: 0, w: 120, h: 80, fill: "#FFFFFF",
+  children: [
+    { id: `${id}-title`, type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text: "Hello", font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+    { id: `${id}-badge`, type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00", ...(extras.badge || {}) }
+  ],
+  ...Object.fromEntries(Object.entries(extras).filter(([k]) => k !== "badge"))
+});
+
+test("componentize promote-only: FRAME becomes COMPONENT, same id", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [cardTree("card", 0)]
+  });
+  const after = applyRaw(document, { op: "componentize", id: "card" });
+  assert.equal(nodeById(after, "card").type, "COMPONENT");
+  assert.equal(nodeById(after, "card-title").type, "TEXT");
+  assert.deepEqual(nodeById(after, "card").properties.position, nodeById(document, "card").properties.position);
+});
+
+test("componentize with properties and instances: TEXT/BOOLEAN overrides", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 600, height: 200 },
+    nodes: [
+      cardTree("a", 0),
+      {
+        id: "b", type: "FRAME", name: "Card b", x: 140, y: 0, w: 120, h: 80, fill: "#FFFFFF",
+        children: [
+          { id: "b-title", type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text: "Other", font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+          { id: "b-badge", type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00", visible: false }
+        ]
+      },
+      cardTree("c", 280)
+    ]
+  });
+  const after = applyRaw(document, {
+    op: "componentize", id: "a",
+    properties: {
+      Title: { type: "TEXT", layer: "a-title" },
+      ShowBadge: { type: "BOOLEAN", layer: "a-badge" }
+    },
+    instances: ["b", "c"]
+  });
+  assert.equal(nodeById(after, "a").type, "COMPONENT");
+  assert.equal(nodeById(after, "b").type, "INSTANCE");
+  assert.equal(nodeById(after, "c").type, "INSTANCE");
+  assert.equal(nodeById(after, "b").properties.componentId, "a");
+  assert.equal(nodeById(after, "c").properties.componentId, "a");
+  assert.deepEqual(nodeById(after, "b").properties.instanceProperties, { Title: "Other", ShowBadge: false });
+  assert.equal(nodeById(after, "c").properties.instanceProperties, undefined);
+  assert.equal(nodeById(after, "b").children.length, 0);
+  assert.ok(nodeById(after, "a").properties.componentProperties?.some((p) => p.name === "Title" && p.type === "TEXT"));
+  assert.equal(nodeById(after, "a-title").properties.componentPropertyReferences?.characters, "Title");
+  assert.equal(nodeById(after, "a-badge").properties.componentPropertyReferences?.visible, "ShowBadge");
+});
+
+test("componentize rejects size mismatch (Gate: copy w/h must equal source)", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      cardTree("a", 0),
+      { id: "b", type: "FRAME", x: 140, y: 0, w: 120, h: 90, fill: "#FFFFFF", children: [
+        { id: "b-title", type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text: "Hello", font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+        { id: "b-badge", type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00" }
+      ] }
+    ]
+  });
+  rejects(document, /differs at size/, { op: "componentize", id: "a", instances: ["b"] });
+});
+
+test("componentize rejects bindings-only mismatch in both engines contract", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    variables: [{ name: "Tokens", modes: ["Default"], items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Default: 8 } }] }],
+    nodes: [
+      { id: "a", type: "FRAME", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", x: 4, y: 4, w: 20, h: 20, fill: "#111111", bindings: { opacity: "gap" } }
+      ] },
+      { id: "b", type: "FRAME", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] }
+    ]
+  });
+  rejects(document, /differs at children\[0\]\.bindings/, { op: "componentize", id: "a", instances: ["b"] });
+});
+
+test("componentize then set on source in same patch (id stability)", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [cardTree("card", 0)]
+  });
+  const after = applyRaw(document,
+    { op: "componentize", id: "card" },
+    { op: "set", id: "card", set: { name: "CardMaster" } }
+  );
+  assert.equal(nodeById(after, "card").type, "COMPONENT");
+  assert.equal(nodeById(after, "card").name, "CardMaster");
+});
+
+test("componentize rejects non-FRAME, nested COMPONENT, rotation", () => {
+  const base = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "rect", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "host", type: "COMPONENT", w: 40, h: 40, children: [
+        { id: "inner", type: "FRAME", w: 20, h: 20 }
+      ] },
+      { id: "spin", type: "FRAME", w: 40, h: 40, rotation: 10, children: [
+        { id: "spin-leaf", type: "RECTANGLE", w: 10, h: 10 }
+      ] }
+    ]
+  });
+  rejects(base, /only accepts FRAME/, { op: "componentize", id: "rect" });
+  rejects(base, /inside a COMPONENT/, { op: "componentize", id: "inner" });
+  rejects(base, /rotated/, { op: "componentize", id: "spin" });
+});
+
+test("componentize under AL parent keeps slot; promote-only then duplicate", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [{
+      id: "row", type: "FRAME", w: 300, h: 100,
+      layout: { direction: "HORIZONTAL", itemSpacing: 8 },
+      children: [
+        { id: "card", type: "FRAME", w: 80, h: 40, fill: "#EEE", children: [
+          { id: "card-t", type: "TEXT", w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+        ] },
+        { id: "spacer", type: "RECTANGLE", w: 10, h: 10, fill: "#000" }
+      ]
+    }]
+  });
+  const after = applyRaw(document, {
+    op: "componentize", id: "card", properties: { Title: { type: "TEXT", layer: "card-t" } }
+  });
+  assert.equal(nodeById(after, "card").type, "COMPONENT");
+  assert.deepEqual(nodeById(after, "row").children.map((c) => c.id), ["card", "spacer"]);
+  assert.equal(nodeById(after, "card-t").properties.componentPropertyReferences?.characters, "Title");
+});

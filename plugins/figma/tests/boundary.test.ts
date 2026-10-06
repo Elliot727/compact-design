@@ -712,6 +712,14 @@ function typeDefaults(type: string): Record<string, unknown> {
     createInstance(this: MockNode) {
       const main = this;
       const instance = createMockNode("INSTANCE", this.name);
+      // Inherit root chrome from main (real Figma instances mirror the component's appearance).
+      instance.resize(main.width, main.height);
+      instance.fills = Array.isArray(main.fills) ? (main.fills as unknown[]).map((paint) => ({ ...(paint as object) })) : main.fills;
+      instance.strokes = Array.isArray(main.strokes) ? (main.strokes as unknown[]).map((paint) => ({ ...(paint as object) })) : main.strokes;
+      instance.effects = Array.isArray(main.effects) ? (main.effects as unknown[]).map((effect) => ({ ...(effect as object) })) : main.effects;
+      if ("cornerRadius" in main) instance.cornerRadius = main.cornerRadius;
+      if ("opacity" in main) instance.opacity = main.opacity;
+      if ("clipsContent" in main) instance.clipsContent = main.clipsContent;
       for (const child of this.children) {
         const copy = child.clone();
         const clearIds = (node: MockNode) => { node.setPluginData("compactDesignId", ""); node.children.forEach(clearIds); };
@@ -1208,6 +1216,28 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
     createVector: () => createMockNode("VECTOR"),
     createText: () => createMockNode("TEXT"),
     createComponent: () => createMockNode("COMPONENT"),
+    /**
+     * Real Figma: converts a FRAME into a COMPONENT in place. Plugin data, children, and
+     * reactions stay on the same object; the Figma node id may change (callers re-index
+     * by compactDesignId). Bound variables on fills/etc. are preserved on the node.
+     */
+    createComponentFromNode: (node: MockNode) => {
+      if (node.type !== "FRAME") throw new Error(`createComponentFromNode requires a FRAME (got ${node.type})`);
+      const oldId = node.id;
+      const template = createMockNode("COMPONENT", node.name);
+      node.type = "COMPONENT";
+      node.id = `figma:comp:${Math.random().toString(36).slice(2, 9)}`;
+      (node as MockNode & { __previousFigmaId?: string }).__previousFigmaId = oldId;
+      (node as MockNode & { _componentPropertyDefinitions: Record<string, unknown>; _propSeq: number })._componentPropertyDefinitions = {};
+      (node as MockNode & { _propSeq: number })._propSeq = 0;
+      node.addComponentProperty = template.addComponentProperty;
+      node.editComponentProperty = template.editComponentProperty;
+      node.deleteComponentProperty = template.deleteComponentProperty;
+      node.createInstance = template.createInstance;
+      // Attach componentPropertyDefinitions getter (FRAME never had it).
+      installFigmaCopyGetters(node);
+      return node;
+    },
     combineAsVariants: (components: MockNode[], parent: MockNode) => {
       const set = createMockNode("COMPONENT_SET", "set");
       for (const component of components) {
@@ -1564,7 +1594,46 @@ async function figmaState(page: MockNode): Promise<Record<string, ComparableStat
     if (id) {
       const fillList = Array.isArray(node.fills) ? node.fills as Array<Record<string, unknown>> : [];
       const fills = Array.isArray(node.fills) ? fillList.map(({ boundVariables: _bound, ...paint }) => paint) : node.fills;
-      const state: ComparableState = { name: node.name, x: node.x, y: node.y, w: node.width, h: node.height, opacity: node.opacity, fills, fillBound: Boolean(fillList[0]?.boundVariables), strokes: node.strokes, effects: effectSummary(node.effects), constraints: node.constraints, children: node.children.map((child) => child.getPluginData("compactDesignId")) };
+      const childIds = node.type === "INSTANCE"
+        ? []
+        : node.children.map((child) => child.getPluginData("compactDesignId")).filter(Boolean);
+      const state: ComparableState = { type: node.type, name: node.name, x: node.x, y: node.y, w: node.width, h: node.height, opacity: node.opacity, fills, fillBound: Boolean(fillList[0]?.boundVariables), strokes: node.strokes, effects: effectSummary(node.effects), constraints: node.constraints, children: childIds };
+      if (node.type === "INSTANCE") {
+        const mainFigmaId = String((node as MockNode).mainComponentId || "");
+        const findMain = (n: MockNode): MockNode | undefined => {
+          if (n.id === mainFigmaId) return n;
+          for (const c of n.children) { const hit = findMain(c); if (hit) return hit; }
+          return undefined;
+        };
+        const main = findMain(page);
+        state.componentId = main?.getPluginData("compactDesignId") || mainFigmaId;
+        const props = (node as MockNode & { _componentProperties?: Record<string, { value: string | boolean }> })._componentProperties;
+        const defs = (main as MockNode & { _componentPropertyDefinitions?: Record<string, { defaultValue: string | boolean }> } | undefined)?._componentPropertyDefinitions || {};
+        if (props && Object.keys(props).length) {
+          const overrides: Record<string, string | boolean> = {};
+          for (const [k, v] of Object.entries(props)) {
+            const name = k.includes("#") ? k.slice(0, k.indexOf("#")) : k;
+            const def = defs[k] || Object.entries(defs).find(([dk]) => (dk.includes("#") ? dk.slice(0, dk.indexOf("#")) : dk) === name)?.[1];
+            if (!def || v.value !== def.defaultValue) overrides[name] = v.value;
+          }
+          if (Object.keys(overrides).length) state.instanceProperties = overrides;
+        }
+      }
+      if (node.type === "COMPONENT") {
+        const defs = (node as MockNode & { _componentPropertyDefinitions?: Record<string, { type: string; defaultValue: string | boolean }> })._componentPropertyDefinitions;
+        if (defs && Object.keys(defs).length) {
+          const resolveDefault = (type: string, value: string | boolean): string | boolean => {
+            if (type !== "INSTANCE_SWAP" || typeof value !== "string") return value;
+            const findCompact = (n: MockNode): string | undefined => {
+              if (n.id === value) return n.getPluginData("compactDesignId") || undefined;
+              for (const c of n.children) { const hit = findCompact(c); if (hit) return hit; }
+              return undefined;
+            };
+            return findCompact(page) || value;
+          };
+          state.componentProperties = Object.fromEntries(Object.entries(defs).map(([k, v]) => [k.includes("#") ? k.slice(0, k.indexOf("#")) : k, { type: v.type, defaultValue: resolveDefault(v.type, v.defaultValue) }]));
+        }
+      }
       if ("cornerRadius" in node) state.cornerRadius = node.cornerRadius;
       if (FRAME_TYPES.has(node.type)) {
         state.layoutMode = node.layoutMode;
@@ -1585,7 +1654,14 @@ async function coreState(document: InternalDocument): Promise<Record<string, Com
   const visit = async (node: InternalNode, parent: InternalNode | null) => {
     const p = node.properties;
     const origin = parent ? parent.properties.position : { x: 0, y: 0 };
-    const state: ComparableState = { name: node.name, x: p.position.x - origin.x, y: p.position.y - origin.y, w: p.size.width, h: p.size.height, opacity: p.opacity ?? 1, fills: await paints(p.styles.fills), fillBound: Boolean(p.bindings?.fill), strokes: await paints(p.styles.strokes), effects: effectSummary(await effectsFromData(p.styles.effects)), constraints: p.constraints ?? { horizontal: "MIN", vertical: "MIN" }, children: node.children.map((child) => child.id) };
+    const state: ComparableState = { type: node.type, name: node.name, x: p.position.x - origin.x, y: p.position.y - origin.y, w: p.size.width, h: p.size.height, opacity: p.opacity ?? 1, fills: await paints(p.styles.fills), fillBound: Boolean(p.bindings?.fill), strokes: await paints(p.styles.strokes), effects: effectSummary(await effectsFromData(p.styles.effects)), constraints: p.constraints ?? { horizontal: "MIN", vertical: "MIN" }, children: node.children.map((child) => child.id) };
+    if (node.type === "INSTANCE") {
+      state.componentId = p.componentId;
+      if (p.instanceProperties && Object.keys(p.instanceProperties).length) state.instanceProperties = { ...p.instanceProperties };
+    }
+    if (node.type === "COMPONENT" && p.componentProperties?.length) {
+      state.componentProperties = Object.fromEntries(p.componentProperties.map((prop) => [prop.name, { type: prop.type, defaultValue: prop.defaultValue }]));
+    }
     if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "RECTANGLE"].includes(node.type)) state.cornerRadius = p.cornerRadius ?? 0;
     if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"].includes(node.type)) {
       state.layoutMode = p.layout?.direction ?? "NONE";
@@ -3517,3 +3593,189 @@ test("lockstep unwrap rejects rotated wrapper (same rule as wrap)", async () => 
   assert.equal(validatePatch(document, { patch: { operations: [{ op: "unwrap", id: "spin" }] } }).valid, false);
 });
 
+
+// --- componentize lockstep --------------------------------------------------
+
+const componentizeCard = (id: string, x: number, text = "Hello", badgeVisible = true) => ({
+  id, type: "FRAME", name: `Card`, x, y: 0, w: 120, h: 80, fill: "#FFFFFF",
+  children: [
+    { id: `${id}-title`, type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text, font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+    { id: `${id}-badge`, type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00", ...(badgeVisible ? {} : { visible: false }) }
+  ]
+});
+
+test("lockstep componentize: promote-only + properties/instances + AL parent", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 600, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Other", false),
+      componentizeCard("c", 280),
+      {
+        id: "row", type: "FRAME", x: 0, y: 100, w: 300, h: 60,
+        layout: { direction: "HORIZONTAL", itemSpacing: 8 },
+        children: [
+          { id: "chip", type: "FRAME", w: 60, h: 40, fill: "#EEE", children: [
+            { id: "chip-t", type: "TEXT", name: "Label", w: 40, h: 20, text: "Chip", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+          ] },
+          { id: "gap", type: "RECTANGLE", w: 8, h: 8, fill: "#000" }
+        ]
+      }
+    ]
+  });
+  await assertParity(document, [
+    [{
+      op: "componentize", id: "a",
+      properties: { Title: { type: "TEXT", layer: "a-title" }, ShowBadge: { type: "BOOLEAN", layer: "a-badge" } },
+      instances: ["b", "c"]
+    }],
+    [{ op: "componentize", id: "chip", properties: { Title: { type: "TEXT", layer: "chip-t" } } }]
+  ]);
+});
+
+test("lockstep componentize: size mismatch is PATCH_OPERATION in both engines", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      { id: "b", type: "FRAME", name: "Card", x: 140, y: 0, w: 120, h: 90, fill: "#FFFFFF", children: [
+        { id: "b-title", type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text: "Hello", font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+        { id: "b-badge", type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  const patch = { op: "componentize", id: "a", instances: ["b"] };
+  assert.throws(() => applyCorePatch(document, checkedPatch(patch)), /differs at size/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(patch), emptyPatchContext() as never), /differs at size/);
+  assert.deepEqual(await figmaState(page), before, "size mismatch rolled back");
+});
+
+test("lockstep componentize: bindings-only mismatch fails in both engines", async () => {
+  const source = {
+    canvas: { id: "page", width: 400, height: 200 },
+    variables: [{ name: "Tokens", modes: ["Default"], items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Default: 8 } }] }],
+    nodes: [
+      { id: "a", type: "FRAME", name: "A", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111", bindings: { opacity: "gap" } }
+      ] },
+      { id: "b", type: "FRAME", name: "B", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] }
+    ]
+  };
+  const document = normalize(source);
+  assert.throws(() => applyCorePatch(document, checkedPatch({ op: "componentize", id: "a", instances: ["b"] })), /differs at children\[0\]\.bindings/);
+  // Figma: import without bindings, then stamp boundVariables on one leaf only.
+  const plain = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "A", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] },
+      { id: "b", type: "FRAME", name: "B", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(plain);
+  mockById(page, "a-leaf").boundVariables = { opacity: { type: "VARIABLE_ALIAS", id: "var:gap" } };
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), /differs at children\[0\]\.bindings/);
+  assert.deepEqual(await figmaState(page), before);
+});
+
+test("lockstep componentize then set on source (Figma id remapped; compact id stable)", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [componentizeCard("card", 0)]
+  });
+  await assertParity(document, [[
+    { op: "componentize", id: "card" },
+    { op: "set", id: "card", set: { name: "CardMaster" } }
+  ]]);
+});
+
+test("Figma componentize rollback: two copies, second fails mid-way", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 600, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140),
+      componentizeCard("c", 280)
+    ]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  // Second instance id is unknown → fails after first instance would have been replaced.
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch({
+      op: "componentize", id: "a",
+      properties: { Title: { type: "TEXT", layer: "a-title" } },
+      instances: ["b", "ghost"]
+    }), emptyPatchContext() as never),
+    /ghost|was not found/
+  );
+  assert.deepEqual(await figmaState(page), before, "two-copy partial failure rolled back");
+  // a still FRAME, b still FRAME
+  assert.equal(mockById(page, "a").type, "FRAME");
+  assert.equal(mockById(page, "b").type, "FRAME");
+});
+
+test("Figma componentize + export round-trip: COMPONENT and INSTANCE survive", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Other", false)
+    ]
+  });
+  const page = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch({
+    op: "componentize", id: "a",
+    properties: { Title: { type: "TEXT", layer: "a-title" }, ShowBadge: { type: "BOOLEAN", layer: "a-badge" } },
+    instances: ["b"]
+  }), emptyPatchContext() as never);
+  assert.equal(mockById(page, "a").type, "COMPONENT");
+  assert.equal(mockById(page, "b").type, "INSTANCE");
+  // Export the page frame (canvas) that holds both so COMPONENT/INSTANCE stay siblings.
+  const { exportSelection } = await import("../src/plugin/exporter");
+  const canvas = page.children[0];
+  const exported = await exportSelection([canvas as never]);
+  const round = normalize(exported.document);
+  const byId: Record<string, InternalNode> = {};
+  const walk = (n: InternalNode) => { byId[n.id] = n; n.children.forEach(walk); };
+  for (const root of round.nodes) walk(root);
+  // Prefer compact ids when present; else find by type.
+  const comp = byId["a"] || Object.values(byId).find((n) => n.type === "COMPONENT");
+  const inst = byId["b"] || Object.values(byId).find((n) => n.type === "INSTANCE");
+  assert.ok(comp && comp.type === "COMPONENT", `exported COMPONENT (keys=${Object.keys(byId).join(",")})`);
+  assert.ok(inst && inst.type === "INSTANCE", "exported INSTANCE");
+  const propNames = (comp.properties.componentProperties || []).map((p) => p.name);
+  assert.ok(propNames.includes("Title") || propNames.includes("ShowBadge"), `props=${propNames.join(",")}`);
+  assert.equal(inst.properties.componentId, comp.id);
+  // TEXT override survived as instanceProperties on export.
+  assert.equal(inst.properties.instanceProperties?.Title, "Other");
+});
+
+test("lockstep componentize: #id property keys round-trip on instance overrides", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Hey")
+    ]
+  });
+  const final = await assertParity(document, [[{
+    op: "componentize", id: "a",
+    properties: { Title: { type: "TEXT", layer: "a-title" } },
+    instances: ["b"]
+  }]]);
+  assert.equal(nodeById(final, "b").properties.instanceProperties?.Title, "Hey");
+  // Figma generated keys use #id suffix — authored name still wins in parity via stripping.
+  const page = (globalThis as { figma: { currentPage: MockNode } }).figma.currentPage;
+  const inst = mockById(page, "b");
+  const props = (inst as MockNode & { _componentProperties: Record<string, { value: string | boolean }> })._componentProperties;
+  assert.ok(Object.keys(props).some((k) => k.startsWith("Title#") || k === "Title"));
+});

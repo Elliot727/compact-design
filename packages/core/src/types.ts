@@ -156,7 +156,7 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
 }
 
 export interface PatchOperation {
-  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE" | "DUPLICATE" | "WRAP" | "UNWRAP";
+  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE" | "DUPLICATE" | "WRAP" | "UNWRAP" | "COMPONENTIZE";
   id?: string;
   parent?: string;
   index?: number;
@@ -171,6 +171,10 @@ export interface PatchOperation {
   ids?: Record<string, string>;
   /** WRAP only: sibling compact ids to reparent (order becomes child order). */
   wrapIds?: string[];
+  /** COMPONENTIZE only: property name → { type, layer }. */
+  componentizeProperties?: Record<string, { type: ComponentPropertyType; layer: string }>;
+  /** COMPONENTIZE only: detached FRAME copy ids to replace with INSTANCEs. */
+  componentizeInstances?: string[];
 }
 
 /** Style carried on a patch document. TEXT font may be partial (merge on upsert). */

@@ -7,6 +7,10 @@ import { assertPrototypePatchRules, canvasRootId, forEachPrototypeDestination, i
 import { documentIssueOwners, validateDocument } from "./validate";
 import { applyResourceUpsert } from "./patch-resources";
 import { hasNonZeroRotation, nodesBoundingBox, unwrapLostVisuals } from "./patch-wrap";
+import {
+  collectIds, findDescendant, frameToInstanceShell, matchLayer, readPropertyValue,
+  structuralDiff, subtreeHasPropertyReferences, type ComponentizeProperties
+} from "./patch-componentize";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
 
@@ -472,6 +476,194 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     if (grandparent) grandparent.children = siblings;
     wrapper.children = [];
     affectedIds.push(wrapperId);
+    return;
+  }
+
+
+  if (operation.op === "COMPONENTIZE") {
+    const sourceRef = operation.id ? index.get(operation.id) : undefined;
+    if (!sourceRef) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);
+    const source = sourceRef.node;
+    if (source.type !== "FRAME") {
+      throw new Error(`patch.operations[${operationIndex}]: componentize only accepts FRAME (received ${source.type}).`);
+    }
+    if (sourceRef.parent) assertNotInsideInstance(sourceRef.parent, operationIndex, source.id, index);
+    // Reject source inside COMPONENT / COMPONENT_SET (hasInstanceAncestor covers INSTANCE).
+    {
+      let walk: InternalNode | null = sourceRef.parent;
+      while (walk) {
+        if (walk.type === "COMPONENT" || walk.type === "COMPONENT_SET" || walk.type === "INSTANCE") {
+          throw new Error(`patch.operations[${operationIndex}]: cannot componentize a node inside a ${walk.type}.`);
+        }
+        walk = index.get(walk.id)?.parent ?? null;
+      }
+    }
+    if (subtreeContainsType(source, new Set(["COMPONENT", "COMPONENT_SET"]))) {
+      throw new Error(`patch.operations[${operationIndex}]: cannot componentize a subtree that contains a COMPONENT or COMPONENT_SET.`);
+    }
+    if (subtreeHasPropertyReferences(source)) {
+      throw new Error(`patch.operations[${operationIndex}]: source already has componentPropertyReferences.`);
+    }
+    // Rotation on source or ancestors
+    {
+      const ancestors: InternalNode[] = [];
+      let walk: InternalNode | null = sourceRef.parent;
+      while (walk) { ancestors.push(walk); walk = index.get(walk.id)?.parent ?? null; if (ancestors.length > 1000) break; }
+      if (hasNonZeroRotation(source, ancestors)) {
+        throw new Error(`patch.operations[${operationIndex}]: componentize does not support rotated nodes or parents (node '${source.id}' or an ancestor has non-zero rotation).`);
+      }
+    }
+
+    const propsDecl: ComponentizeProperties = operation.componentizeProperties || {};
+    const instanceIds = operation.componentizeInstances || [];
+
+    // Validate properties
+    const usedLayers = new Map<string, string>(); // layerId+field → prop name
+    for (const [name, decl] of Object.entries(propsDecl)) {
+      const layer = findDescendant(source, decl.layer);
+      if (!layer || layer.id === source.id) {
+        throw new Error(`patch.operations[${operationIndex}]: property '${name}' layer '${decl.layer}' must be a descendant of '${source.id}'.`);
+      }
+      if (decl.type === "TEXT" && layer.type !== "TEXT") {
+        throw new Error(`patch.operations[${operationIndex}]: property '${name}' is TEXT but layer '${decl.layer}' is ${layer.type}.`);
+      }
+      if (decl.type === "INSTANCE_SWAP" && layer.type !== "INSTANCE") {
+        throw new Error(`patch.operations[${operationIndex}]: property '${name}' is INSTANCE_SWAP but layer '${decl.layer}' is ${layer.type}.`);
+      }
+      const field = decl.type === "TEXT" ? "characters" : decl.type === "BOOLEAN" ? "visible" : "mainComponent";
+      const key = `${decl.layer}::${field}`;
+      if (usedLayers.has(key)) {
+        throw new Error(`patch.operations[${operationIndex}]: properties '${usedLayers.get(key)}' and '${name}' both bind ${field} on layer '${decl.layer}'.`);
+      }
+      usedLayers.set(key, name);
+    }
+
+    // Validate instances
+    const instanceSet = new Set(instanceIds);
+    if (instanceSet.size !== instanceIds.length) {
+      throw new Error(`patch.operations[${operationIndex}]: instances must not contain duplicates.`);
+    }
+    for (const instId of instanceIds) {
+      if (instId === source.id) throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must not be the source.`);
+      const instRef = index.get(instId);
+      if (!instRef) throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' was not found.`);
+      if (instRef.node.type !== "FRAME") {
+        throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must be a FRAME (received ${instRef.node.type}).`);
+      }
+      if (instRef.parent) assertNotInsideInstance(instRef.parent, operationIndex, instId, index);
+      if (isDescendantOf(source, instRef.node) || isDescendantOf(instRef.node, source)) {
+        throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' must not be an ancestor or descendant of the source.`);
+      }
+      for (const otherId of instanceIds) {
+        if (otherId === instId) continue;
+        const other = index.get(otherId);
+        if (other && (isDescendantOf(instRef.node, other.node) || isDescendantOf(other.node, instRef.node))) {
+          throw new Error(`patch.operations[${operationIndex}]: instances '${instId}' and '${otherId}' must not be ancestors/descendants of each other.`);
+        }
+      }
+      // Rotation on instance
+      {
+        const ancestors: InternalNode[] = [];
+        let walk: InternalNode | null = instRef.parent;
+        while (walk) { ancestors.push(walk); walk = index.get(walk.id)?.parent ?? null; if (ancestors.length > 1000) break; }
+        if (hasNonZeroRotation(instRef.node, ancestors)) {
+          throw new Error(`patch.operations[${operationIndex}]: componentize does not support rotated nodes or parents (node '${instId}' or an ancestor has non-zero rotation).`);
+        }
+      }
+      // Strict diff (includes size / bindings / styleRefs / effects / prototype)
+      const diff = structuralDiff(source, instRef.node, { properties: propsDecl });
+      if (diff) {
+        throw new Error(`patch.operations[${operationIndex}]: componentize '${source.id}': instance '${instId}' differs at ${diff}; declare a property or edit first`);
+      }
+    }
+
+    // Eager: outside references to copy inner ids (root survives)
+    for (const instId of instanceIds) {
+      const instRef = index.get(instId)!;
+      const innerIds = collectIds(instRef.node);
+      innerIds.delete(instId); // root keeps its id
+      for (const [id, ref] of index) {
+        if (innerIds.has(id) || id === instId) continue;
+        // Skip nodes inside this copy
+        if (collectIds(instRef.node).has(id)) continue;
+        const proto = ref.node.properties.prototype;
+        if (Array.isArray(proto)) {
+          forEachPrototypeDestination(proto, (_a, _t, destination, actionPath) => {
+            if (innerIds.has(destination)) {
+              throw new Error(`patch.operations[${operationIndex}]: cannot componentize while ${actionPath} targets inner layer '${destination}' of instance '${instId}' (inner ids disappear)`);
+            }
+          });
+        }
+        // INSTANCE_SWAP defaults / instanceProperties pointing at COMPONENT inside the copy
+        const def = ref.node.properties.componentProperties;
+        if (Array.isArray(def)) {
+          for (const prop of def) {
+            if (prop.type === "INSTANCE_SWAP" && typeof prop.defaultValue === "string" && innerIds.has(prop.defaultValue)) {
+              throw new Error(`patch.operations[${operationIndex}]: cannot componentize while componentProperties on '${id}' reference inner layer '${prop.defaultValue}' of instance '${instId}'`);
+            }
+          }
+        }
+        const ip = ref.node.properties.instanceProperties;
+        if (ip) {
+          for (const [k, v] of Object.entries(ip)) {
+            if (typeof v === "string" && innerIds.has(v)) {
+              throw new Error(`patch.operations[${operationIndex}]: cannot componentize while instanceProperties.${k} on '${id}' references inner layer '${v}' of instance '${instId}'`);
+            }
+          }
+        }
+      }
+    }
+
+    // Promote source FRAME → COMPONENT
+    source.type = "COMPONENT";
+    const componentProperties: NonNullable<InternalNode["properties"]["componentProperties"]> = [];
+    for (const [name, decl] of Object.entries(propsDecl)) {
+      const layer = findDescendant(source, decl.layer)!;
+      const defaultValue = readPropertyValue(layer, decl.type);
+      if (defaultValue === undefined) {
+        throw new Error(`patch.operations[${operationIndex}]: property '${name}' could not read a default from layer '${decl.layer}'.`);
+      }
+      componentProperties.push({ name, type: decl.type, defaultValue });
+      // Wire componentPropertyReferences on the layer
+      const refs = { ...(layer.properties.componentPropertyReferences || {}) };
+      if (decl.type === "TEXT") refs.characters = name;
+      else if (decl.type === "BOOLEAN") refs.visible = name;
+      else refs.mainComponent = name;
+      layer.properties.componentPropertyReferences = refs;
+      affectedIds.push(layer.id);
+    }
+    if (componentProperties.length) source.properties.componentProperties = componentProperties;
+    index.set(source.id, { node: source, parent: sourceRef.parent, siblings: sourceRef.siblings });
+    visit(source.children, source);
+    affectedIds.push(source.id);
+
+    // Replace copies with INSTANCE shells
+    for (const instId of instanceIds) {
+      const instRef = index.get(instId)!;
+      const copy = instRef.node;
+      // Build instanceProperties only where values differ from defaults
+      const overrides: Record<string, string | boolean> = {};
+      for (const [name, decl] of Object.entries(propsDecl)) {
+        const copyLayer = matchLayer(source, copy, decl.layer);
+        if (!copyLayer) {
+          throw new Error(`patch.operations[${operationIndex}]: instance '${instId}' has no layer matching '${decl.layer}'.`);
+        }
+        const copyValue = readPropertyValue(copyLayer, decl.type);
+        const defaultValue = readPropertyValue(findDescendant(source, decl.layer)!, decl.type);
+        if (copyValue !== undefined && defaultValue !== undefined && copyValue !== defaultValue) {
+          overrides[name] = copyValue;
+        }
+      }
+      const shell = frameToInstanceShell(copy, source.id, Object.keys(overrides).length ? overrides : undefined);
+      const at = instRef.siblings.indexOf(copy);
+      // Remove copy subtree from index
+      const removeAll = (node: InternalNode): void => { index.delete(node.id); node.children.forEach(removeAll); };
+      removeAll(copy);
+      instRef.siblings.splice(at, 1, shell);
+      index.set(shell.id, { node: shell, parent: instRef.parent, siblings: instRef.siblings });
+      if (instRef.parent) instRef.parent.children = instRef.siblings;
+      affectedIds.push(shell.id);
+    }
     return;
   }
 
