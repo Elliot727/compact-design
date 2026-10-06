@@ -21,7 +21,7 @@ Common fields: id, name, type, x, y, w, h, fill, stroke, strokeWeight, strokeAli
 \`strokeAlign\`: CENTER | INSIDE | OUTSIDE. \`strokeCap\` / \`strokeJoin\` set line ends and corners.
 \`isMask\`: true masks following siblings — put the mask before the masked siblings.
 \`BOOLEAN_OPERATION\` requires \`operation\` UNION | SUBTRACT | INTERSECT | EXCLUDE plus children.
-\`overflowDirection\`: authored \`*_SCROLLING\` or short \`NONE\`|\`HORIZONTAL\`|\`VERTICAL\`|\`BOTH\` (both forms normalize to the short set).
+\`overflowDirection\`: authored \`*_SCROLLING\` or short \`NONE\`|\`HORIZONTAL\`|\`VERTICAL\`|\`BOTH\` (both forms normalize to the short set). \`numberOfFixedChildren\` (integer ≥ 0): when the frame scrolls, its last N children stay fixed (sticky in HTML).
 
 ## Layout
 { "direction": "HORIZONTAL" | "VERTICAL" | "GRID", "itemSpacing": 8, "padding": { "left": 16, "top": 16, "right": 16, "bottom": 16 } }
@@ -33,6 +33,7 @@ Images: https://…, file:photo.jpg (resolved from the MCP working directory), o
 
 ## Text
 { "type": "TEXT", "text": "Hello", "font": { "family": "Inter", "style": "Bold", "size": 24 }, "fill": "#111" }
+Typography controls sit on the TEXT node (not inside \`font\`): \`textCase\` ORIGINAL | UPPER | LOWER | TITLE | SMALL_CAPS | SMALL_CAPS_FORCED; \`hangingPunctuation\`, \`hangingList\` (booleans); \`listSpacing\`, \`paragraphSpacing\`, \`paragraphIndent\` (numbers ≥ 0). \`listSpacing\` and \`hangingList\` are Figma-faithful; HTML has no list-marker DOM yet.
 
 ## Effects
 { "effects": [{ "type": "DROP_SHADOW", "color": "#00000055", "offset": { "x": 0, "y": 12 }, "blur": 28, "spread": -4, "showShadowBehindNode": true }] }
