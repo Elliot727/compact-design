@@ -157,18 +157,26 @@ export function componentPropertyMaps(component: ComponentNode): { keys: Map<str
   return { keys, types };
 }
 
-/** Map authored instanceProperty overrides to Figma generated keys + INSTANCE_SWAP ids. */
+/** Map authored instanceProperty overrides to Figma generated keys + INSTANCE_SWAP ids.
+ *  A `null` value resets that property to the component's defaultValue (Figma-native; INSTANCE_SWAP
+ *  defaults are already Figma component ids from import). Non-null INSTANCE_SWAP values remapped. */
 export function mapInstancePropertyOverrides(
   overrides: Record<string, string | boolean | VariableAlias | null>,
   propertyKeys: Map<string, string>,
   propertyTypes: Map<string, string>,
+  definitions: ComponentPropertyDefinitions,
   context: ImportContext
 ): Record<string, string | boolean | VariableAlias> {
   const result: Record<string, string | boolean | VariableAlias> = {};
   for (const [key, value] of Object.entries(overrides)) {
-    if (value === null) continue; // cleared entries are omitted; Figma has no per-key clear via setProperties alone
     const mappedKey = propertyKeys.get(key) || key;
     const propType = propertyTypes.get(key) || propertyTypes.get(mappedKey) || "";
+    if (value === null) {
+      const def = definitions[mappedKey] || definitions[key];
+      if (!def) throw new Error(`instance property '${key}' is not defined on the main component`);
+      result[mappedKey] = def.defaultValue as string | boolean | VariableAlias;
+      continue;
+    }
     result[mappedKey] = resolveInstanceSwapTarget(key, propType, value, context) as string | boolean | VariableAlias;
   }
   return result;
@@ -182,7 +190,7 @@ export function mapComponentPropertyReferences(
   const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
   if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
   if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-  if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
+  if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
   return mapped;
 }
 
@@ -197,7 +205,7 @@ export function applyComponentPropertyReferencesTree(data: InternalNode, scene: 
     const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
     if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
     if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
+    if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
     if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
   }
   if (data.type === "COMPONENT" || data.type === "INSTANCE") return;

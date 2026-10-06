@@ -77,9 +77,19 @@ export async function applyResources(node: SceneNode, props: DesignProperties, r
   for (const [field, key] of Object.entries(props.bindings || {})) {
     const variable = resources.variables.get(String(key));
     if (!variable) throw new Error(`Unknown variable '${key}' on '${node.name}'`);
-    if (field === "fill" && "fills" in node && node.fills !== figma.mixed && node.fills.length && node.fills[0].type === "SOLID") node.fills = [figma.variables.setBoundVariableForPaint(node.fills[0], "color", variable), ...node.fills.slice(1)];
-    else if (field === "stroke" && "strokes" in node && node.strokes.length && node.strokes[0].type === "SOLID") node.strokes = [figma.variables.setBoundVariableForPaint(node.strokes[0], "color", variable), ...node.strokes.slice(1)];
-    else node.setBoundVariable(field as VariableBindableNodeField, variable);
+    if (field === "fill") {
+      if (!("fills" in node) || node.fills === figma.mixed || !Array.isArray(node.fills) || !node.fills.length || node.fills[0].type !== "SOLID") {
+        throw new Error(`fill binding requires a SOLID first paint on '${node.name}'`);
+      }
+      node.fills = [figma.variables.setBoundVariableForPaint(node.fills[0], "color", variable), ...node.fills.slice(1)];
+    } else if (field === "stroke") {
+      if (!("strokes" in node) || !Array.isArray(node.strokes) || !node.strokes.length || node.strokes[0].type !== "SOLID") {
+        throw new Error(`stroke binding requires a SOLID first paint on '${node.name}'`);
+      }
+      node.strokes = [figma.variables.setBoundVariableForPaint(node.strokes[0], "color", variable), ...node.strokes.slice(1)];
+    } else {
+      node.setBoundVariable(field as VariableBindableNodeField, variable);
+    }
   }
   for (const [collectionKey, modeKey] of Object.entries(props.variableModes || {})) {
     const collection = resources.variableCollections.get(collectionKey);
@@ -205,9 +215,15 @@ export async function applyResourcePatch(
         }
         const variable = resources.variables.get(String(key));
         if (!variable) throw new Error(`Unknown variable '${key}' on '${node.name}'`);
-        if (field === "fill" && "fills" in node && node.fills !== figma.mixed && Array.isArray(node.fills) && node.fills.length && node.fills[0].type === "SOLID") {
+        if (field === "fill") {
+          if (!("fills" in node) || node.fills === figma.mixed || !Array.isArray(node.fills) || !node.fills.length || node.fills[0].type !== "SOLID") {
+            throw new Error(`fill binding requires a SOLID first paint on '${node.name}'`);
+          }
           node.fills = [figma.variables.setBoundVariableForPaint(node.fills[0], "color", variable), ...node.fills.slice(1)];
-        } else if (field === "stroke" && "strokes" in node && node.strokes.length && node.strokes[0].type === "SOLID") {
+        } else if (field === "stroke") {
+          if (!("strokes" in node) || !Array.isArray(node.strokes) || !node.strokes.length || node.strokes[0].type !== "SOLID") {
+            throw new Error(`stroke binding requires a SOLID first paint on '${node.name}'`);
+          }
           node.strokes = [figma.variables.setBoundVariableForPaint(node.strokes[0], "color", variable), ...node.strokes.slice(1)];
         } else {
           node.setBoundVariable(field as VariableBindableNodeField, variable);

@@ -305,12 +305,17 @@ test("selection export still requires a selection", () => {
   assert.throws(() => planExport([], { scope: "selection", selectionIds: [] }), /Select at least one/);
 });
 
-test("export path reads instance main components asynchronously under dynamic-page", () => {
+test("export and patch paths read instance main components asynchronously under dynamic-page", () => {
   const exporter = readFileSync("src/plugin/exporter.ts", "utf8");
+  const patch = readFileSync("src/plugin/patch.ts", "utf8");
+  const nodes = readFileSync("src/plugin/nodes.ts", "utf8");
   const main = readFileSync("src/plugin/main.ts", "utf8");
+  for (const [name, source] of [["exporter", exporter], ["patch", patch], ["nodes", nodes]] as const) {
+    assert.doesNotMatch(source, /\.mainComponent\b/, `${name} must not sync-read InstanceNode.mainComponent`);
+    assert.doesNotMatch(source, /(?<!get)getMainComponent\s*\(/, `${name} must not call sync getMainComponent()`);
+  }
   assert.match(exporter, /getMainComponentAsync\s*\(/);
-  assert.doesNotMatch(exporter, /\.mainComponent\b/);
-  assert.doesNotMatch(exporter, /(?<!get)getMainComponent\s*\(/);
+  assert.match(patch, /getMainComponentAsync\s*\(/);
   assert.match(main, /await collectExportCandidates\(/);
   assert.match(readFileSync("manifest.json", "utf8"), /"documentAccess"\s*:\s*"dynamic-page"/);
 });
@@ -1835,6 +1840,72 @@ test("lockstep: newly enabled patch keys match in core and Figma (bindings, styl
   const label = Object.entries(props).find(([key]) => key.startsWith("Label"));
   assert.equal(label?.[1].value, "Submit");
   assert.equal(label?.[1].value, find("cta").properties.instanceProperties?.Label);
+});
+
+
+test("lockstep: instanceProperties null clears to component default in core and Figma", async () => {
+  const source = {
+    canvas: { width: 300, height: 100, fill: "#FFFFFF" },
+    nodes: [
+      { id: "icon-star", type: "COMPONENT", name: "Icon/Star", w: 16, h: 16, fill: "#111111" },
+      { id: "icon-check", type: "COMPONENT", name: "Icon/Check", w: 16, h: 16, fill: "#16A34A" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        name: "Button",
+        w: 120,
+        h: 40,
+        fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon-star" }
+        ],
+        children: [
+          { id: "button-label", type: "TEXT", name: "Label", w: 80, h: 20, text: "Continue", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } }
+        ]
+      },
+      {
+        id: "cta",
+        type: "INSTANCE",
+        componentId: "button",
+        x: 10,
+        y: 10,
+        w: 120,
+        h: 40,
+        instanceProperties: { Label: "Submit", ShowIcon: false, Icon: "icon-check" }
+      }
+    ]
+  };
+  let document = normalize(source);
+  const page = await importIntoMock(document, importContext());
+  const patch = checkedPatch(setOp("cta", { instanceProperties: { Label: null, ShowIcon: null, Icon: null } }));
+  const coreResult = applyCorePatch(document, patch);
+  document = coreResult.document;
+  await applyFigmaPatch(patch, emptyPatchContext() as never);
+
+  const find = (id: string) => {
+    const visit = (nodes: InternalNode[]): InternalNode | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        const nested = visit(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return visit(document.nodes)!;
+  };
+  // Core deletes cleared keys (empty map becomes undefined) → falls back to component defaults.
+  assert.equal(find("cta").properties.instanceProperties, undefined);
+  // Figma resets each key to the main component's defaultValue.
+  const instance = mockById(page, "cta");
+  const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+  const byName = Object.fromEntries(Object.entries(props).map(([key, value]) => [key.includes("#") ? key.slice(0, key.indexOf("#")) : key, value]));
+  assert.equal(byName.Label?.value, "Continue", "Label reset to default");
+  assert.equal(byName.ShowIcon?.value, true, "ShowIcon reset to default");
+  // Icon INSTANCE_SWAP default points at icon-star (Figma id of that COMPONENT).
+  const star = mockById(page, "icon-star");
+  assert.equal(byName.Icon?.value, star.id, "Icon reset to default COMPONENT");
 });
 
 test("rollback after failed COMPONENT patch does not orphan its instances", async () => {

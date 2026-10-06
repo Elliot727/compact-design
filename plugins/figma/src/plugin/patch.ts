@@ -116,7 +116,8 @@ async function applyTextSet(node: TextNode, values: PatchSetValues): Promise<voi
   }
 }
 
-type SetHandler = (node: SceneNode, values: PatchSetValues) => void | Promise<void>;
+type ApplyCtx = { warnings: string[]; context: ImportContext; set: JsonObject };
+type SetHandler = (node: SceneNode, values: PatchSetValues, ctx: ApplyCtx) => void | Promise<void>;
 type SetPhase = "name" | "layout" | "child" | "geometry" | "appearance" | "text" | "shape" | "resources" | "component" | "rejected";
 interface SetEntry { phase: SetPhase; apply?: SetHandler; }
 
@@ -127,10 +128,6 @@ const frameOnly = (key: PatchSetKey, node: SceneNode): FrameNode | ComponentNode
   return node;
 };
 const rejected: SetEntry = { phase: "rejected" };
-/** Warnings collected for the current SET apply (detach / clear). */
-let setWarnings: string[] = [];
-let setContext: ImportContext | null = null;
-
 function nodeLabel(node: SceneNode): string {
   return node.getPluginData("compactDesignId") || node.name;
 }
@@ -151,56 +148,60 @@ function hasStyleId(value: unknown): boolean {
   return typeof value === "string" && value.length > 0;
 }
 
-async function applyFillPaints(node: SceneNode, values: PatchSetValues): Promise<void> {
+async function applyFillPaints(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
   const path = `node '${nodeLabel(node)}'`;
-  if (hasFillBinding(node)) setWarnings.push(`${path}: detached bindings.fill because fill was set`);
-  if ("fillStyleId" in node && hasStyleId(node.fillStyleId)) setWarnings.push(`${path}: detached styleRefs.fill because fill was set`);
+  if (hasFillBinding(node)) ctx.warnings.push(`${path}: detached bindings.fill because fill was set`);
+  if ("fillStyleId" in node && hasStyleId(node.fillStyleId)) ctx.warnings.push(`${path}: detached styleRefs.fill because fill was set`);
   writable(node, "fill", "fills").fills = await paints(values.styles?.fills || []);
 }
 
-async function applyStrokePaints(node: SceneNode, values: PatchSetValues): Promise<void> {
+async function applyStrokePaints(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
   const path = `node '${nodeLabel(node)}'`;
-  if (hasStrokeBinding(node)) setWarnings.push(`${path}: detached bindings.stroke because stroke was set`);
-  if ("strokeStyleId" in node && hasStyleId(node.strokeStyleId)) setWarnings.push(`${path}: detached styleRefs.stroke because stroke was set`);
+  if (hasStrokeBinding(node)) ctx.warnings.push(`${path}: detached bindings.stroke because stroke was set`);
+  if ("strokeStyleId" in node && hasStyleId(node.strokeStyleId)) ctx.warnings.push(`${path}: detached styleRefs.stroke because stroke was set`);
   writable(node, "stroke", "strokes").strokes = await paints(values.styles?.strokes || []);
 }
 
-function detachBoundScalars(node: SceneNode, set: JsonObject): void {
+function detachBoundScalars(node: SceneNode, set: JsonObject, warnings: string[]): void {
   const path = `node '${nodeLabel(node)}'`;
   const bound = ("boundVariables" in node && node.boundVariables) ? Object.keys(node.boundVariables as object) : [];
   const overwritten = patchSetBindingFields(set).filter((field) => bound.includes(field));
   for (const field of [...new Set(overwritten)]) {
     node.setBoundVariable(field as VariableBindableNodeField, null);
-    setWarnings.push(`${path}: detached bindings.${field} because the set overwrites it`);
+    warnings.push(`${path}: detached bindings.${field} because the set overwrites it`);
   }
 }
 
-async function applyBindingsStyleModes(node: SceneNode, values: PatchSetValues): Promise<void> {
-  if (!setContext) throw new Error("patch context missing resources");
+async function applyBindingsStyleModes(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
   await applyResourcePatch(node, {
     bindings: values.bindings,
     styleRefs: values.styleRefs,
     variableModes: values.variableModes
-  }, setContext.resources, setWarnings);
+  }, ctx.context.resources, ctx.warnings);
 }
 
-async function applyInstancePropertiesSet(node: SceneNode, values: PatchSetValues): Promise<void> {
+async function applyInstancePropertiesSet(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
   if (node.type !== "INSTANCE") throw new Error(`'instanceProperties' is not supported on Figma ${node.type} node '${node.name}'`);
-  if (!setContext) throw new Error("patch context missing");
   if (values.instanceProperties === undefined) return;
   const main = await node.getMainComponentAsync();
   if (!main) throw new Error(`INSTANCE '${node.name}' has no main component`);
+  const definitions = main.componentPropertyDefinitions || {};
   const { keys, types } = componentPropertyMaps(main);
   if (values.instanceProperties === null) {
-    // Clear by setting defaults from definitions
     const defaults: Record<string, string | boolean | VariableAlias> = {};
-    for (const [key, def] of Object.entries(main.componentPropertyDefinitions || {})) {
+    for (const [key, def] of Object.entries(definitions)) {
       defaults[key] = def.defaultValue as string | boolean | VariableAlias;
     }
     node.setProperties(defaults);
     return;
   }
-  const overrides = mapInstancePropertyOverrides(values.instanceProperties as Record<string, string | boolean | VariableAlias | null>, keys, types, setContext);
+  const overrides = mapInstancePropertyOverrides(
+    values.instanceProperties as Record<string, string | boolean | VariableAlias | null>,
+    keys,
+    types,
+    definitions,
+    ctx.context
+  );
   if (Object.keys(overrides).length) node.setProperties(overrides);
 }
 
@@ -214,7 +215,7 @@ function owningComponent(node: SceneNode): ComponentNode | null {
   return null;
 }
 
-async function applyComponentPropertyReferencesSet(node: SceneNode, values: PatchSetValues): Promise<void> {
+async function applyComponentPropertyReferencesSet(node: SceneNode, values: PatchSetValues, _ctx: ApplyCtx): Promise<void> {
   if (values.componentPropertyReferences === undefined) return;
   if (values.componentPropertyReferences === null) {
     node.componentPropertyReferences = {};
@@ -223,27 +224,25 @@ async function applyComponentPropertyReferencesSet(node: SceneNode, values: Patc
   const owner = owningComponent(node);
   if (!owner) throw new Error(`componentPropertyReferences must be on a descendant of a COMPONENT and must not cross a nested INSTANCE`);
   const { keys } = componentPropertyMaps(owner);
-  // Merge with existing refs: start from current authored-mapped state on the node
   const current = node.componentPropertyReferences || {};
   const merged: { characters?: string | null; visible?: string | null; mainComponent?: string | null } = {
     characters: current.characters,
     visible: current.visible,
-    mainComponent: current.mainComponent
+    mainComponent: current["mainComponent"]
   };
   for (const [field, value] of Object.entries(values.componentPropertyReferences)) {
     if (value === null) delete (merged as Record<string, unknown>)[field];
     else (merged as Record<string, unknown>)[field] = value;
   }
   const mapped = mapComponentPropertyReferences(merged, keys);
-  // Clear fields that were nulled
   const result: { characters?: string; visible?: string; mainComponent?: string } = {};
   if (merged.characters != null) result.characters = mapped.characters;
   if (merged.visible != null) result.visible = mapped.visible;
-  if (merged.mainComponent != null) result.mainComponent = mapped.mainComponent;
+  if (merged["mainComponent"] != null) result["mainComponent"] = mapped["mainComponent"];
   node.componentPropertyReferences = result;
 }
 
-const scalar = (key: PatchSetKey, property: string, phase: SetPhase = "appearance", read: (values: PatchSetValues) => unknown = (values) => (values as Record<string, unknown>)[key]): SetEntry => ({ phase, apply: (node, values) => assign(node, key, property, read(values)) });
+const scalar = (key: PatchSetKey, property: string, phase: SetPhase = "appearance", read: (values: PatchSetValues) => unknown = (values) => (values as Record<string, unknown>)[key]): SetEntry => ({ phase, apply: (node, values, _ctx) => assign(node, key, property, read(values)) });
 
 /**
  * One entry per PATCH_SET_KEYS key (enforced by the Record type): every key
@@ -251,7 +250,7 @@ const scalar = (key: PatchSetKey, property: string, phase: SetPhase = "appearanc
  * rules before any mutation. Nothing is silently ignored.
  */
 export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
-  name: { phase: "name", apply: (node, values) => { node.name = values.name as string; } },
+  name: { phase: "name", apply: (node, values, _ctx) => { node.name = values.name as string; } },
   x: { phase: "geometry" }, y: { phase: "geometry" }, w: { phase: "geometry" }, h: { phase: "geometry" },
   rotation: scalar("rotation", "rotation", "geometry"),
   fill: { phase: "appearance", apply: applyFillPaints },
@@ -268,7 +267,7 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   strokeJoin: scalar("strokeJoin", "strokeJoin"),
   dashPattern: scalar("dashPattern", "dashPattern", "appearance", (values) => [...(values.dashPattern || [])]),
   cornerRadius: scalar("cornerRadius", "cornerRadius"),
-  cornerRadii: { phase: "appearance", apply: (node, values) => {
+  cornerRadii: { phase: "appearance", apply: (node, values, _ctx) => {
     const target = writable(node, "cornerRadii", "topLeftRadius");
     [target.topLeftRadius, target.topRightRadius, target.bottomRightRadius, target.bottomLeftRadius] = values.cornerRadii || [];
   } },
@@ -278,11 +277,11 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   locked: scalar("locked", "locked"),
   isMask: scalar("isMask", "isMask"),
   clipsContent: scalar("clipsContent", "clipsContent"),
-  effects: { phase: "appearance", apply: async (node, values) => { writable(node, "effects", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
-  elevation: { phase: "appearance", apply: async (node, values) => { writable(node, "elevation", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
-  shadow: { phase: "appearance", apply: async (node, values) => { writable(node, "shadow", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
-  layout: { phase: "layout", apply: (node, values) => applyLayoutPatch(frameOnly("layout", node), values.layout || {}) },
-  constraints: { phase: "child", apply: (node, values) => {
+  effects: { phase: "appearance", apply: async (node, values, _ctx) => { writable(node, "effects", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
+  elevation: { phase: "appearance", apply: async (node, values, _ctx) => { writable(node, "elevation", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
+  shadow: { phase: "appearance", apply: async (node, values, _ctx) => { writable(node, "shadow", "effects"); applyEffects(node as SceneNode & BlendMixin, await effectsFromData(values.styles?.effects || [], node.name)); } },
+  layout: { phase: "layout", apply: (node, values, _ctx) => applyLayoutPatch(frameOnly("layout", node), values.layout || {}) },
+  constraints: { phase: "child", apply: (node, values, _ctx) => {
     const target = writable(node, "constraints", "constraints");
     target.constraints = { ...(target.constraints as Constraints), ...values.constraints };
   } },
@@ -295,16 +294,16 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   maxWidth: scalar("maxWidth", "maxWidth", "child"),
   minHeight: scalar("minHeight", "minHeight", "child"),
   maxHeight: scalar("maxHeight", "maxHeight", "child"),
-  layoutGrids: { phase: "layout", apply: (node, values) => { writable(node, "layoutGrids", "layoutGrids"); applyGrids(node, values.layoutGrids || []); } },
+  layoutGrids: { phase: "layout", apply: (node, values, _ctx) => { writable(node, "layoutGrids", "layoutGrids"); applyGrids(node, values.layoutGrids || []); } },
   text: { phase: "text" }, font: { phase: "text" }, lineHeight: { phase: "text" }, letterSpacing: { phase: "text" }, align: { phase: "text" },
   verticalAlignment: { phase: "text" }, textDecoration: { phase: "text" }, textCase: { phase: "text" }, paragraphSpacing: { phase: "text" },
   paragraphIndent: { phase: "text" }, listSpacing: { phase: "text" }, hangingPunctuation: { phase: "text" }, hangingList: { phase: "text" },
   textAutoResize: { phase: "text" }, textTruncation: { phase: "text" }, maxLines: { phase: "text" }, runs: { phase: "text" },
   pointCount: scalar("pointCount", "pointCount", "shape", (values) => Math.max(3, Math.round(finite(values.pointCount, 3)))),
   innerRadius: scalar("innerRadius", "innerRadius", "shape", (values) => clamp(values.innerRadius, 0, 1)),
-  startingAngle: { phase: "shape", apply: (node, values) => { const target = writable(node, "startingAngle", "arcData"); target.arcData = { ...(target.arcData as ArcData), startingAngle: finite(values.startingAngle, 0) }; } },
-  endingAngle: { phase: "shape", apply: (node, values) => { const target = writable(node, "endingAngle", "arcData"); target.arcData = { ...(target.arcData as ArcData), endingAngle: finite(values.endingAngle, Math.PI * 2) }; } },
-  innerRadiusRatio: { phase: "shape", apply: (node, values) => { const target = writable(node, "innerRadiusRatio", "arcData"); target.arcData = { ...(target.arcData as ArcData), innerRadius: clamp(values.innerRadiusRatio, 0, 1) }; } },
+  startingAngle: { phase: "shape", apply: (node, values, _ctx) => { const target = writable(node, "startingAngle", "arcData"); target.arcData = { ...(target.arcData as ArcData), startingAngle: finite(values.startingAngle, 0) }; } },
+  endingAngle: { phase: "shape", apply: (node, values, _ctx) => { const target = writable(node, "endingAngle", "arcData"); target.arcData = { ...(target.arcData as ArcData), endingAngle: finite(values.endingAngle, Math.PI * 2) }; } },
+  innerRadiusRatio: { phase: "shape", apply: (node, values, _ctx) => { const target = writable(node, "innerRadiusRatio", "arcData"); target.arcData = { ...(target.arcData as ArcData), innerRadius: clamp(values.innerRadiusRatio, 0, 1) }; } },
   svg: rejected,
   vectorPaths: scalar("vectorPaths", "vectorPaths", "shape", (values) => (values.vectorPaths || []).map((path) => ({ ...path, data: String(path.data || "").replace(/,/g, " ").replace(/\s+/g, " ").trim() }))),
   componentId: rejected, componentProperties: rejected, instanceProperties: { phase: "component", apply: applyInstancePropertiesSet }, componentPropertyReferences: { phase: "component", apply: applyComponentPropertyReferencesSet }, variantAxes: rejected, variant: rejected,
@@ -330,43 +329,36 @@ function checkSet(node: SceneNode, operation: PatchOperation, operationIndex: nu
 async function applySet(node: SceneNode, operation: PatchOperation, operationIndex: number, context: ImportContext, warnings: string[]): Promise<void> {
   checkSet(node, operation, operationIndex);
   const set = operation.set || {}; const values = operation.normalized!;
-  setWarnings = [];
-  setContext = context;
-  try {
-    // Detach conflicting bindings/styleRefs with WARNING (mirrors core).
-    detachBoundScalars(node, set);
-    const textStyleKeys = ["font", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent", "listSpacing", "textCase", "textDecoration", "hangingPunctuation", "hangingList"];
-    if (node.type === "TEXT" && textStyleKeys.some((key) => key in set) && hasStyleId(node.textStyleId)) {
-      await node.setTextStyleIdAsync("");
-      setWarnings.push(`node '${nodeLabel(node)}': detached styleRefs.text because typography was set`);
+  const ctx: ApplyCtx = { warnings, context, set };
+  // Detach conflicting bindings/styleRefs with WARNING (mirrors core).
+  detachBoundScalars(node, set, warnings);
+  const textStyleKeys = ["font", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent", "listSpacing", "textCase", "textDecoration", "hangingPunctuation", "hangingList"];
+  if (node.type === "TEXT" && textStyleKeys.some((key) => key in set) && hasStyleId(node.textStyleId)) {
+    await node.setTextStyleIdAsync("");
+    warnings.push(`node '${nodeLabel(node)}': detached styleRefs.text because typography was set`);
+  }
+  const keys = Object.keys(set) as PatchSetKey[];
+  for (const phase of PHASE_ORDER) {
+    const inPhase = keys.filter((key) => FIGMA_SET_ENTRIES[key].phase === phase);
+    if (!inPhase.length) continue;
+    if (phase === "geometry") {
+      if (values.size) {
+        if (!("resize" in node)) throw new Error(`'w'/'h' are not supported on Figma ${node.type} node '${node.name}'`);
+        node.resize(Math.max(.01, finite(values.size.width, node.width)), Math.max(.01, finite(values.size.height, node.height)));
+      }
+      if (values.position?.x !== undefined) node.x = values.position.x;
+      if (values.position?.y !== undefined) node.y = values.position.y;
     }
-    const keys = Object.keys(set) as PatchSetKey[];
-    for (const phase of PHASE_ORDER) {
-      const inPhase = keys.filter((key) => FIGMA_SET_ENTRIES[key].phase === phase);
-      if (!inPhase.length) continue;
-      if (phase === "geometry") {
-        if (values.size) {
-          if (!("resize" in node)) throw new Error(`'w'/'h' are not supported on Figma ${node.type} node '${node.name}'`);
-          node.resize(Math.max(.01, finite(values.size.width, node.width)), Math.max(.01, finite(values.size.height, node.height)));
-        }
-        if (values.position?.x !== undefined) node.x = values.position.x;
-        if (values.position?.y !== undefined) node.y = values.position.y;
-      }
-      if (phase === "text") {
-        if (node.type !== "TEXT") throw new Error(`'${inPhase[0]}' is not supported on Figma ${node.type} node '${node.name}'`);
-        await applyTextSet(node, values);
-        continue;
-      }
-      const applied = new Set<SetHandler>();
-      for (const key of inPhase) {
-        const apply = FIGMA_SET_ENTRIES[key].apply;
-        if (apply && !applied.has(apply)) { applied.add(apply); await apply(node, values); }
-      }
+    if (phase === "text") {
+      if (node.type !== "TEXT") throw new Error(`'${inPhase[0]}' is not supported on Figma ${node.type} node '${node.name}'`);
+      await applyTextSet(node, values);
+      continue;
     }
-  } finally {
-    warnings.push(...setWarnings);
-    setWarnings = [];
-    setContext = null;
+    const applied = new Set<SetHandler>();
+    for (const key of inPhase) {
+      const apply = FIGMA_SET_ENTRIES[key].apply;
+      if (apply && !applied.has(apply)) { applied.add(apply); await apply(node, values, ctx); }
+    }
   }
 }
 
@@ -431,7 +423,15 @@ function pairSubtree(original: SceneNode, copy: SceneNode, out: Array<[SceneNode
   if ("children" in original && "children" in copy) original.children.forEach((child, index) => { const twin = copy.children[index]; if (twin) pairSubtree(child, twin, out); });
 }
 
-function rollback(log: Undo[], holder: FrameNode | null): void {
+/**
+ * Replay the undo log. Async so COMPONENT restore can re-link instances via
+ * getMainComponentAsync (the sync main-component getter throws under
+ * documentAccess: "dynamic-page"). Prefer clone-swap rollback over in-place
+ * property restore: SET mutates many fields and children; cloning is the
+ * existing atomic undo unit — we only need async main-component lookup to
+ * keep instances attached when a COMPONENT identity is replaced.
+ */
+async function rollback(log: Undo[], holder: FrameNode | null): Promise<void> {
   const replaced = new Map<BaseNode, BaseNode>();
   const resolve = <T extends BaseNode>(node: T): T => { let current: BaseNode = node; while (replaced.has(current)) current = replaced.get(current)!; return current as T; };
   for (let i = log.length - 1; i >= 0; i--) {
@@ -447,14 +447,12 @@ function rollback(log: Undo[], holder: FrameNode | null): void {
     } else {
       const original = resolve(entry.original); const parent = resolve(entry.parent);
       const at = !original.removed && original.parent === parent ? parent.children.indexOf(original) : Math.min(entry.index, parent.children.length);
-      // Re-link instances before removing a COMPONENT so rollback does not orphan them.
       const dependents: InstanceNode[] = [];
       if (original.type === "COMPONENT" && !original.removed) {
         for (const candidate of figma.currentPage.findAll((node) => node.type === "INSTANCE")) {
           const instance = candidate as InstanceNode;
-          const mainId = "mainComponentId" in instance ? String((instance as { mainComponentId?: string }).mainComponentId || "") : "";
-          const main = "mainComponent" in instance ? (instance as { mainComponent?: ComponentNode | null }).mainComponent : null;
-          if (main === original || mainId === original.id) dependents.push(instance);
+          const main = await instance.getMainComponentAsync();
+          if (main === original) dependents.push(instance);
         }
       }
       if (!original.removed) original.remove();
@@ -462,10 +460,7 @@ function rollback(log: Undo[], holder: FrameNode | null): void {
       for (const [from, to] of entry.counterparts) replaced.set(from, to);
       if (entry.backup.type === "COMPONENT") {
         for (const instance of dependents) {
-          if (!instance.removed && "swapComponent" in instance) instance.swapComponent(entry.backup as ComponentNode);
-          else if (!instance.removed) {
-            (instance as { mainComponentId?: string }).mainComponentId = entry.backup.id;
-          }
+          if (!instance.removed) instance.swapComponent(entry.backup as ComponentNode);
         }
       }
     }
@@ -584,7 +579,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
       }
     }
   } catch (error) {
-    rollback(log, holder);
+    await rollback(log, holder);
     throw error;
   }
   if (holder && !(holder as FrameNode).removed) (holder as FrameNode).remove();

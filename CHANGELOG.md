@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix(figma): patch rollback re-links COMPONENT instances via `getMainComponentAsync` (no sync `mainComponent` under dynamic-page); per-key `instanceProperties: null` resets to the component defaultValue in lockstep with core; fill/stroke bindings require a SOLID first paint (clear error).
+
 - feat(core,figma,mcp): enable patch `set` for `bindings`, `styleRefs`, `variableModes`, `instanceProperties`, and `componentPropertyReferences` (shallow-merge; `null` clears a field or the whole map). Core and Figma apply in lockstep with full rollback; INSTANCE_SWAP values use the type-aware remap path; setting raw fill/font on a bound/styled node detaches with a WARNING. Still deferred: `prototype`, `componentId` (destination/main remapping), `componentProperties`/`variantAxes`/`variant` (definition edits — separate PR).
 
 - feat(core,figma,html,mcp): link component properties to child layers via `componentPropertyReferences` (TEXT `characters`, BOOLEAN `visible`, INSTANCE_SWAP `mainComponent`). Validates against the nearest ancestor COMPONENT; Figma import/export round-trips authored names ↔ generated `#id` keys; HTML honours TEXT/BOOLEAN overrides when refs are present. VARIANT stays on `variantAxes`/`variant` (removed from authorable `componentProperties` types). Patching of those keys is enabled in a follow-up entry below.
