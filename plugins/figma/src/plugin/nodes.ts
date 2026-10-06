@@ -58,6 +58,10 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   if (["GROUP", "BOOLEAN_OPERATION", "COMPONENT_SET"].includes(data.type)) return createCompound(data, parent, origin, context);
   const p = data.properties;
   const node = createBasic(data, context); parent.appendChild(node); context.createdNodes.push(node); node.name = data.name; node.setPluginData("compactDesignId", data.id);
+  // COMPONENT children of a set: Figma derives variant options from child names.
+  if (node.type === "COMPONENT" && parent.type === "COMPONENT_SET" && p.variant && Object.keys(p.variant).length) {
+    node.name = Object.entries(p.variant).map(([axis, value]) => `${axis}=${value}`).join(", ");
+  }
   applyGeometry(node, p, origin); context.sourceNodes.set(data.id, node);
   if (node.type === "VECTOR") {
     node.vectorPaths = (p.vectorPaths || []).map((path: VectorPath) => ({
@@ -190,7 +194,7 @@ export function mapComponentPropertyReferences(
   const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
   if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
   if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-  if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
+  if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
   return mapped;
 }
 
@@ -205,7 +209,7 @@ export function applyComponentPropertyReferencesTree(data: InternalNode, scene: 
     const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
     if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
     if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-    if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
+    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
     if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
   }
   if (data.type === "COMPONENT" || data.type === "INSTANCE") return;

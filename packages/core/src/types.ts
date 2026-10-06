@@ -121,7 +121,19 @@ export type ImportMode = "CREATE" | "REPLACE" | "UPDATE";
  * keys present in the authored set appear here: no defaults are added.
  * Coordinates are parent-relative (the authoring convention).
  */
-export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences"> {
+export interface ComponentPropertyPatchEntry {
+  type?: ComponentPropertyType;
+  defaultValue?: string | boolean;
+  options?: ComponentPropertyOptions;
+}
+
+/** variantAxes patch value: string[] replaces options (never renames); object form renames explicitly. */
+export type VariantAxisPatchEntry =
+  | null
+  | string[]
+  | { rename?: string; options?: string[]; renameOptions?: Record<string, string> };
+
+export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences" | "componentProperties" | "variantAxes" | "variant"> {
   name?: string;
   position?: { x?: number; y?: number };
   size?: { width?: number; height?: number };
@@ -135,6 +147,12 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
   variableModes?: Record<string, string | null> | null;
   instanceProperties?: Record<string, string | boolean | VariableAlias | null> | null;
   componentPropertyReferences?: { characters?: string | null; visible?: string | null; mainComponent?: string | null } | null;
+  /** Name-keyed upsert of COMPONENT property definitions; `null` deletes a TEXT/BOOLEAN/INSTANCE_SWAP def. */
+  componentProperties?: Record<string, ComponentPropertyPatchEntry | null> | null;
+  /** Shallow-merge axes; array replaces options (never renames); object form `{ rename, options, renameOptions }` is explicit. Null axis deletes are rejected. */
+  variantAxes?: Record<string, VariantAxisPatchEntry> | null;
+  /** Merge variant selection on a COMPONENT inside a set. Whole-key or per-axis null is rejected. */
+  variant?: Record<string, string | null> | null;
 }
 
 export interface PatchOperation {
