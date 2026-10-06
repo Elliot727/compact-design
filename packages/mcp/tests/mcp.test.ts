@@ -85,6 +85,22 @@ test("get_language covers effect types and BOOLEAN_OPERATION operation", async (
   assert.match(guide, /UNION \| SUBTRACT \| INTERSECT \| EXCLUDE/);
 });
 
+test("get_language covers text typography controls and numberOfFixedChildren", async () => {
+  const response = await rpc("tools/call", { name: "get_language", arguments: {} });
+  const guide = toolText(response);
+  assert.match(guide, /textCase/);
+  assert.match(guide, /SMALL_CAPS/);
+  assert.match(guide, /SMALL_CAPS_FORCED/);
+  assert.match(guide, /hangingPunctuation/);
+  assert.match(guide, /hangingList/);
+  assert.match(guide, /listSpacing/);
+  assert.match(guide, /paragraphSpacing/);
+  assert.match(guide, /paragraphIndent/);
+  assert.match(guide, /no list-marker DOM/);
+  assert.match(guide, /numberOfFixedChildren/);
+  assert.match(guide, /last N children stay fixed/);
+});
+
 test("validate accepts a compact document and rejects garbage", async () => {
   const ok = await rpc("tools/call", {
     name: "validate",
