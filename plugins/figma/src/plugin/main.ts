@@ -3,7 +3,7 @@ import { importDocument } from "./importer";
 import { collectExportCandidates, exportSelection } from "./exporter";
 import { planExport } from "./export-plan";
 import { applyPatch } from "./patch";
-import { createResources } from "./resources";
+import { createResources, loadExistingResources } from "./resources";
 
 figma.showUI(__html__, { width: 560, height: 780, themeColors: true });
 
@@ -35,7 +35,7 @@ figma.ui.onmessage = async (message: { type?: string; document?: InternalDocumen
     return;
   }
   if (message.type === "apply-patch" && message.patch) {
-    const resources = await createResources({ nodes: [], styles: [], variables: [] });
+    const resources = await loadExistingResources();
     const context = { sourceNodes: new Map<string, SceneNode>(), componentPropertyKeys: new Map<string, Map<string, string>>(), componentPropertyTypes: new Map<string, Map<string, string>>(), resources, createdNodes: [] as SceneNode[] };
     try {
       const { affected, warnings } = await applyPatch(message.patch, context);

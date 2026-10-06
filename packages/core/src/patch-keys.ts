@@ -31,6 +31,7 @@ export type PatchSetKey = typeof PATCH_SET_KEYS[number];
  * - `merge`: objects deep-merge into the current value (unmentioned fields are kept).
  * - `replace`: arrays (paint, effect, run, grid, path lists) replace the whole list.
  * - `deferred`: recognised but not patchable yet; both engines reject it with PATCH_SET_UNSUPPORTED.
+* - object merge keys (`bindings`, `styleRefs`, `variableModes`, `instanceProperties`, `componentPropertyReferences`): shallow-merge entries; a field set to `null` clears that entry.
  * - `immutable`: can never be patched in place; remove + insert instead.
  */
 export type PatchSetSemantics = "scalar" | "merge" | "replace" | "deferred" | "immutable";
@@ -48,8 +49,8 @@ export const PATCH_SET_SEMANTICS: Readonly<Record<PatchSetKey, PatchSetSemantics
   paragraphSpacing: "scalar", paragraphIndent: "scalar", listSpacing: "scalar", hangingPunctuation: "scalar", hangingList: "scalar",
   textAutoResize: "scalar", textTruncation: "scalar", maxLines: "scalar", runs: "replace",
   pointCount: "scalar", innerRadius: "scalar", startingAngle: "scalar", endingAngle: "scalar", innerRadiusRatio: "scalar",
-  svg: "immutable", vectorPaths: "replace", componentId: "deferred", componentProperties: "deferred", instanceProperties: "deferred", componentPropertyReferences: "deferred", variantAxes: "deferred", variant: "deferred",
-  operation: "scalar", prototype: "deferred", overflowDirection: "scalar", numberOfFixedChildren: "scalar", styleRefs: "deferred", bindings: "deferred", variableModes: "deferred"
+  svg: "immutable", vectorPaths: "replace", componentId: "deferred", componentProperties: "deferred", instanceProperties: "merge", componentPropertyReferences: "merge", variantAxes: "deferred", variant: "deferred",
+  operation: "scalar", prototype: "deferred", overflowDirection: "scalar", numberOfFixedChildren: "scalar", styleRefs: "merge", bindings: "merge", variableModes: "merge"
 };
 
 export const PATCH_SET_DEFERRED_KEYS: readonly PatchSetKey[] = PATCH_SET_KEYS.filter((key) => PATCH_SET_SEMANTICS[key] === "deferred");
@@ -80,7 +81,7 @@ export const PATCH_SET_APPLIES_TO: Readonly<Record<PatchSetKey, readonly string[
   paragraphSpacing: TEXT_ONLY, paragraphIndent: TEXT_ONLY, listSpacing: TEXT_ONLY, hangingPunctuation: TEXT_ONLY, hangingList: TEXT_ONLY,
   textAutoResize: TEXT_ONLY, textTruncation: TEXT_ONLY, maxLines: TEXT_ONLY, runs: TEXT_ONLY,
   pointCount: ["POLYGON", "STAR"], innerRadius: ["STAR"], startingAngle: ["ELLIPSE", "ARC"], endingAngle: ["ELLIPSE", "ARC"], innerRadiusRatio: ["ELLIPSE", "ARC"],
-  svg: ALL, vectorPaths: ["VECTOR"], componentId: ALL, componentProperties: ALL, instanceProperties: ALL, componentPropertyReferences: ALL, variantAxes: ALL, variant: ALL,
+  svg: ALL, vectorPaths: ["VECTOR"], componentId: ALL, componentProperties: ALL, instanceProperties: ["INSTANCE"], componentPropertyReferences: ALL, variantAxes: ALL, variant: ALL,
   operation: ["BOOLEAN_OPERATION"], prototype: ALL, overflowDirection: AUTO_LAYOUT_CAPABLE, numberOfFixedChildren: AUTO_LAYOUT_CAPABLE,
   styleRefs: ALL, bindings: ALL, variableModes: ALL
 };
@@ -214,12 +215,8 @@ export function patchSetTargetIssues(set: JsonObject, context: PatchTargetContex
     if (isObject(set.font) && context.mixedFontName && (("family" in set.font) !== ("style" in set.font))) {
       issues.push("font: the node mixes fonts across ranges; set font.family and font.style together (font.size alone is fine).");
     }
-    if (context.textStyle) {
-      const styled = PATCH_TEXT_STYLE_KEYS.filter((key) => key in set);
-      if (styled.length) issues.push(`${styled[0]}: the node is linked to a text style; changing ${styled.join(", ")} would detach it, which patch does not support yet.`);
-    }
   }
-  const bound = patchSetBindingFields(set).filter((field) => context.boundFields.includes(field));
-  if (bound.length) issues.push(`bindings: the set overwrites variable-bound field(s) ${[...new Set(bound)].join(", ")}; unbinding by patch is not supported yet.`);
+  // Overwriting a bound field or text-style-linked typography is allowed: apply
+  // detaches the conflicting binding/styleRef and emits a WARNING (not an error).
   return issues;
 }
