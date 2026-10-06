@@ -1,4 +1,4 @@
-import { assertPrototypeSetDestinations, buildDuplicateIdMapFromIds, collectSubtreeIds, isAfterTimeoutReaction, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
+import { assertPrototypePatchRules, buildDuplicateIdMapFromIds, collectSubtreeIds, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
@@ -152,47 +152,38 @@ async function setReactionsWithPlanLimit(node: SceneNode, reactions: Reaction[],
   }
 }
 
+function isTopLevelSceneNode(node: SceneNode): boolean {
+  return !node.parent || node.parent.type === "PAGE" || node.parent.type === "DOCUMENT";
+}
+
 async function applyPrototypeFigma(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
   const items = (Array.isArray(values.prototype) ? values.prototype : []) as JsonObject[];
   const path = `node '${nodeLabel(node)}'`;
-  // Eager destination checks (same-patch ids via ctx.nodes)
   const sceneCanvasOf = (id: string): string | undefined => {
     const target = ctx.nodes.get(id);
     if (!target) return undefined;
     return prototypeRoot(target).getPluginData("compactDesignId") || prototypeRoot(target).id;
   };
-  const errors = assertPrototypeSetDestinations(
+  const errors = assertPrototypePatchRules(
     items,
     {
       has: (id) => ctx.nodes.has(id),
       typeOf: (id) => ctx.nodes.get(id)?.type,
-      canvasOf: sceneCanvasOf
+      canvasOf: sceneCanvasOf,
+      isTopLevel: (id) => {
+        const target = ctx.nodes.get(id);
+        return target ? isTopLevelSceneNode(target) : false;
+      }
     },
-    "prototype",
-    node.getPluginData("compactDesignId") || undefined
+    "set.prototype",
+    node.getPluginData("compactDesignId") || undefined,
+    isTopLevelSceneNode(node)
   );
-  if (errors.length) throw new Error(errors[0].replace(/^prototype/, `set.prototype`));
+  if (errors.length) throw new Error(errors[0]);
 
-  const timeouts = items.filter((item) => isAfterTimeoutReaction(item));
-  const rest = items.filter((item) => !isAfterTimeoutReaction(item));
-  const root = prototypeRoot(node);
-
-  if (root === node || timeouts.length === 0) {
-    const reactions = await buildReactions(items, ctx.nodes, ctx.context.resources, node);
-    await setReactionsWithPlanLimit(node, reactions, ctx.warnings, path);
-    return;
-  }
-
-  const restReactions = await buildReactions(rest, ctx.nodes, ctx.context.resources, node);
-  await setReactionsWithPlanLimit(node, restReactions, ctx.warnings, path);
-
-  const timeoutReactions = await buildReactions(timeouts, ctx.nodes, ctx.context.resources, root);
-  const existing = "reactions" in root && Array.isArray((root as FrameNode).reactions) ? (root as FrameNode).reactions : [];
-  const kept = existing.filter((reaction) => {
-    const type = reaction.trigger && typeof reaction.trigger === "object" && "type" in reaction.trigger ? String((reaction.trigger as { type: string }).type) : "";
-    return type !== "AFTER_TIMEOUT";
-  });
-  await setReactionsWithPlanLimit(root, [...kept, ...timeoutReactions], ctx.warnings, `node '${nodeLabel(root)}'`);
+  // Patch set keeps exact destinations (no prototypeRoot remapping — import stays lenient).
+  const reactions = await buildReactions(items, ctx.nodes, ctx.context.resources, node, { remapNavigateToRoot: false });
+  await setReactionsWithPlanLimit(node, reactions, ctx.warnings, path);
 }
 
 const rejected: SetEntry = { phase: "rejected" };
@@ -695,21 +686,31 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
   }
 }
 
-
 async function assertNoDanglingPrototypeDestinations(nodes: Map<string, SceneNode>): Promise<void> {
   const byFigmaId = new Map<string, SceneNode>();
   for (const node of nodes.values()) byFigmaId.set(node.id, node);
   for (const [compactId, node] of nodes) {
     if (!("reactions" in node) || !Array.isArray((node as FrameNode).reactions)) continue;
+    // AFTER_TIMEOUT only allowed on top-level hosts after a patch
     for (const reaction of (node as FrameNode).reactions) {
+      const triggerType = reaction.trigger && typeof reaction.trigger === "object" && "type" in reaction.trigger
+        ? String((reaction.trigger as { type: string }).type)
+        : "";
+      if (triggerType === "AFTER_TIMEOUT" && !isTopLevelSceneNode(node)) {
+        throw new Error(`AFTER_TIMEOUT on '${compactId}' requires a top-level target after the patch`);
+      }
       const actions = reaction.actions || (reaction.action ? [reaction.action] : []);
       for (const action of actions) {
         if (!action || typeof action !== "object") continue;
         const dest = (action as { destinationId?: string | null }).destinationId;
         if (typeof dest !== "string" || !dest) continue;
-        const target = byFigmaId.get(dest) || await figma.getNodeByIdAsync(dest);
+        const target = (byFigmaId.get(dest) || await figma.getNodeByIdAsync(dest)) as SceneNode | null;
         if (!target || ("removed" in target && target.removed)) {
           throw new Error(`Prototype destination on '${compactId}' no longer exists after the patch`);
+        }
+        const navigation = (action as { navigation?: string }).navigation;
+        if (navigation && ["NAVIGATE", "SWAP", "OVERLAY"].includes(String(navigation)) && !isTopLevelSceneNode(target)) {
+          throw new Error(`${navigation} destination on '${compactId}' must be a top-level frame after the patch`);
         }
       }
     }

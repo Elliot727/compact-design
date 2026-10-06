@@ -1103,7 +1103,7 @@
           ]
         },
         "operation": { "enum": ["UNION", "SUBTRACT", "INTERSECT", "EXCLUDE"] },
-        "prototype": { "type": "array", "items": { "$ref": "#/$defs/prototype" }, "description": "Replace the full reaction list (like runs/effects). [] clears. Destinations must exist (including ids created earlier in the same patch). No whole-key null." },
+        "prototype": { "type": "array", "items": { "$ref": "#/$defs/prototype" }, "description": "Replace the full reaction list (like runs/effects). [] clears. Destinations must exist (including ids created earlier in the same patch). NAVIGATE/SWAP/OVERLAY destinations must be top-level frames; AFTER_TIMEOUT only on a top-level target. No whole-key null." },
         "overflowDirection": { "enum": ["NONE", "HORIZONTAL", "VERTICAL", "BOTH", "HORIZONTAL_SCROLLING", "VERTICAL_SCROLLING", "HORIZONTAL_AND_VERTICAL_SCROLLING"] },
         "numberOfFixedChildren": { "type": "integer", "minimum": 0 },
         "styleRefs": { "description": "Shallow-merge style refs. Field null clears that ref. Whole-key null clears all styleRefs.", "oneOf": [ { "type": "null" }, { "type": "object", "additionalProperties": { "type": ["string", "null"] } } ] },

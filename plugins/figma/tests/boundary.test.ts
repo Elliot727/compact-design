@@ -1496,7 +1496,7 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
     svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
     componentId: ["rect", "c"], componentProperties: ["comp", { Title: { type: "TEXT", defaultValue: "Hi" } }], instanceProperties: ["inst", { Label: "Go" }], componentPropertyReferences: ["comp-label", { characters: "Label" }], variantAxes: ["set", { State: { rename: "Status" } }], variant: ["set-a", { State: "Hover" }],
-    operation: ["bool", "SUBTRACT"], prototype: ["rect", [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "frame" }] }]], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
+    operation: ["bool", "SUBTRACT"], prototype: ["rect", [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "screen" }] }]], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
     styleRefs: ["rect", { fill: "Ink" }], bindings: ["rect", { opacity: "gap" }], variableModes: ["rect", { Theme: "Dark" }]
   };
   assert.deepEqual(Object.keys(sample).sort(), [...PATCH_SET_KEYS].sort());
@@ -2458,10 +2458,9 @@ test("lockstep: duplicate into a different parent keeps parent-relative x/y", as
 
 test("lockstep: patch set prototype NAVIGATE, clear, missing dest, same-patch dest", async () => {
   const document = normalize({
-    canvas: { id: "page", width: 400, height: 200 },
-    nodes: [
-      { id: "home", type: "FRAME", w: 100, h: 80, children: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
-      { id: "checkout", type: "FRAME", x: 200, w: 100, h: 80, children: [] }
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
+      { id: "checkout", width: 200, height: 100, nodes: [] }
     ]
   });
   await assertParity(document, [
@@ -2474,13 +2473,23 @@ test("lockstep: patch set prototype NAVIGATE, clear, missing dest, same-patch de
   })), emptyPatchContext() as never), /was not found/);
 
   await assertParity(document, [[
-    { op: "append", parent: "page", node: { id: "new-screen", type: "FRAME", w: 50, h: 50 } },
-    setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "new-screen" }] }] })
-  ]]);
-  await assertParity(document, [[
     { op: "duplicate", id: "checkout", idSuffix: "-2" },
     setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout-2" }] }] })
   ]]);
+});
+
+test("lockstep: non-top-level NAVIGATE destination is rejected", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "cta", type: "FRAME", w: 40, h: 20 },
+      { id: "panel", type: "FRAME", x: 100, w: 40, h: 40 }
+    ]
+  });
+  const page = await importIntoMock(document);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "panel" }] }]
+  })), emptyPatchContext() as never), /must be a top-level frame/);
 });
 
 test("lockstep: prototype CHANGE_TO non-COMPONENT and SCROLL_TO across canvases", async () => {
@@ -2503,7 +2512,6 @@ test("lockstep: prototype CHANGE_TO non-COMPONENT and SCROLL_TO across canvases"
 });
 
 test("lockstep: end-of-patch remove of prototype destination fails", async () => {
-  // Top-level canvas destinations: Figma NAVIGATE remaps to prototypeRoot(dest), so dest must be the canvas root.
   const document = normalize({
     canvases: [
       { id: "home", width: 200, height: 100, nodes: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
@@ -2527,25 +2535,24 @@ test("lockstep: end-of-patch remove of prototype destination fails", async () =>
   assert.deepEqual(await figmaState(page), before);
 });
 
-test("Figma prototype AFTER_TIMEOUT hosts on canvas root; multi-action WARNING; rollback", async () => {
-  // canvas id is the top-level scene frame under the Figma PAGE (prototypeRoot).
+test("Figma prototype AFTER_TIMEOUT only on top-level; multi-action WARNING; rollback", async () => {
   const document = normalize({
-    canvas: { id: "screen", width: 300, height: 200 },
-    nodes: [
-      { id: "child", type: "FRAME", w: 20, h: 10 },
-      { id: "next", type: "FRAME", x: 150, w: 50, h: 50 }
+    canvases: [
+      { id: "screen", width: 300, height: 200, nodes: [{ id: "child", type: "FRAME", w: 20, h: 10 }] },
+      { id: "next", width: 100, height: 80, nodes: [] }
     ]
   });
   const page = await importIntoMock(document);
-  await applyFigmaPatch(checkedPatch(setOp("child", {
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("child", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  })), emptyPatchContext() as never), /AFTER_TIMEOUT.*top-level/);
+
+  await applyFigmaPatch(checkedPatch(setOp("screen", {
     prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
   })), emptyPatchContext() as never);
-  const screen = mockById(page, "screen");
-  const child = mockById(page, "child");
-  assert.equal((child.reactions as unknown[]).length, 0, "AFTER_TIMEOUT not left on the nested node");
-  assert.ok((screen.reactions as unknown[]).length >= 1, "AFTER_TIMEOUT hosted on prototype root");
+  assert.ok((mockById(page, "screen").reactions as unknown[]).length >= 1);
 
-  // Multi-action plan-limit WARNING
+  // Multi-action plan-limit WARNING (ON_CLICK on nested is fine)
   const page2 = await importIntoMock(document);
   const warned = await applyFigmaPatch(checkedPatch(setOp("child", {
     prototype: [{ trigger: { type: "ON_CLICK" }, actions: [
@@ -2555,26 +2562,24 @@ test("Figma prototype AFTER_TIMEOUT hosts on canvas root; multi-action WARNING; 
   })), emptyPatchContext() as never);
   assert.ok(warned.warnings.some((w) => /one action per reaction/i.test(w)), warned.warnings.join("; "));
 
-  // Rollback restores prior reactions
+  // Rollback: top-level AFTER_TIMEOUT then a failing later op leaves reactions untouched
   const page3 = await importIntoMock(document);
-  await applyFigmaPatch(checkedPatch(setOp("child", {
-    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  await applyFigmaPatch(checkedPatch(setOp("screen", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 1 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
   })), emptyPatchContext() as never);
-  const beforeFail = JSON.stringify(mockById(page3, "child").reactions);
+  const beforeFail = JSON.stringify(mockById(page3, "screen").reactions);
   await assert.rejects(() => applyFigmaPatch(checkedPatch(
-    setOp("child", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "next" }] }] }),
-    setOp("child", { text: "nope" })
+    setOp("screen", { prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 9 }, actions: [{ type: "NAVIGATE", destination: "next" }] }] }),
+    setOp("screen", { text: "nope" })
   ), emptyPatchContext() as never), /does not apply/);
-  // Failed patch rolls back to the pre-patch state (the earlier successful NAVIGATE set).
-  assert.equal((mockById(page3, "child").reactions as unknown[]).length, 1);
+  assert.equal(JSON.stringify(mockById(page3, "screen").reactions), beforeFail, "rollback restores prior reactions");
 });
 
 test("lockstep: prototype set→export→set is idempotent (transition easing preserved)", async () => {
   const document = normalize({
-    canvas: { id: "page", width: 200, height: 100 },
-    nodes: [
-      { id: "a", type: "FRAME", w: 40, h: 20 },
-      { id: "b", type: "FRAME", x: 80, w: 40, h: 20 }
+    canvases: [
+      { id: "a", width: 100, height: 80, nodes: [] },
+      { id: "b", width: 100, height: 80, nodes: [] }
     ]
   });
   const reaction = [{
@@ -2586,9 +2591,7 @@ test("lockstep: prototype set→export→set is idempotent (transition easing pr
   const twice = applyCorePatch(once, checkedPatch(setOp("a", { prototype: exported as unknown[] }))).document;
   assert.deepEqual(nodeById(twice, "a").properties.prototype, exported);
 
-  // Figma: set twice with same payload; reactions stable
   const page = await importIntoMock(document);
-  // Allow multi not needed; enable multi-action path off
   (mockById(page, "a") as MockNode & { __allowMultiAction?: boolean }).__allowMultiAction = true;
   await applyFigmaPatch(checkedPatch(setOp("a", { prototype: reaction })), emptyPatchContext() as never);
   const first = JSON.stringify(mockById(page, "a").reactions);
@@ -2602,9 +2605,7 @@ test("componentId remains rejected while prototype is patchable", async () => {
     nodes: [{ id: "box", type: "FRAME", w: 20, h: 20 }]
   });
   const page = await importIntoMock(document);
-  // Bypass schema validate so Figma checkSet rejects deferred componentId explicitly.
   const raw = { patch: { operations: [{ op: "SET", id: "box", set: { componentId: "x" }, normalized: {} }] } } as unknown as InternalPatchDocument;
   await assert.rejects(() => applyFigmaPatch(raw, emptyPatchContext() as never), /cannot be patched/);
   await applyFigmaPatch(checkedPatch(setOp("box", { prototype: [] })), emptyPatchContext() as never);
 });
-

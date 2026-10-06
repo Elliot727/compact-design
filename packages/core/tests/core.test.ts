@@ -1613,14 +1613,12 @@ test("remapIssueKeyThroughDuplicate uses exact owner and delimited ids (no subst
 
 test("patch set prototype: NAVIGATE, clear [], missing destination, same-patch dest", () => {
   const document = normalize({
-    canvas: { id: "page", width: 400, height: 200 },
-    nodes: [
-      { id: "home", type: "FRAME", w: 100, h: 80, children: [
-        { id: "cta", type: "FRAME", w: 40, h: 20 }
-      ] },
-      { id: "checkout", type: "FRAME", x: 200, w: 100, h: 80, children: [] }
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
+      { id: "checkout", width: 200, height: 100, nodes: [] }
     ]
   });
+  // Set on nested cta is fine; destination must be top-level (checkout canvas).
   const nav = applyRaw(document, setOp("cta", {
     prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout", transition: { type: "DISSOLVE", easing: "EASE_OUT", duration: 0.3 } }] }]
   }));
@@ -1635,19 +1633,25 @@ test("patch set prototype: NAVIGATE, clear [], missing destination, same-patch d
     prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "ghost" }] }]
   }));
 
-  // Same-patch destination from append
-  const same = applyRaw(document,
-    { op: "append", parent: "page", node: { id: "new-screen", type: "FRAME", w: 50, h: 50 } },
-    setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "new-screen" }] }] })
-  );
-  assert.equal((nodeById(same, "cta").properties.prototype as Array<{ actions: Array<{ destination: string }> }>)[0].actions[0].destination, "new-screen");
-
-  // Same-patch from duplicate
+  // Same-patch destination from duplicate of a top-level canvas
   const dup = applyRaw(document,
     { op: "duplicate", id: "checkout", idSuffix: "-2" },
     setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout-2" }] }] })
   );
   assert.equal((nodeById(dup, "cta").properties.prototype as Array<{ actions: Array<{ destination: string }> }>)[0].actions[0].destination, "checkout-2");
+});
+
+test("patch set prototype: non-top-level NAVIGATE destination is rejected", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "cta", type: "FRAME", w: 40, h: 20 },
+      { id: "panel", type: "FRAME", x: 100, w: 40, h: 40 }
+    ]
+  });
+  rejects(document, /must be a top-level frame/, setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "panel" }] }]
+  }));
 });
 
 test("patch set prototype: CHANGE_TO non-COMPONENT and SCROLL_TO across canvases fail", () => {
@@ -1670,40 +1674,24 @@ test("patch set prototype: CHANGE_TO non-COMPONENT and SCROLL_TO across canvases
   }));
 });
 
-test("patch set prototype: end-of-patch remove of destination or reaction host target fails", () => {
+test("patch set prototype: end-of-patch remove of destination fails", () => {
   const document = normalize({
-    canvas: { id: "page", width: 400, height: 200 },
-    nodes: [
-      { id: "home", type: "FRAME", w: 100, h: 80, children: [
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [
         { id: "cta", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }] }
       ] },
-      { id: "checkout", type: "FRAME", x: 200, w: 100, h: 80 }
+      { id: "checkout", width: 200, height: 100, nodes: [] }
     ]
   });
-  // Remove destination → dangling on cta
   rejects(document, /was not found/, { op: "remove", id: "checkout" });
-  // Set then remove destination in same patch
-  rejects(document, /was not found/,
-    setOp("home", { name: "Home" }),
-    { op: "remove", id: "checkout" }
-  );
-  // Remove a node that another reaction points at (same)
-  const withTwo = normalize({
-    canvas: { id: "page", width: 400, height: 200 },
-    nodes: [
-      { id: "a", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "b" }] }] },
-      { id: "b", type: "FRAME", x: 100, w: 40, h: 20 }
-    ]
-  });
-  rejects(withTwo, /was not found/, { op: "remove", id: "b" });
+  rejects(document, /was not found/, setOp("home", { name: "Home" }), { op: "remove", id: "checkout" });
 });
 
 test("patch set prototype: idempotent set → read → set (preserves transition easing)", () => {
   const document = normalize({
-    canvas: { id: "page", width: 200, height: 100 },
-    nodes: [
-      { id: "a", type: "FRAME", w: 40, h: 20 },
-      { id: "b", type: "FRAME", x: 80, w: 40, h: 20 }
+    canvases: [
+      { id: "a", width: 100, height: 80, nodes: [] },
+      { id: "b", width: 100, height: 80, nodes: [] }
     ]
   });
   const reaction = [{
@@ -1716,20 +1704,38 @@ test("patch set prototype: idempotent set → read → set (preserves transition
   assert.deepEqual(nodeById(twice, "a").properties.prototype, exported);
 });
 
-test("patch set prototype: componentId still rejected; AFTER_TIMEOUT stored on source in core", () => {
+test("patch set prototype: AFTER_TIMEOUT only on top-level; componentId still rejected", () => {
   const document = normalize({
-    canvas: { id: "page", width: 200, height: 100 },
-    nodes: [
-      { id: "screen", type: "FRAME", w: 100, h: 80, children: [
-        { id: "child", type: "FRAME", w: 20, h: 10 }
-      ] },
-      { id: "next", type: "FRAME", x: 120, w: 50, h: 50 }
+    canvases: [
+      { id: "screen", width: 200, height: 100, nodes: [{ id: "child", type: "FRAME", w: 20, h: 10 }] },
+      { id: "next", width: 100, height: 80, nodes: [] }
     ]
   });
   rejects(document, /cannot be patched yet|PATCH_SET_UNSUPPORTED|componentId/, setOp("child", { componentId: "x" }));
-  const result = applyRaw(document, setOp("child", {
+  rejects(document, /AFTER_TIMEOUT.*top-level/, setOp("child", {
     prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
   }));
-  assert.equal((nodeById(result, "child").properties.prototype as Array<{ trigger: { type: string } }>)[0].trigger.type, "AFTER_TIMEOUT");
+  const ok = applyRaw(document, setOp("screen", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  }));
+  assert.equal((nodeById(ok, "screen").properties.prototype as Array<{ trigger: { type: string } }>)[0].trigger.type, "AFTER_TIMEOUT");
 });
 
+test("patch set prototype: rollback leaves reactions untouched when a later op fails", () => {
+  const document = normalize({
+    canvases: [
+      { id: "screen", width: 200, height: 100, nodes: [] },
+      { id: "next", width: 100, height: 80, nodes: [] }
+    ]
+  });
+  const seeded = applyRaw(document, setOp("screen", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 1 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  }));
+  const before = JSON.stringify(nodeById(seeded, "screen").properties.prototype);
+  // validatePatch / applyRaw should reject; document unchanged on throw from applyPatch
+  assert.throws(() => applyPatch(seeded, normalizePatch(patchOf(
+    setOp("screen", { prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 3 }, actions: [{ type: "NAVIGATE", destination: "next" }] }] }),
+    setOp("screen", { text: "nope" })
+  ))), /does not apply|text/);
+  assert.equal(JSON.stringify(nodeById(seeded, "screen").properties.prototype), before);
+});

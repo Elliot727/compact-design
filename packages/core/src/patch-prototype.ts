@@ -1,6 +1,7 @@
 import type { InternalDocument, InternalNode, JsonObject } from "./types";
 
 const DESTINATION_ACTIONS = new Set(["NAVIGATE", "SWAP", "OVERLAY", "SCROLL_TO", "CHANGE_TO"]);
+const TOP_LEVEL_NAV_ACTIONS = new Set(["NAVIGATE", "SWAP", "OVERLAY"]);
 
 function triggerType(reaction: JsonObject): string {
   const trigger = reaction.trigger;
@@ -42,18 +43,28 @@ export function isAfterTimeoutReaction(reaction: JsonObject): boolean {
   return triggerType(reaction) === "AFTER_TIMEOUT";
 }
 
+/** True when `nodeId` is a document.nodes root (top-level canvas frame). */
+export function isTopLevelNodeId(roots: InternalNode[], nodeId: string): boolean {
+  return roots.some((root) => root.id === nodeId);
+}
+
+export type PrototypeLookup = {
+  has: (id: string) => boolean;
+  typeOf?: (id: string) => string | undefined;
+  /** Canvas root id for a node id (document.nodes root). */
+  canvasOf?: (id: string) => string | undefined;
+  /** Whether an id is a top-level canvas frame. */
+  isTopLevel?: (id: string) => boolean;
+};
+
 /**
- * Eager destination checks for a prototype set value against the current id
- * index (including same-patch append/insert/duplicate ids).
+ * Shared destination checks (missing / CHANGE_TO / SCROLL_TO).
+ * Used by validateDocument. Does not require NAVIGATE destinations to be top-level
+ * (import stays lenient).
  */
 export function assertPrototypeSetDestinations(
   prototype: unknown,
-  lookup: {
-    has: (id: string) => boolean;
-    typeOf?: (id: string) => string | undefined;
-    /** Canvas root id for a node id (document.nodes root). */
-    canvasOf?: (id: string) => string | undefined;
-  },
+  lookup: PrototypeLookup,
   path: string,
   sourceId?: string
 ): string[] {
@@ -84,6 +95,39 @@ export function assertPrototypeSetDestinations(
   return errors;
 }
 
+/**
+ * Strict rules for patch `set.prototype` only: NAVIGATE/SWAP/OVERLAY destinations
+ * must be top-level frames; AFTER_TIMEOUT only on a top-level target.
+ */
+export function assertPrototypePatchRules(
+  prototype: unknown,
+  lookup: PrototypeLookup,
+  path: string,
+  sourceId: string | undefined,
+  sourceIsTopLevel: boolean
+): string[] {
+  const errors = assertPrototypeSetDestinations(prototype, lookup, path, sourceId);
+  if (!Array.isArray(prototype)) return errors;
+
+  if (!sourceIsTopLevel) {
+    prototype.forEach((reaction, index) => {
+      if (!reaction || typeof reaction !== "object" || Array.isArray(reaction)) return;
+      if (isAfterTimeoutReaction(reaction as JsonObject)) {
+        errors.push(`${path}[${index}].trigger: AFTER_TIMEOUT in set.prototype requires a top-level target node`);
+      }
+    });
+  }
+
+  forEachPrototypeDestination(prototype, (_action, type, destination, actionPath) => {
+    if (!TOP_LEVEL_NAV_ACTIONS.has(type)) return;
+    if (!lookup.has(destination)) return; // already reported
+    if (lookup.isTopLevel && !lookup.isTopLevel(destination)) {
+      errors.push(`${actionPath}.destination: ${type} destination must be a top-level frame; use '${lookup.canvasOf?.(destination) || destination}'`);
+    }
+  }, path);
+  return errors;
+}
+
 /** Top-level canvas id for a node (the document.nodes root containing it). */
 export function canvasRootId(roots: InternalNode[], nodeId: string): string | undefined {
   const find = (nodes: InternalNode[], rootId: string): string | undefined => {
@@ -101,31 +145,56 @@ export function canvasRootId(roots: InternalNode[], nodeId: string): string | un
   return undefined;
 }
 
-/**
- * Document-wide prototype destination errors (missing / CHANGE_TO / SCROLL_TO).
- * Used by validateDocument so end-of-patch remove of a destination fails.
- */
-export function prototypeDestinationErrors(document: InternalDocument): string[] {
+function documentLookup(document: InternalDocument): PrototypeLookup {
   const types = new Map<string, string>();
   const collect = (node: InternalNode): void => {
     types.set(node.id, node.type);
     node.children.forEach(collect);
   };
   document.nodes.forEach(collect);
+  return {
+    has: (id) => types.has(id),
+    typeOf: (id) => types.get(id),
+    canvasOf: (id) => canvasRootId(document.nodes, id),
+    isTopLevel: (id) => isTopLevelNodeId(document.nodes, id)
+  };
+}
+
+/**
+ * Document-wide prototype destination errors (missing / CHANGE_TO / SCROLL_TO).
+ * Used by validateDocument so end-of-patch remove of a destination fails.
+ * Import-lenient: nested NAVIGATE destinations are allowed here.
+ */
+export function prototypeDestinationErrors(document: InternalDocument): string[] {
+  const lookup = documentLookup(document);
   const errors: string[] = [];
   const walk = (node: InternalNode, path: string): void => {
     if (node.properties.prototype) {
-      const found = assertPrototypeSetDestinations(
+      errors.push(...assertPrototypeSetDestinations(node.properties.prototype, lookup, `${path}.prototype`, node.id));
+    }
+    node.children.forEach((child, index) => walk(child, `${path}.children[${index}]`));
+  };
+  document.nodes.forEach((node, index) => walk(node, `nodes[${index}]`));
+  return errors;
+}
+
+/**
+ * Strict patch rules across the whole document (top-level NAVIGATE dest +
+ * AFTER_TIMEOUT only on top-level hosts). Used at end of patch with multiset
+ * exemption against the pre-patch document.
+ */
+export function prototypePatchStrictErrors(document: InternalDocument): string[] {
+  const lookup = documentLookup(document);
+  const errors: string[] = [];
+  const walk = (node: InternalNode, path: string): void => {
+    if (node.properties.prototype) {
+      errors.push(...assertPrototypePatchRules(
         node.properties.prototype,
-        {
-          has: (id) => types.has(id),
-          typeOf: (id) => types.get(id),
-          canvasOf: (id) => canvasRootId(document.nodes, id)
-        },
+        lookup,
         `${path}.prototype`,
-        node.id
-      );
-      errors.push(...found);
+        node.id,
+        isTopLevelNodeId(document.nodes, node.id)
+      ));
     }
     node.children.forEach((child, index) => walk(child, `${path}.children[${index}]`));
   };
