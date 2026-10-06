@@ -1,7 +1,8 @@
 import { paints } from "./paints";
 import { loadFont } from "./text";
 import { clamp, color, finite } from "./value";
-import type { DesignProperties, InternalDocument, JsonObject } from "@compact-design/core";
+import type { DesignProperties, InternalDocument, InternalPatchDocument, JsonObject, PatchStyleDefinition, StyleDefinition, VariableCollectionDefinition, VariableDefinition } from "@compact-design/core";
+import { applyResourceUpsert, matchStyle, matchVariable } from "@compact-design/core";
 import { isVariableModeLimitError, variableModeLimitWarning } from "./mode-limit";
 
 export interface Resources {
@@ -22,11 +23,13 @@ export async function createResources(document: InternalDocument): Promise<Resou
   for (const value of document.styles || []) {
     if (value.type === "PAINT") {
       const style = existingPaint.get(value.name) || figma.createPaintStyle(); if (!existingPaint.has(value.name)) resources.createdStyles.push(style); style.name = value.name; style.paints = await paints(value.paints || []);
-      resources.paintStyles.set(value.id || value.name, style);
+      const paintId = value.id || value.name; style.setPluginData("compactDesignId", paintId);
+      resources.paintStyles.set(paintId, style);
     } else if (value.type === "TEXT") {
       const style = existingText.get(value.name) || figma.createTextStyle(); if (!existingText.has(value.name)) resources.createdStyles.push(style); style.name = value.name; style.fontName = await loadFont(value.font);
       if (value.font && Number.isFinite(value.font.size)) style.fontSize = value.font.size;
-      resources.textStyles.set(value.id || value.name, style);
+      const textId = value.id || value.name; style.setPluginData("compactDesignId", textId);
+      resources.textStyles.set(textId, style);
     }
   }
   const collections = new Map((await figma.variables.getLocalVariableCollectionsAsync()).map((collection) => [collection.name, collection]));
@@ -258,3 +261,389 @@ export async function applyResourcePatch(
   }
 }
 
+
+export type ResourceUndoEntry = { kind: "resource"; restore: () => Promise<void> };
+
+function uniqueStyles(map: Map<string, PaintStyle | TextStyle>): Array<PaintStyle | TextStyle> {
+  const seen = new Set<PaintStyle | TextStyle>();
+  const out: Array<PaintStyle | TextStyle> = [];
+  for (const style of map.values()) {
+    if (seen.has(style)) continue;
+    seen.add(style);
+    out.push(style);
+  }
+  return out;
+}
+
+/** Build a core-shaped snapshot of current resources for shared conflict rules. */
+function resourcesAsUpsertInput(resources: Resources): { styles: StyleDefinition[]; variables: VariableCollectionDefinition[] } {
+  const styles: StyleDefinition[] = [];
+  for (const style of uniqueStyles(resources.paintStyles as Map<string, PaintStyle | TextStyle>)) {
+    const compact = style.getPluginData?.("compactDesignId") || undefined;
+    styles.push({ id: compact || undefined, name: style.name, type: "PAINT", paints: [] });
+  }
+  for (const style of uniqueStyles(resources.textStyles as Map<string, PaintStyle | TextStyle>)) {
+    const compact = style.getPluginData?.("compactDesignId") || undefined;
+    const text = style as TextStyle;
+    styles.push({
+      id: compact || undefined,
+      name: style.name,
+      type: "TEXT",
+      font: { family: text.fontName.family, style: text.fontName.style, size: text.fontSize }
+    });
+  }
+  const variables: VariableCollectionDefinition[] = [];
+  const seenCollections = new Set<VariableCollection>();
+  for (const collection of resources.variableCollections.values()) {
+    if (seenCollections.has(collection)) continue;
+    seenCollections.add(collection);
+    const items: VariableDefinition[] = [];
+    for (const variable of resources.variables.values()) {
+      if (variable.variableCollectionId !== collection.id) continue;
+      if (items.some((item) => item.name === variable.name)) continue;
+      const compact = variable.getPluginData("compactDesignId") || undefined;
+      items.push({
+        id: compact || undefined,
+        name: variable.name,
+        type: variable.resolvedType as VariableDefinition["type"],
+        values: Object.fromEntries(collection.modes.map((mode) => [mode.name, true]))
+      });
+    }
+    variables.push({ name: collection.name, modes: collection.modes.map((mode) => mode.name), items });
+  }
+  return { styles, variables };
+}
+
+/** Stamp compactDesignId, snapshotting the prior value (including absent) for rollback. */
+function registerStyle(
+  resources: Resources,
+  style: PaintStyle | TextStyle,
+  compactId: string,
+  type: "PAINT" | "TEXT",
+  undoLog: Array<ResourceUndoEntry | { kind: string }>,
+  isNew: boolean
+): void {
+  const previous = style.getPluginData?.("compactDesignId") || "";
+  if (previous !== compactId) {
+    style.setPluginData("compactDesignId", compactId);
+    if (!isNew) {
+      undoLog.push({
+        kind: "resource",
+        restore: async () => { style.setPluginData("compactDesignId", previous); }
+      });
+    }
+  }
+  if (type === "PAINT") {
+    resources.paintStyles.set(compactId, style as PaintStyle);
+    resources.paintStyles.set(style.name, style as PaintStyle);
+  } else {
+    resources.textStyles.set(compactId, style as TextStyle);
+    resources.textStyles.set(style.name, style as TextStyle);
+  }
+}
+
+function registerVariable(
+  resources: Resources,
+  variable: Variable,
+  compactId: string,
+  collection: VariableCollection,
+  undoLog: Array<ResourceUndoEntry | { kind: string }>,
+  isNew: boolean
+): void {
+  const previous = variable.getPluginData("compactDesignId") || "";
+  if (previous !== compactId) {
+    variable.setPluginData("compactDesignId", compactId);
+    if (!isNew) {
+      undoLog.push({
+        kind: "resource",
+        restore: async () => { variable.setPluginData("compactDesignId", previous); }
+      });
+    }
+  }
+  resources.variables.set(compactId, variable);
+  resources.variables.set(variable.name, variable);
+  resources.variableCollections.set(collection.name, collection);
+  resources.variableCollections.set(collection.id, collection);
+}
+
+/**
+ * Upsert patch variables/styles into the file before operations run.
+ * Mode adds run first (recording plan-limit omissions), then shared
+ * applyResourceUpsert plans conflicts/coverage, then values/styles write.
+ * Snapshots every touched token including compactDesignId; restore callbacks
+ * are pushed onto undoLog (replayed in reverse on failure).
+ */
+export async function upsertPatchResources(
+  patch: InternalPatchDocument,
+  resources: Resources,
+  undoLog: Array<ResourceUndoEntry | { kind: string }>
+): Promise<{ warnings: string[]; affectedKeys: string[] }> {
+  const warnings: string[] = [...resources.warnings];
+  if (!(patch.variables?.length || patch.styles?.length)) return { warnings, affectedKeys: [] };
+
+  const unavailableModes = new Map<string, Set<string>>();
+
+  // --- Phase 1: collections / modes (so the plan sees available modes only) ---
+  for (const group of patch.variables || []) {
+    const collectionName = group.name;
+    let collection = resources.variableCollections.get(collectionName);
+    if (!collection) {
+      collection = figma.variables.createVariableCollection(collectionName);
+      resources.createdCollections.push(collection);
+      const created = collection;
+      undoLog.push({
+        kind: "resource",
+        restore: async () => { try { created.remove(); } catch { /* already gone */ } }
+      });
+      const requested = Array.isArray(group.modes) && group.modes.length ? group.modes : [collection.modes[0].name];
+      if (requested[0] && collection.modes[0].name !== requested[0]) {
+        collection.renameMode(collection.modes[0].modeId, requested[0]);
+      }
+      for (const name of requested.slice(1)) {
+        if (collection.modes.some((mode) => mode.name === name)) continue;
+        try { collection.addMode(name); }
+        catch (error) {
+          if (!isVariableModeLimitError(error)) throw error;
+          const omitted = requested.slice(requested.indexOf(name)).filter((modeName) => !collection!.modes.some((mode) => mode.name === modeName));
+          const unavailable = new Set(omitted);
+          unavailableModes.set(collectionName, unavailable);
+          resources.unavailableVariableModes.set(collectionName, unavailable);
+          resources.unavailableVariableModes.set(collection.id, unavailable);
+          warnings.push(variableModeLimitWarning(collectionName, collection.modes.map((mode) => mode.name), omitted));
+          break;
+        }
+      }
+    } else {
+      const requested = Array.isArray(group.modes) && group.modes.length ? group.modes : [];
+      const addedModeIds: string[] = [];
+      for (const name of requested) {
+        if (collection.modes.some((mode) => mode.name === name)) continue;
+        const beforeIds = new Set(collection.modes.map((mode) => mode.modeId));
+        try { collection.addMode(name); }
+        catch (error) {
+          if (!isVariableModeLimitError(error)) throw error;
+          const omitted = requested.slice(requested.indexOf(name)).filter((modeName) => !collection!.modes.some((mode) => mode.name === modeName));
+          const unavailable = new Set(omitted);
+          unavailableModes.set(collectionName, unavailable);
+          resources.unavailableVariableModes.set(collectionName, unavailable);
+          resources.unavailableVariableModes.set(collection.id, unavailable);
+          warnings.push(variableModeLimitWarning(collectionName, collection.modes.map((mode) => mode.name), omitted));
+          break;
+        }
+        const added = collection.modes.find((mode) => !beforeIds.has(mode.modeId));
+        if (added) addedModeIds.push(added.modeId);
+      }
+      if (addedModeIds.length) {
+        const target = collection;
+        undoLog.push({
+          kind: "resource",
+          restore: async () => {
+            for (const modeId of [...addedModeIds].reverse()) {
+              try { target.removeMode(modeId); } catch { /* ignore */ }
+            }
+          }
+        });
+      }
+    }
+    resources.variableCollections.set(collectionName, collection);
+    resources.variableCollections.set(collection.id, collection);
+  }
+
+  // --- Phase 2: shared plan (conflicts, id uniqueness, create coverage) ---
+  const existing = resourcesAsUpsertInput(resources);
+  const planned = applyResourceUpsert(
+    existing,
+    { styles: patch.styles, variables: patch.variables },
+    { unavailableModes }
+  );
+  if (planned.issues.length) {
+    const message = planned.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n");
+    throw new Error(message);
+  }
+
+  // --- Phase 3: write variable values ---
+  for (const group of patch.variables || []) {
+    const collectionName = group.name;
+    const collection = resources.variableCollections.get(collectionName)!;
+    const existingInCollection = (await figma.variables.getLocalVariablesAsync()).filter((candidate) => candidate.variableCollectionId === collection.id);
+    const itemsAsDefs: VariableDefinition[] = existingInCollection.map((variable) => ({
+      id: variable.getPluginData("compactDesignId") || undefined,
+      name: variable.name,
+      type: variable.resolvedType as VariableDefinition["type"]
+    }));
+
+    for (const incoming of group.items || []) {
+      const matched = matchVariable(itemsAsDefs, incoming);
+      let variable: Variable | undefined;
+      let isNew = false;
+      if (matched) {
+        variable = existingInCollection.find((candidate) =>
+          (matched.by === "id" && (candidate.getPluginData("compactDesignId") === incoming.id || candidate.getPluginData("compactDesignId") === matched.variable.id))
+          || (matched.by === "name" && candidate.name === incoming.name)
+        ) || existingInCollection.find((candidate) => candidate.name === matched.variable.name);
+      }
+
+      if (variable) {
+        const snapshot = { ...variable.valuesByMode };
+        const target = variable;
+        undoLog.push({
+          kind: "resource",
+          restore: async () => {
+            for (const [modeId, value] of Object.entries(snapshot)) {
+              try { target.setValueForMode(modeId, value as VariableValue); } catch { /* ignore */ }
+            }
+          }
+        });
+      } else {
+        variable = figma.variables.createVariable(incoming.name, collection, incoming.type || "FLOAT");
+        isNew = true;
+        const created = variable;
+        undoLog.push({
+          kind: "resource",
+          restore: async () => { try { created.remove(); } catch { /* ignore */ } }
+        });
+        itemsAsDefs.push({ id: incoming.id, name: incoming.name, type: incoming.type });
+        existingInCollection.push(variable);
+      }
+
+      const unavailable = resources.unavailableVariableModes.get(collectionName) || resources.unavailableVariableModes.get(collection.id);
+      for (const mode of collection.modes) {
+        let raw: unknown;
+        if (incoming.values) raw = incoming.values[mode.name];
+        else if (incoming.value !== undefined && mode.modeId === collection.modes[0].modeId) raw = incoming.value;
+        else continue;
+        if (raw === undefined) continue;
+        if (unavailable?.has(mode.name)) continue;
+        const rawObject = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as JsonObject : {};
+        const resolved = incoming.type === "COLOR" ? { ...color(raw), a: clamp(finite(rawObject.a, 1), 0, 1) } : raw;
+        variable.setValueForMode(mode.modeId, resolved as VariableValue);
+      }
+      const compactId = incoming.id || variable.getPluginData("compactDesignId") || incoming.name;
+      registerVariable(resources, variable, compactId, collection, undoLog, isNew);
+    }
+  }
+
+  // --- Phase 4: styles ---
+  const paintList = uniqueStyles(resources.paintStyles as Map<string, PaintStyle | TextStyle>).map((style) => ({
+    id: style.getPluginData?.("compactDesignId") || undefined,
+    name: style.name,
+    type: "PAINT" as const,
+    paints: [] as StyleDefinition["paints"]
+  }));
+  const textList = uniqueStyles(resources.textStyles as Map<string, PaintStyle | TextStyle>).map((style) => {
+    const textStyle = style as TextStyle;
+    return {
+      id: style.getPluginData?.("compactDesignId") || undefined,
+      name: style.name,
+      type: "TEXT" as const,
+      font: { family: textStyle.fontName.family, style: textStyle.fontName.style, size: textStyle.fontSize }
+    };
+  });
+  const styleDefs: StyleDefinition[] = [...paintList, ...textList];
+
+  for (const incoming of (patch.styles || []) as PatchStyleDefinition[]) {
+    const matched = matchStyle(styleDefs, incoming);
+    if (incoming.type === "PAINT") {
+      let style: PaintStyle | undefined;
+      let isNew = false;
+      if (matched) {
+        style = (matched.by === "id"
+          ? resources.paintStyles.get(incoming.id!)
+          : resources.paintStyles.get(matched.style.name)) as PaintStyle | undefined;
+        if (!style) style = [...resources.paintStyles.values()].find((candidate) => candidate.name === matched.style.name);
+        if (style) {
+          const snapshot = style.paints.map((paint) => ({ ...paint }));
+          const target = style;
+          undoLog.push({
+            kind: "resource",
+            restore: async () => { target.paints = snapshot as Paint[]; }
+          });
+          if (incoming.paints) style.paints = await paints(incoming.paints);
+        }
+      }
+      if (!style) {
+        style = figma.createPaintStyle();
+        style.name = incoming.name;
+        if (incoming.paints) style.paints = await paints(incoming.paints);
+        resources.createdStyles.push(style);
+        isNew = true;
+        const created = style;
+        undoLog.push({
+          kind: "resource",
+          restore: async () => { try { created.remove(); } catch { /* ignore */ } }
+        });
+        styleDefs.push({ id: incoming.id, name: incoming.name, type: "PAINT", paints: [] });
+      }
+      const compactId = incoming.id || style.getPluginData("compactDesignId") || incoming.name;
+      registerStyle(resources, style, compactId, "PAINT", undoLog, isNew);
+    } else {
+      let style: TextStyle | undefined;
+      let isNew = false;
+      if (matched) {
+        style = (matched.by === "id"
+          ? resources.textStyles.get(incoming.id!)
+          : resources.textStyles.get(matched.style.name)) as TextStyle | undefined;
+        if (!style) style = [...resources.textStyles.values()].find((candidate) => candidate.name === matched.style.name);
+        if (style) {
+          const snapshot = {
+            fontName: { ...style.fontName },
+            fontSize: style.fontSize,
+            lineHeight: style.lineHeight,
+            letterSpacing: style.letterSpacing,
+            paragraphSpacing: style.paragraphSpacing
+          };
+          const target = style;
+          undoLog.push({
+            kind: "resource",
+            restore: async () => {
+              target.fontName = snapshot.fontName;
+              target.fontSize = snapshot.fontSize;
+              target.lineHeight = snapshot.lineHeight;
+              target.letterSpacing = snapshot.letterSpacing;
+              target.paragraphSpacing = snapshot.paragraphSpacing;
+            }
+          });
+          if (incoming.font) {
+            const family = incoming.font.family ?? style.fontName.family;
+            const fontStyle = incoming.font.style ?? style.fontName.style;
+            style.fontName = await loadFont({ family, style: fontStyle, size: incoming.font.size ?? style.fontSize });
+            if (typeof incoming.font.size === "number") style.fontSize = incoming.font.size;
+          }
+          if (incoming.lineHeight !== undefined) {
+            style.lineHeight = typeof incoming.lineHeight === "number"
+              ? { unit: "PERCENT", value: incoming.lineHeight }
+              : incoming.lineHeight.unit === "AUTO"
+                ? { unit: "AUTO" }
+                : { unit: incoming.lineHeight.unit, value: incoming.lineHeight.value || 0 };
+          }
+          if (incoming.letterSpacing !== undefined) {
+            style.letterSpacing = { unit: incoming.letterSpacing.unit, value: incoming.letterSpacing.value };
+          }
+          if (incoming.paragraphSpacing !== undefined) style.paragraphSpacing = incoming.paragraphSpacing;
+        }
+      }
+      if (!style) {
+        const family = incoming.font?.family;
+        const fontStyle = incoming.font?.style;
+        if (!family || !fontStyle) throw new Error(`styles: creating a TEXT style requires font.family and font.style`);
+        style = figma.createTextStyle();
+        style.name = incoming.name;
+        style.fontName = await loadFont({ family, style: fontStyle, size: incoming.font?.size ?? 16 });
+        if (typeof incoming.font?.size === "number") style.fontSize = incoming.font.size;
+        resources.createdStyles.push(style);
+        isNew = true;
+        const created = style;
+        undoLog.push({
+          kind: "resource",
+          restore: async () => { try { created.remove(); } catch { /* ignore */ } }
+        });
+        styleDefs.push({ id: incoming.id, name: incoming.name, type: "TEXT", font: { family, style: fontStyle, size: incoming.font?.size ?? 16 } });
+      }
+      const compactId = incoming.id || style.getPluginData("compactDesignId") || incoming.name;
+      registerStyle(resources, style, compactId, "TEXT", undoLog, isNew);
+    }
+  }
+
+  resources.warnings = warnings;
+  return { warnings, affectedKeys: planned.affectedKeys };
+}

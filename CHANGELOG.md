@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking (pre-1.0)
+
+- **`{ patch, nodes }` rejected** — the patch schema branch now forbids top-level `nodes` next to `patch` (previously silently dropped, same class as `canvas` / `canvases`).
+
+### Features
+
+- **feat(core,figma,mcp): upsert `variables` / `styles` in a patch document** — patch documents may carry top-level tokens; they are upserted before operations so later ops can bind. Shared `applyResourceUpsert` / `matchStyle` / `matchVariable` keep core and Figma in lockstep. Figma snapshots touched tokens (including `compactDesignId`) and restores them on failure. Empty `operations` is allowed when `variables`/`styles` are present (token-only patches). Name-match with a different id, and duplicate ids across collections, are `PATCH_RESOURCE_CONFLICT`. New variables missing a mode value fail in the shared plan (`PATCH_RESOURCE_INVALID`). Unknown mode keys in `values` are `PATCH_RESOURCE_INVALID`. Mode 0 is never renamed by a patch.
+
 ## 0.3.0 — 2026-10-06
 
 Published packages: `@compact-design/core`, `@compact-design/html`, `@compact-design/mcp` (Figma plugin is not on npm).

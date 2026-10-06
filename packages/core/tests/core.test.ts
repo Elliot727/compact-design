@@ -6,7 +6,7 @@ import { parseDocument } from "../src/parser";
 import { isPatchDocument, normalizeDocument, normalizePatchDocument } from "../src/normalize";
 import { validateDocument } from "../src/validate";
 import { lintDocument, validationIssues } from "../src/lint";
-import { applyPatch, lint, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, remapDelimitedIds, remapIssueKeyThroughDuplicate, schema, validate, validatePatch } from "../src/index";
+import { applyPatch, lint, matchStyle, matchVariable, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, remapDelimitedIds, remapIssueKeyThroughDuplicate, schema, validate, validatePatch } from "../src/index";
 import type { InternalDocument, InternalNode } from "../src/types";
 import { indexDocument } from "../src/references";
 
@@ -1739,3 +1739,319 @@ test("patch set prototype: rollback leaves reactions untouched when a later op f
   ))), /does not apply|text/);
   assert.equal(JSON.stringify(nodeById(seeded, "screen").properties.prototype), before);
 });
+
+// --- Patch resource upsert (variables / styles) -----------------------------
+
+test("patch variables/styles: silent-drop repro is now valid and brand resolves", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ff0000" }]
+  });
+  const patch = {
+    variables: [{ name: "T", items: [{ id: "brand", name: "brand", type: "COLOR", value: { r: 214, g: 92, b: 40, a: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "cta", set: { bindings: { fill: "brand" } } }] }
+  };
+  assert.equal(validate(patch).valid, true);
+  const result = validatePatch(document, patch);
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+  assert.equal(nodeById(result.document!, "cta").properties.bindings?.fill, "brand");
+  assert.ok(result.document!.variables.some((collection) => collection.items.some((item) => item.id === "brand")));
+  assert.ok(result.affectedIds?.includes("variable:T/brand"));
+});
+
+test("patch resource upsert keeps unmentioned modes and value writes only mode 0", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 }, Dark: { r: 0, g: 0, b: 1, a: 1 } } }]
+    }]
+  });
+  const keep = applyPatch(document, normalizePatch({
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 214, g: 92, b: 40, a: 1 } } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  const brand = keep.document.variables[0].items[0];
+  assert.deepEqual(brand.values?.Light, { r: 214, g: 92, b: 40, a: 1 });
+  assert.deepEqual(brand.values?.Dark, { r: 0, g: 0, b: 1, a: 1 });
+
+  const firstOnly = applyPatch(document, normalizePatch({
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", value: { r: 9, g: 9, b: 9, a: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.deepEqual(firstOnly.document.variables[0].items[0].values?.Light, { r: 9, g: 9, b: 9, a: 1 });
+  assert.deepEqual(firstOnly.document.variables[0].items[0].values?.Dark, { r: 0, g: 0, b: 1, a: 1 });
+});
+
+test("patch resource upsert seeds new modes from mode 0 for unmentioned variables", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{
+      name: "Theme",
+      modes: ["Light"],
+      items: [
+        { id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 2, b: 3, a: 1 } } },
+        { id: "ink", name: "color/ink", type: "COLOR", values: { Light: { r: 0, g: 0, b: 0, a: 1 } } }
+      ]
+    }]
+  });
+  const result = applyPatch(document, normalizePatch({
+    variables: [{
+      name: "Theme",
+      modes: ["Light", "Dark"],
+      items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Dark: { r: 9, g: 9, b: 9, a: 1 } } }]
+    }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.deepEqual(result.document.variables[0].modes, ["Light", "Dark"]);
+  const ink = result.document.variables[0].items.find((item) => item.id === "ink")!;
+  assert.deepEqual(ink.values?.Dark, { r: 0, g: 0, b: 0, a: 1 }, "unmentioned var seeded from mode 0");
+  const brand = result.document.variables[0].items.find((item) => item.id === "brand")!;
+  assert.deepEqual(brand.values?.Dark, { r: 9, g: 9, b: 9, a: 1 });
+  assert.deepEqual(document.variables[0].modes, ["Light"], "input document not mutated");
+});
+
+test("patch resource upsert: unknown mode in values is an error", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "x", name: "x", type: "FLOAT", values: { Light: 1 } }] }]
+  });
+  const result = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "x", name: "x", type: "FLOAT", values: { Dark: 2 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(result.issues[0].message, /mode 'Dark'/);
+});
+
+test("patch resource upsert: type conflict and id/name mismatch", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 1, b: 1, a: 1 } } }] }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#111111"] }]
+  });
+  const typeClash = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ name: "color/brand", type: "FLOAT", value: 1 }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(typeClash.valid, false);
+  assert.equal(typeClash.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+
+  const rename = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/other", type: "COLOR", value: { r: 1, g: 0, b: 0, a: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(rename.valid, false);
+  assert.equal(rename.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(rename.issues[0].message, /cannot rename/);
+
+  const styleType = validatePatch(document, {
+    styles: [{ id: "ink", name: "Ink", type: "TEXT", font: { family: "Inter", style: "Bold", size: 20 } }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(styleType.valid, false);
+  assert.equal(styleType.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+});
+
+test("patch resource upsert: TEXT font merge and PAINT replace; style match by id then name", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    styles: [
+      { id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 32 } },
+      { id: "ink", name: "Ink", type: "PAINT", paints: ["#111111"] }
+    ]
+  });
+  const merged = applyPatch(document, normalizePatch({
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { size: 44 } }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.deepEqual(merged.document.styles.find((style) => style.id === "heading")?.font, { family: "Inter", style: "Bold", size: 44 });
+
+  const byName = applyPatch(document, normalizePatch({
+    styles: [{ name: "Ink", type: "PAINT", paints: ["#FF0000"] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.equal(byName.document.styles.find((style) => style.name === "Ink")?.paints?.[0].type, "SOLID");
+
+  // Match by id when name differs would be a conflict; match by id with same name:
+  const byId = applyPatch(document, normalizePatch({
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { style: "Medium" } }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.equal(byId.document.styles.find((style) => style.id === "heading")?.font?.style, "Medium");
+  assert.equal(byId.document.styles.find((style) => style.id === "heading")?.font?.family, "Inter");
+});
+
+test("patch resource upsert: later op binds new token; without upsert still fails; incomplete values; schema rejects nodes", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ff0000" }]
+  });
+  const withToken = validatePatch(document, {
+    variables: [{ name: "T", modes: ["Light"], items: [{ id: "brand", name: "brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    patch: { operations: [{ op: "set", id: "cta", set: { bindings: { fill: "brand" } } }] }
+  });
+  assert.equal(withToken.valid, true);
+
+  const without = validatePatch(document, {
+    patch: { operations: [{ op: "set", id: "cta", set: { bindings: { fill: "brand" } } }] }
+  });
+  assert.equal(without.valid, false);
+  assert.match(without.issues.map((issue) => issue.message).join("\n"), /variable 'brand' is not defined/);
+
+  const incomplete = validatePatch(document, {
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [{ id: "x", name: "x", type: "FLOAT", values: { Light: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(incomplete.valid, false);
+  assert.equal(incomplete.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(incomplete.issues[0].message, /missing values for mode.*Dark/);
+
+  const nodesReject = validate({
+    patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] },
+    nodes: [{ id: "ghost", type: "RECTANGLE", w: 1, h: 1 }]
+  });
+  assert.equal(nodesReject.valid, false);
+});
+
+test("patch resource upsert: modes[0] is never renamed on an existing collection", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "x", name: "x", type: "FLOAT", values: { Light: 1 } }] }]
+  });
+  const result = applyPatch(document, normalizePatch({
+    variables: [{ name: "Theme", modes: ["Dark", "Night"], items: [{ id: "x", name: "x", type: "FLOAT", values: { Dark: 2, Night: 3 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  }));
+  assert.deepEqual(result.document.variables[0].modes, ["Light", "Dark", "Night"]);
+  assert.equal(result.document.variables[0].items[0].values?.Light, 1);
+  assert.equal(result.document.variables[0].items[0].values?.Dark, 2);
+});
+
+test("patch resource upsert: shared matchStyle/matchVariable prefer id over name", () => {
+  const styles = [
+    { id: "a", name: "Alpha", type: "PAINT" as const, paints: [] },
+    { id: "b", name: "Beta", type: "PAINT" as const, paints: [] }
+  ];
+  assert.equal(matchStyle(styles, { id: "b", name: "Alpha" })?.by, "id");
+  assert.equal(matchStyle(styles, { id: "b", name: "Alpha" })?.style.name, "Beta");
+  assert.equal(matchStyle(styles, { name: "Alpha" })?.by, "name");
+
+  const items = [
+    { id: "v1", name: "gap", type: "FLOAT" as const, value: 8 },
+    { id: "v2", name: "radius", type: "FLOAT" as const, value: 4 }
+  ];
+  assert.equal(matchVariable(items, { id: "v2", name: "gap" })?.by, "id");
+  assert.equal(matchVariable(items, { name: "gap" })?.by, "name");
+});
+
+test("patch resource upsert: pre-existing token issue does not block", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [
+      { id: "ok", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" },
+      { id: "broken", type: "RECTANGLE", w: 10, h: 10, fill: "#fff", bindings: { fill: "missing-preexisting" } }
+    ],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const result = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "brand", type: "COLOR", values: { Light: { r: 0, g: 1, b: 0, a: 1 } } }] }],
+    patch: { operations: [{ op: "set", id: "ok", set: { bindings: { fill: "brand" } } }] }
+  });
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+});
+
+test("Gate #45.1: token-only patch with empty operations is valid", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#ff0000" }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const patch = {
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 0.2, g: 0.3, b: 0.4, a: 1 } } }] }],
+    patch: { operations: [] }
+  };
+  assert.equal(validate(patch).valid, true, validate(patch).issues.map((issue) => issue.message).join("; "));
+  const result = validatePatch(document, patch);
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.deepEqual(result.document!.variables[0].items[0].values?.Light, { r: 0.2, g: 0.3, b: 0.4, a: 1 });
+
+  const empty = validate({ patch: { operations: [] } });
+  assert.equal(empty.valid, false, "fully empty patch still rejected");
+});
+
+test("Gate #45.2: name match with different id is PATCH_RESOURCE_CONFLICT (styles + variables)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 32 } }]
+  });
+  const styleClash = validatePatch(document, {
+    styles: [{ id: "h2", name: "Heading", type: "TEXT", font: { size: 44 } }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(styleClash.valid, false);
+  assert.equal(styleClash.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(styleClash.issues[0].message, /already has id 'heading'/);
+
+  const varClash = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "brand2", name: "color/brand", type: "COLOR", value: { r: 0, g: 1, b: 0, a: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(varClash.valid, false);
+  assert.equal(varClash.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(varClash.issues[0].message, /already has id 'brand'/);
+});
+
+test("Gate #45.3: variable and style ids must be unique across collections", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#111"] }]
+  });
+  const dupVar = validatePatch(document, {
+    variables: [{ name: "Other", modes: ["Light"], items: [{ id: "brand", name: "other/brand", type: "COLOR", values: { Light: { r: 0, g: 1, b: 0, a: 1 } } }] }],
+    patch: { operations: [] }
+  });
+  assert.equal(dupVar.valid, false);
+  assert.equal(dupVar.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(dupVar.issues[0].message, /already used by 'Theme\/color\/brand'/);
+
+  // Style ids: matching by id with a different name is also CONFLICT (no rename / no second style with that id).
+  const dupStyle = validatePatch(document, {
+    styles: [{ id: "ink", name: "InkAlt", type: "PAINT", paints: ["#222222"] }],
+    patch: { operations: [] }
+  });
+  assert.equal(dupStyle.valid, false);
+  assert.equal(dupStyle.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(dupStyle.issues[0].message, /already bound to name 'Ink'|already used by 'Ink'/);
+});
+
+test("Gate #45.4: new variable missing a mode value fails in the shared plan", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [] }]
+  });
+  // Empty items on existing collection — patch creates incomplete variable
+  const result = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Light: 8 } }] }],
+    patch: { operations: [] }
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(result.issues[0].message, /missing values for mode.*Dark/);
+  // Input document unchanged
+  assert.equal(document.variables[0].items.length, 0);
+});
+

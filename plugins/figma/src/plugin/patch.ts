@@ -4,7 +4,7 @@ import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapI
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
 import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma, assertPendingVariantAxesCarried } from "./patch-definitions";
 import { buildReactions, prototypeRoot } from "./prototype";
-import { applyResourcePatch } from "./resources";
+import { applyResourcePatch, upsertPatchResources, type ResourceUndoEntry } from "./resources";
 import { clamp, finite } from "./value";
 
 const CONTAINER_TYPES = new Set(["FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "SECTION", "BOOLEAN_OPERATION"]);
@@ -475,7 +475,8 @@ type Container = BaseNode & ChildrenMixin;
 type Undo =
   | { kind: "replace"; original: SceneNode; backup: SceneNode; parent: Container; index: number; counterparts: Array<[SceneNode, SceneNode]> }
   | { kind: "create"; node: SceneNode }
-  | { kind: "move"; node: SceneNode; parent: Container; index: number; x: number; y: number };
+  | { kind: "move"; node: SceneNode; parent: Container; index: number; x: number; y: number }
+  | ResourceUndoEntry;
 
 function pairSubtree(original: SceneNode, copy: SceneNode, out: Array<[SceneNode, SceneNode]>): void {
   out.push([original, copy]);
@@ -495,6 +496,10 @@ async function rollback(log: Undo[], holder: FrameNode | null): Promise<void> {
   const resolve = <T extends BaseNode>(node: T): T => { let current: BaseNode = node; while (replaced.has(current)) current = replaced.get(current)!; return current as T; };
   for (let i = log.length - 1; i >= 0; i--) {
     const entry = log[i];
+    if (entry.kind === "resource") {
+      await entry.restore();
+      continue;
+    }
     if (entry.kind === "create") {
       const node = resolve(entry.node);
       if (!node.removed) node.remove();
@@ -720,6 +725,7 @@ async function assertNoDanglingPrototypeDestinations(nodes: Map<string, SceneNod
 export async function applyPatch(document: InternalPatchDocument, context: ImportContext): Promise<{ affected: SceneNode[]; warnings: string[] }> {
   clearEffectWarnings();
   const nodes = indexNodes();
+  // Node-id preflight before any mutation (tokens are not required for id checks).
   preflight(document, nodes);
 
   const affected: SceneNode[] = [];
@@ -737,6 +743,10 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
   };
 
   try {
+    // Upsert tokens before ops so bindings/styleRefs can resolve same-patch ids.
+    const resourceResult = await upsertPatchResources(document, context.resources, log);
+    warnings.push(...resourceResult.warnings.filter((warning) => !warnings.includes(warning)));
+
     for (const [operationIndex, operation] of document.patch.operations.entries()) {
       if (operation.op === "SET" || operation.op === "REMOVE") {
         const original = resolveNode(nodes, operation.id!)!;

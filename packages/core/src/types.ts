@@ -171,6 +171,22 @@ export interface PatchOperation {
   ids?: Record<string, string>;
 }
 
+/** Style carried on a patch document. TEXT font may be partial (merge on upsert). */
+export interface PatchStyleDefinition {
+  id?: string;
+  name: string;
+  type: "PAINT" | "TEXT";
+  paints?: DesignPaint[];
+  font?: Partial<DesignFont>;
+  lineHeight?: LineHeight | number;
+  letterSpacing?: LetterSpacing;
+  paragraphSpacing?: number;
+}
+
 export interface InternalPatchDocument {
   patch: { operations: PatchOperation[] };
+  /** Upserted before operations; same shape as a full document's variables. */
+  variables?: VariableCollectionDefinition[];
+  /** Upserted before operations; TEXT font fields merge like patch set.font. */
+  styles?: PatchStyleDefinition[];
 }
