@@ -697,16 +697,21 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
   assert.deepEqual(Object.keys(PATCH_SET_APPLIES_TO).sort(), [...PATCH_SET_KEYS].sort());
   // Every patchSet property schema is the node property schema, except the partial
   // nested patches and descriptions documenting deferred/immutable keys.
+  const mergePatchKeys = new Set(["bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences"]);
   for (const key of expected) {
     const { description: _description, ...patchProperty } = specSchema.$defs.patchSet.properties[key];
     if (key === "layout") assert.deepEqual(patchProperty, { $ref: "#/$defs/layoutPatch" });
     else if (key === "constraints") assert.deepEqual(patchProperty, { $ref: "#/$defs/constraintsPatch" });
     else if (key === "font") assert.deepEqual(patchProperty, { $ref: "#/$defs/fontPatch" });
+    else if (mergePatchKeys.has(key)) {
+      assert.ok(Array.isArray(patchProperty.oneOf), `${key} patch schema allows null clear via oneOf`);
+      assert.ok(patchProperty.oneOf.some((entry: { type?: string }) => entry.type === "null"), `${key} allows null`);
+    }
     else assert.deepEqual(patchProperty, specSchema.$defs.node.properties[key], key);
   }
   assert.equal(specSchema.$defs.layoutPatch.required, undefined);
   assert.deepEqual(specSchema.$defs.patchOperation.oneOf[0].properties.set, { $ref: "#/$defs/patchSet" });
-  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "instanceProperties", "componentPropertyReferences", "variantAxes", "variant", "prototype", "styleRefs", "bindings", "variableModes"]);
+  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "variantAxes", "variant", "prototype"]);
 });
 
 test("a typo set key fails in the schema and in core", () => {
@@ -728,14 +733,19 @@ test("a typo set key fails in the schema and in core", () => {
 });
 
 test("patch documents no longer short-circuit validation", () => {
-  for (const set of [{ bindings: { fill: "brand" } }, { styleRefs: { fill: "Brand" } }, { variant: { State: "On" } }, { instanceProperties: { Label: "x" } }, { prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }]) {
+  // Still rejected: deferred keys, immutable svg, and conflicting fill+fills.
+  for (const set of [{ variant: { State: "On" } }, { prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }, { componentId: "x" }, { componentProperties: [] }, { variantAxes: {} }]) {
     const result = validate(patchOf(setOp("title", set)));
     assert.equal(result.valid, false, JSON.stringify(set));
   }
-  const deferred = validate(patchOf(setOp("title", { bindings: { fill: "brand" } })));
+  const deferred = validate(patchOf(setOp("title", { prototype: [] })));
   assert.equal(deferred.issues[0].code, "PATCH_SET_UNSUPPORTED");
-  assert.equal(deferred.issues[0].path, "patch.operations[0].set.bindings");
+  assert.equal(deferred.issues[0].path, "patch.operations[0].set.prototype");
   assert.match(deferred.issues[0].message, /cannot be patched yet/);
+  // Newly patchable object keys pass shape validation (target rules run at apply).
+  assert.equal(validate(patchOf(setOp("title", { bindings: { fill: "brand" } }))).valid, true);
+  assert.equal(validate(patchOf(setOp("title", { styleRefs: { fill: "Brand" } }))).valid, true);
+  assert.equal(validate(patchOf(setOp("title", { instanceProperties: { Label: "x" } }))).valid, true);
 });
 
 test("set on TEXT adds no defaults: no fill injection and no Arial", () => {
@@ -845,7 +855,7 @@ test("set on a node inserted earlier in the same patch applies in core (Figma pr
   assert.equal(nodeById(result, "fresh").properties.size.width, 9);
 });
 
-test("set rejects keys that do not apply to the target type and bound or style-linked fields", () => {
+test("set rejects keys that do not apply to the target type; bound/style overwrite detaches with WARNING", () => {
   const document = baseDocument();
   rejects(document, /'text' does not apply to RECTANGLE/, setOp("leaf", { text: "x" }));
   rejects(document, /'w' does not apply to GROUP/, setOp("group", { w: 80 }));
@@ -861,10 +871,71 @@ test("set rejects keys that do not apply to the target type and bound or style-l
       { id: "copy", type: "TEXT", w: 10, h: 10, text: "x", styleRefs: { text: "body" } }
     ]
   });
-  rejects(bound, /variable-bound field\(s\) width/, setOp("box", { w: 20 }));
-  rejects(bound, /linked to a text style/, setOp("copy", { font: { size: 20 } }));
-  const recoloured = applyRaw(bound, setOp("box", { fill: "#FFFFFF" }));
-  assert.deepEqual(nodeById(recoloured, "box").properties.bindings, { width: "size" }, "setting fill detaches the fill binding, as in Figma");
+  const widened = applyPatch(bound, normalizePatch(patchOf(setOp("box", { w: 20 }))));
+  assert.equal(nodeById(widened.document, "box").properties.size.width, 20);
+  assert.equal(nodeById(widened.document, "box").properties.bindings?.width, undefined);
+  assert.ok(widened.warnings.some((w) => /detached bindings\.width/.test(w)));
+  const restyled = applyPatch(bound, normalizePatch(patchOf(setOp("copy", { font: { size: 20 } }))));
+  assert.equal(nodeById(restyled.document, "copy").properties.styleRefs?.text, undefined);
+  assert.ok(restyled.warnings.some((w) => /detached styleRefs\.text/.test(w)));
+  const recoloured = applyPatch(bound, normalizePatch(patchOf(setOp("box", { fill: "#FFFFFF" }))));
+  assert.deepEqual(nodeById(recoloured.document, "box").properties.bindings, { width: "size" }, "setting fill detaches the fill binding, as in Figma");
+  assert.ok(recoloured.warnings.some((w) => /detached bindings\.fill/.test(w)), "fill detach emits a WARNING");
+});
+
+test("patch merges bindings/styleRefs/variableModes; null clears a single key", () => {
+  const document = normalize({
+    canvas: { width: 100, height: 100 },
+    variables: [{ name: "Tokens", modes: ["Light", "Dark"], items: [
+      { id: "brand", name: "brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0 }, Dark: { r: 0, g: 0, b: 1 } } },
+      { id: "ink", name: "ink", type: "COLOR", values: { Light: { r: 0, g: 0, b: 0 }, Dark: { r: 1, g: 1, b: 1 } } },
+      { id: "gap", name: "gap", type: "FLOAT", values: { Light: 8, Dark: 12 } }
+    ] }],
+    styles: [{ id: "ink-style", name: "Ink", type: "PAINT", paints: ["#111111"] }],
+    nodes: [{ id: "box", type: "FRAME", w: 40, h: 40, fill: "#FFFFFF", bindings: { fill: "brand", width: "gap" }, styleRefs: { stroke: "ink-style" }, variableModes: { Tokens: "Light" } }]
+  });
+  const merged = applyPatch(document, normalizePatch(patchOf(setOp("box", {
+    bindings: { opacity: "gap", fill: null },
+    styleRefs: { fill: "ink-style" },
+    variableModes: { Tokens: "Dark" }
+  }))));
+  assert.deepEqual(nodeById(merged.document, "box").properties.bindings, { width: "gap", opacity: "gap" });
+  assert.deepEqual(nodeById(merged.document, "box").properties.styleRefs, { stroke: "ink-style", fill: "ink-style" });
+  assert.deepEqual(nodeById(merged.document, "box").properties.variableModes, { Tokens: "Dark" });
+  const cleared = applyPatch(merged.document, normalizePatch(patchOf(setOp("box", { bindings: null, styleRefs: { stroke: null } }))));
+  assert.equal(nodeById(cleared.document, "box").properties.bindings, undefined);
+  assert.deepEqual(nodeById(cleared.document, "box").properties.styleRefs, { fill: "ink-style" });
+});
+
+test("patch instanceProperties and componentPropertyReferences merge with validation", () => {
+  const document = normalize({
+    canvas: { width: 200, height: 100 },
+    nodes: [
+      { id: "icon-a", type: "COMPONENT", name: "IconA", w: 16, h: 16, fill: "#000000" },
+      { id: "icon-b", type: "COMPONENT", name: "IconB", w: 16, h: 16, fill: "#FF0000" },
+      {
+        id: "button", type: "COMPONENT", name: "Button", w: 120, h: 40, fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Go" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon-a" }
+        ],
+        children: [
+          { id: "button-label", type: "TEXT", name: "Label", w: 80, h: 20, text: "Go", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } },
+          { id: "button-icon", type: "INSTANCE", name: "Icon", componentId: "icon-a", w: 16, h: 16, componentPropertyReferences: { visible: "ShowIcon", mainComponent: "Icon" } }
+        ]
+      },
+      { id: "cta", type: "INSTANCE", componentId: "button", w: 120, h: 40, instanceProperties: { Label: "Continue", ShowIcon: true, Icon: "icon-a" } }
+    ]
+  });
+  const patched = applyPatch(document, normalizePatch(patchOf(
+    setOp("cta", { instanceProperties: { Label: "Submit", Icon: "icon-b", ShowIcon: null } }),
+    setOp("button-label", { componentPropertyReferences: { visible: "ShowIcon" } })
+  )));
+  assert.deepEqual(nodeById(patched.document, "cta").properties.instanceProperties, { Label: "Submit", Icon: "icon-b" });
+  assert.deepEqual(nodeById(patched.document, "button-label").properties.componentPropertyReferences, { characters: "Label", visible: "ShowIcon" });
+  rejects(document, /missing-icon|INSTANCE_SWAP|not defined|is a /, setOp("cta", { instanceProperties: { Icon: "missing-icon" } }));
+  rejects(document, /Nope|not defined|unknown/, setOp("button-label", { componentPropertyReferences: { characters: "Nope" } }));
 });
 
 test("validatePatch reports bad references in the patched document", () => {

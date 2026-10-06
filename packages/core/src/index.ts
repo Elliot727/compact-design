@@ -60,7 +60,7 @@ function patchKeyIssues(value: unknown): RepairIssue[] {
   return issues;
 }
 
-export interface PatchValidationResult { valid: boolean; issues: RepairIssue[]; patch?: InternalPatchDocument; document?: InternalDocument; affectedIds?: string[]; }
+export interface PatchValidationResult { valid: boolean; issues: RepairIssue[]; patch?: InternalPatchDocument; document?: InternalDocument; affectedIds?: string[]; warnings?: string[]; }
 
 /**
  * Validate a raw patch against the document it will be applied to: schema,
@@ -75,7 +75,7 @@ export function validatePatch(document: InternalDocument, patch: unknown): Patch
   if (!checked.patch) return { valid: false, issues: [{ severity: "ERROR", code: "PATCH_EXPECTED", path: "$", message: "Expected a patch document with a top-level patch.operations array.", suggestion: "Wrap operations in { \"patch\": { \"operations\": [...] } }." }] };
   try {
     const result = applyDocumentPatch(document, checked.patch);
-    return { valid: true, issues: [], patch: checked.patch, document: result.document, affectedIds: result.affectedIds };
+    return { valid: true, issues: [], patch: checked.patch, document: result.document, affectedIds: result.affectedIds, warnings: result.warnings };
   } catch (error) {
     return { valid: false, issues: error instanceof PatchError ? error.issues : [parseIssue(error, "PATCH_OPERATION")], patch: checked.patch };
   }

@@ -111,7 +111,8 @@ Without \`componentPropertyReferences\`, instance overrides do not affect childr
 - \`x\`/\`y\` are parent-relative and move the subtree. They are ERRORs under Auto Layout unless \`layoutPositioning: "ABSOLUTE"\`, and on children of a GROUP/BOOLEAN_OPERATION.
 - A partial \`layout\` on a frame without Auto Layout needs \`direction\`. \`counterAxisAlignItems: "STRETCH"\` is not patchable.
 - \`text\` + \`runs\`: text is the content and runs style ranges. runs alone: every run needs \`text\`. Replacing the content of text with per-range styling is an ERROR, so remove + insert it instead. On mixed-font text, send \`font.family\` and \`font.style\` together (\`font.size\` alone is fine).
-- Not patchable yet (ERROR): bindings, styleRefs, variableModes, prototype, componentId, componentProperties, instanceProperties, componentPropertyReferences, variantAxes, variant. \`svg\` can't be patched; remove + insert. Changing typography on a text-style-linked node, or a variable-bound field, is an ERROR.
+- Patchable (shallow-merge; field \`null\` clears): bindings, styleRefs, variableModes, instanceProperties, componentPropertyReferences. Setting raw fill/font on a bound/styled node detaches with a WARNING.
+- Not patchable yet (ERROR): prototype, componentId, componentProperties, variantAxes, variant. \`svg\` can't be patched; remove + insert.
 A failed patch rolls back completely.
 
 ## Workflow

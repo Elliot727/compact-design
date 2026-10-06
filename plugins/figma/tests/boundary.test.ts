@@ -305,12 +305,17 @@ test("selection export still requires a selection", () => {
   assert.throws(() => planExport([], { scope: "selection", selectionIds: [] }), /Select at least one/);
 });
 
-test("export path reads instance main components asynchronously under dynamic-page", () => {
+test("export and patch paths read instance main components asynchronously under dynamic-page", () => {
   const exporter = readFileSync("src/plugin/exporter.ts", "utf8");
+  const patch = readFileSync("src/plugin/patch.ts", "utf8");
+  const nodes = readFileSync("src/plugin/nodes.ts", "utf8");
   const main = readFileSync("src/plugin/main.ts", "utf8");
+  for (const [name, source] of [["exporter", exporter], ["patch", patch], ["nodes", nodes]] as const) {
+    assert.doesNotMatch(source, /\.mainComponent\b/, `${name} must not sync-read InstanceNode.mainComponent`);
+    assert.doesNotMatch(source, /(?<!get)getMainComponent\s*\(/, `${name} must not call sync getMainComponent()`);
+  }
   assert.match(exporter, /getMainComponentAsync\s*\(/);
-  assert.doesNotMatch(exporter, /\.mainComponent\b/);
-  assert.doesNotMatch(exporter, /(?<!get)getMainComponent\s*\(/);
+  assert.match(patch, /getMainComponentAsync\s*\(/);
   assert.match(main, /await collectExportCandidates\(/);
   assert.match(readFileSync("manifest.json", "utf8"), /"documentAccess"\s*:\s*"dynamic-page"/);
 });
@@ -623,7 +628,7 @@ const NO_SCENE_PROPS = new Set(["PAGE"]);
 
 function typeDefaults(type: string): Record<string, unknown> {
   if (NO_SCENE_PROPS.has(type)) return {};
-  const base: Record<string, unknown> = { opacity: 1, blendMode: "PASS_THROUGH", visible: true, locked: false, isMask: false, boundVariables: {} };
+  const base: Record<string, unknown> = { opacity: 1, blendMode: "PASS_THROUGH", visible: true, locked: false, isMask: false, boundVariables: {}, fillStyleId: "", strokeStyleId: "", textStyleId: "", explicitVariableModes: {} };
   if (type === "GROUP" || type === "BOOLEAN_OPERATION") return { ...base, layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO", ...(type === "BOOLEAN_OPERATION" ? { booleanOperation: "UNION", strokeWeight: 1, strokeAlign: "CENTER", strokeJoin: "MITER", dashPattern: [], constraints: { horizontal: "MIN", vertical: "MIN" } } : {}) };
   Object.assign(base, {
     strokeWeight: 1, strokeAlign: "INSIDE", strokeJoin: "MITER", dashPattern: [],
@@ -652,7 +657,13 @@ function typeDefaults(type: string): Record<string, unknown> {
     createInstance(this: MockNode) {
       const main = this;
       const instance = createMockNode("INSTANCE", this.name);
-      for (const child of this.children) instance.appendChild(child.clone());
+      for (const child of this.children) {
+        const copy = child.clone();
+        // Instance sublayers are not independently addressable in Compact Design.
+        const clearIds = (node: MockNode) => { node.setPluginData("compactDesignId", ""); node.children.forEach(clearIds); };
+        clearIds(copy);
+        instance.appendChild(copy);
+      }
       // Store the main component id (not a live object) so clone() stays acyclic; resolve via figma.getNodeByIdAsync.
       instance.mainComponentId = this.id;
       const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean }>;
@@ -661,6 +672,9 @@ function typeDefaults(type: string): Record<string, unknown> {
         const api = (globalThis as { figma?: { getNodeByIdAsync?: (id: string) => Promise<MockNode | null> } }).figma;
         if (api?.getNodeByIdAsync) return api.getNodeByIdAsync(String(instance.mainComponentId));
         return main;
+      };
+      instance.swapComponent = (component: MockNode) => {
+        instance.mainComponentId = component.id;
       };
       instance.setProperties = (overrides: Record<string, string | boolean>) => {
         const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
@@ -740,7 +754,24 @@ function typeDefaults(type: string): Record<string, unknown> {
     setRangeLetterSpacing(this: MockNode) { this.letterSpacing = MIXED; },
     setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; }
   });
-  base.setBoundVariable = function (this: MockNode, field: string, variable: { id: string }) { (this.boundVariables as Record<string, unknown>)[field] = { type: "VARIABLE_ALIAS", id: variable.id }; };
+  base.setBoundVariable = function (this: MockNode, field: string, variable: { id: string } | null) {
+    const bound = this.boundVariables as Record<string, unknown>;
+    if (variable === null) delete bound[field];
+    else bound[field] = { type: "VARIABLE_ALIAS", id: variable.id };
+  };
+  base.setFillStyleIdAsync = async function (this: MockNode, id: string) { this.fillStyleId = id; };
+  base.setStrokeStyleIdAsync = async function (this: MockNode, id: string) { this.strokeStyleId = id; };
+  base.setTextStyleIdAsync = async function (this: MockNode, id: string) { this.textStyleId = id; };
+  base.setExplicitVariableModeForCollection = function (this: MockNode, collection: { id: string }, modeId: string) {
+    const modes = (this.explicitVariableModes || {}) as Record<string, string>;
+    modes[collection.id] = modeId;
+    this.explicitVariableModes = modes;
+  };
+  base.clearExplicitVariableModeForCollection = function (this: MockNode, collection: { id: string }) {
+    const modes = { ...((this.explicitVariableModes || {}) as Record<string, string>) };
+    delete modes[collection.id];
+    this.explicitVariableModes = modes;
+  };
   return base;
 }
 
@@ -835,12 +866,12 @@ function installFigmaMock(pageChildren: MockNode[]) {
   page.children = pageChildren;
   for (const child of pageChildren) child.parent = page;
 
-  const findAll = (): MockNode[] => {
+  const findAll = (predicate?: (node: MockNode) => boolean): MockNode[] => {
     const out: MockNode[] = [];
     const walk = (nodes: MockNode[]) => {
       for (const node of nodes) {
         if (node.removed) continue;
-        out.push(node);
+        if (!predicate || predicate(node)) out.push(node);
         walk(node.children);
       }
     };
@@ -1291,9 +1322,9 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     textAutoResize: ["text", "HEIGHT"], textTruncation: ["text", "ENDING"], maxLines: ["text", 2], runs: ["text", [{ text: "Ab" }, { text: "cd", fill: "#FF0000" }]],
     pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
     svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
-    componentId: ["rect", "c"], componentProperties: ["rect", []], instanceProperties: ["rect", {}], componentPropertyReferences: ["rect", { characters: "Label" }], variantAxes: ["rect", {}], variant: ["rect", {}],
+    componentId: ["rect", "c"], componentProperties: ["rect", []], instanceProperties: ["inst", { Label: "Go" }], componentPropertyReferences: ["comp-label", { characters: "Label" }], variantAxes: ["rect", {}], variant: ["rect", {}],
     operation: ["bool", "SUBTRACT"], prototype: ["rect", []], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
-    styleRefs: ["rect", { fill: "x" }], bindings: ["rect", { fill: "x" }], variableModes: ["rect", { Theme: "Dark" }]
+    styleRefs: ["rect", { fill: "Ink" }], bindings: ["rect", { opacity: "gap" }], variableModes: ["rect", { Theme: "Dark" }]
   };
   assert.deepEqual(Object.keys(sample).sort(), [...PATCH_SET_KEYS].sort());
   const build = () => {
@@ -1304,8 +1335,21 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     make("FRAME", "stackChild", stack); const stackText = make("TEXT", "stackText", stack); stackText.characters = "x";
     const bool = make("BOOLEAN_OPERATION", "bool", screen); make("RECTANGLE", "boolChild", bool);
     (mockLookup(screen, "text") as MockNode).characters = "Hello";
+    const comp = make("COMPONENT", "comp", screen);
+    (comp as MockNode).componentPropertyDefinitions = { "Label#0:1": { type: "TEXT", defaultValue: "Hi" } };
+    const compLabel = make("TEXT", "comp-label", comp); compLabel.characters = "Hi";
+    const inst = (comp as MockNode).createInstance();
+    inst.setPluginData("compactDesignId", "inst");
+    screen.appendChild(inst);
     installFigmaMock([screen]);
     return screen;
+  };
+  const richPatchContext = () => {
+    const ctx = emptyPatchContext();
+    ctx.resources.variables.set("gap", { id: "var:gap", name: "gap" } as never);
+    ctx.resources.paintStyles.set("Ink", { id: "style:ink", name: "Ink" } as never);
+    ctx.resources.variableCollections.set("Theme", { id: "col:theme", name: "Theme", modes: [{ name: "Light", modeId: "1" }, { name: "Dark", modeId: "2" }] } as never);
+    return ctx;
   };
   const snapshot = (node: MockNode) => JSON.stringify(node, (key, value) => key === "parent" || key === "children" ? undefined : typeof value === "symbol" ? "MIXED" : value);
   for (const key of PATCH_SET_KEYS) {
@@ -1320,7 +1364,7 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
       assert.equal(snapshot(mockLookup(screen, target)), before, `${key}: rejected set must not change the node`);
       continue;
     }
-    await applyFigmaPatch(checkedPatch(setOp(target, { [key]: value })), emptyPatchContext() as never);
+    await applyFigmaPatch(checkedPatch(setOp(target, { [key]: value })), richPatchContext() as never);
     assert.notEqual(snapshot(mockLookup(screen, target)), before, `${key}: set must change the Figma node`);
   }
 });
@@ -1702,3 +1746,206 @@ test("INSTANCE_SWAP default or override naming a missing component throws a clea
     /component property 'Icon' references missing component 'nope'/
   );
 });
+
+
+test("lockstep: newly enabled patch keys match in core and Figma (bindings, styleRefs, variableModes, instanceProperties, componentPropertyReferences)", async () => {
+  const source = {
+    canvas: { id: "screen", width: 400, height: 200, fill: "#FFFFFF" },
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [
+      { id: "brand", name: "brand", type: "COLOR", values: { Light: { r: 37, g: 99, b: 235 }, Dark: { r: 96, g: 165, b: 250 } } },
+      { id: "gap", name: "gap", type: "FLOAT", values: { Light: 8, Dark: 12 } }
+    ] }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#111111"] }],
+    nodes: [
+      { id: "icon-star", type: "COMPONENT", name: "Icon/Star", w: 16, h: 16, fill: "#111111" },
+      { id: "icon-check", type: "COMPONENT", name: "Icon/Check", w: 16, h: 16, fill: "#16A34A" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        name: "Button",
+        w: 160,
+        h: 48,
+        fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon-star" }
+        ],
+        children: [
+          { id: "button-label", type: "TEXT", name: "Label", w: 100, h: 20, text: "Continue", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } },
+          { id: "button-icon", type: "INSTANCE", name: "Icon", componentId: "icon-star", w: 16, h: 16, componentPropertyReferences: { visible: "ShowIcon", mainComponent: "Icon" } }
+        ]
+      },
+      {
+        id: "cta",
+        type: "INSTANCE",
+        componentId: "button",
+        x: 20,
+        y: 20,
+        w: 160,
+        h: 48,
+        instanceProperties: { Label: "Continue", ShowIcon: true, Icon: "icon-star" }
+      },
+      { id: "card", type: "FRAME", x: 200, y: 20, w: 120, h: 80, fill: "#FFFFFF", bindings: { fill: "brand" }, variableModes: { Theme: "Light" } }
+    ]
+  };
+  let document = normalize(source);
+  assert.equal(validate(source).valid, true);
+  const variables = new Map([["brand", { id: "var:brand" }], ["gap", { id: "var:gap" }]]);
+  const collections = new Map([["Theme", { id: "col:theme", name: "Theme", modes: [{ name: "Light", modeId: "1" }, { name: "Dark", modeId: "2" }] }]]);
+  const paintStyles = new Map([["ink", { id: "style:ink", name: "Ink" }]]);
+  const page = await importIntoMock(document, importContext(variables, collections));
+  // Seed paint style into resources used by later patches via emptyPatchContext enrichment.
+  const ctx = emptyPatchContext();
+  ctx.resources.variables = variables as never;
+  ctx.resources.variableCollections = collections as never;
+  ctx.resources.paintStyles = paintStyles as never;
+
+  const steps = [
+    [setOp("cta", { instanceProperties: { Label: "Submit", Icon: "icon-check", ShowIcon: false } })],
+    [setOp("button-label", { componentPropertyReferences: { visible: "ShowIcon" } })],
+    [setOp("card", { bindings: { opacity: "gap" }, styleRefs: { stroke: "ink" }, variableModes: { Theme: "Dark" } })],
+    [setOp("card", { bindings: { fill: null }, fill: "#EEEEEE" })]
+  ];
+  for (const [index, operations] of steps.entries()) {
+    const patch = checkedPatch(...operations);
+    const coreResult = applyCorePatch(document, patch);
+    document = coreResult.document;
+    const figmaResult = await applyFigmaPatch(patch, ctx as never);
+    if (index === 3) {
+      assert.ok(coreResult.warnings.some((w) => /detached bindings\.fill/.test(w)), "core warns on fill detach");
+      assert.ok(figmaResult.warnings.some((w) => /detached bindings\.fill/.test(w)), "Figma warns on fill detach");
+    }
+  }
+  // Core document state for the patched keys.
+  const find = (id: string) => {
+    const visit = (nodes: InternalNode[]): InternalNode | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        const nested = visit(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return visit(document.nodes)!;
+  };
+  assert.deepEqual(find("cta").properties.instanceProperties, { Label: "Submit", Icon: "icon-check", ShowIcon: false });
+  assert.deepEqual(find("button-label").properties.componentPropertyReferences, { characters: "Label", visible: "ShowIcon" });
+  assert.deepEqual(find("card").properties.bindings, { opacity: "gap" });
+  assert.deepEqual(find("card").properties.styleRefs, { stroke: "ink" });
+  assert.deepEqual(find("card").properties.variableModes, { Theme: "Dark" });
+  // Figma instance overrides reflect authored Label change.
+  const instance = mockById(page, "cta");
+  const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+  const label = Object.entries(props).find(([key]) => key.startsWith("Label"));
+  assert.equal(label?.[1].value, "Submit");
+  assert.equal(label?.[1].value, find("cta").properties.instanceProperties?.Label);
+});
+
+
+test("lockstep: instanceProperties null clears to component default in core and Figma", async () => {
+  const source = {
+    canvas: { width: 300, height: 100, fill: "#FFFFFF" },
+    nodes: [
+      { id: "icon-star", type: "COMPONENT", name: "Icon/Star", w: 16, h: 16, fill: "#111111" },
+      { id: "icon-check", type: "COMPONENT", name: "Icon/Check", w: 16, h: 16, fill: "#16A34A" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        name: "Button",
+        w: 120,
+        h: 40,
+        fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon-star" }
+        ],
+        children: [
+          { id: "button-label", type: "TEXT", name: "Label", w: 80, h: 20, text: "Continue", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } }
+        ]
+      },
+      {
+        id: "cta",
+        type: "INSTANCE",
+        componentId: "button",
+        x: 10,
+        y: 10,
+        w: 120,
+        h: 40,
+        instanceProperties: { Label: "Submit", ShowIcon: false, Icon: "icon-check" }
+      }
+    ]
+  };
+  let document = normalize(source);
+  const page = await importIntoMock(document, importContext());
+  const patch = checkedPatch(setOp("cta", { instanceProperties: { Label: null, ShowIcon: null, Icon: null } }));
+  const coreResult = applyCorePatch(document, patch);
+  document = coreResult.document;
+  await applyFigmaPatch(patch, emptyPatchContext() as never);
+
+  const find = (id: string) => {
+    const visit = (nodes: InternalNode[]): InternalNode | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        const nested = visit(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return visit(document.nodes)!;
+  };
+  // Core deletes cleared keys (empty map becomes undefined) → falls back to component defaults.
+  assert.equal(find("cta").properties.instanceProperties, undefined);
+  // Figma resets each key to the main component's defaultValue.
+  const instance = mockById(page, "cta");
+  const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+  const byName = Object.fromEntries(Object.entries(props).map(([key, value]) => [key.includes("#") ? key.slice(0, key.indexOf("#")) : key, value]));
+  assert.equal(byName.Label?.value, "Continue", "Label reset to default");
+  assert.equal(byName.ShowIcon?.value, true, "ShowIcon reset to default");
+  // Icon INSTANCE_SWAP default points at icon-star (Figma id of that COMPONENT).
+  const star = mockById(page, "icon-star");
+  assert.equal(byName.Icon?.value, star.id, "Icon reset to default COMPONENT");
+});
+
+test("rollback after failed COMPONENT patch does not orphan its instances", async () => {
+  const source = {
+    canvas: { width: 200, height: 100 },
+    nodes: [
+      { id: "master", type: "COMPONENT", name: "Master", w: 40, h: 40, fill: "#FF0000" },
+      { id: "one", type: "INSTANCE", componentId: "master", x: 60, w: 40, h: 40 },
+      { id: "two", type: "INSTANCE", componentId: "master", x: 110, w: 40, h: 40 }
+    ]
+  };
+  const document = normalize(source);
+  const page = await importIntoMock(document);
+  const masterBefore = mockById(page, "master");
+  const one = mockById(page, "one");
+  const two = mockById(page, "two");
+  assert.equal(one.mainComponentId, masterBefore.id);
+  assert.equal(two.mainComponentId, masterBefore.id);
+  // Fail mid-patch after mutating the COMPONENT (missing font on a TEXT op is not applicable —
+  // force failure with an unsupported key on a second op targeting a real node).
+  const okFirst = checkedPatch(setOp("master", { fill: "#00FF00", name: "Master renamed" }));
+  // Hand Figma an internal patch that appends a rejected key after a successful set.
+  const doomed = {
+    patch: {
+      operations: [
+        ...okFirst.patch.operations,
+        { op: "SET", id: "master", set: { svg: "<svg/>" }, normalized: {} }
+      ]
+    }
+  } as unknown as InternalPatchDocument;
+  await assert.rejects(() => applyFigmaPatch(doomed, emptyPatchContext() as never), /cannot be patched/);
+  // svg is rejected at checkSet before write on second op — first op already wrote. Rollback must restore.
+  const masterAfter = mockById(page, "master");
+  assert.equal(masterAfter.name, "Master", "COMPONENT name restored");
+  const oneAfter = mockById(page, "one");
+  const twoAfter = mockById(page, "two");
+  assert.equal(oneAfter.mainComponentId, masterAfter.id, "instance one still linked");
+  assert.equal(twoAfter.mainComponentId, masterAfter.id, "instance two still linked");
+  // Instances are not detached.
+  assert.ok(await oneAfter.getMainComponentAsync());
+  assert.ok(await twoAfter.getMainComponentAsync());
+});
+

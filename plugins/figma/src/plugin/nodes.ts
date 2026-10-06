@@ -126,27 +126,86 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
 }
 
 /** Map an INSTANCE_SWAP compact id to a Figma COMPONENT id, or throw a clear error. Non-swap values pass through. */
-function resolveInstanceSwapTarget(propertyName: string, propertyType: string, value: string | boolean | VariableAlias, context: ImportContext): string | boolean | VariableAlias {
+export function resolveInstanceSwapTarget(propertyName: string, propertyType: string, value: string | boolean | VariableAlias, context: ImportContext): string | boolean | VariableAlias {
   if (propertyType !== "INSTANCE_SWAP") return value;
   if (typeof value !== "string") return value;
-  const target = context.sourceNodes.get(value);
+  let target = context.sourceNodes.get(value);
+  if (!target || target.type !== "COMPONENT") {
+    // Patch path: look up by compactDesignId on the live page.
+    const found = figma.currentPage.findAll((node) => node.getPluginData("compactDesignId") === value && node.type === "COMPONENT")[0];
+    if (found && found.type === "COMPONENT") target = found;
+  }
   if (!target || target.type !== "COMPONENT") {
     throw new Error(`component property '${propertyName}' references missing component '${value}'`);
   }
   return target.id;
 }
 
+
+/** Build authored-name → generated-key and type maps from a live COMPONENT. */
+export function componentPropertyMaps(component: ComponentNode): { keys: Map<string, string>; types: Map<string, string> } {
+  const keys = new Map<string, string>();
+  const types = new Map<string, string>();
+  const definitions = component.componentPropertyDefinitions || {};
+  for (const [key, def] of Object.entries(definitions)) {
+    const name = key.includes("#") ? key.slice(0, key.indexOf("#")) : key;
+    keys.set(name, key);
+    keys.set(key, key);
+    types.set(name, def.type);
+    types.set(key, def.type);
+  }
+  return { keys, types };
+}
+
+/** Map authored instanceProperty overrides to Figma generated keys + INSTANCE_SWAP ids.
+ *  A `null` value resets that property to the component's defaultValue (Figma-native; INSTANCE_SWAP
+ *  defaults are already Figma component ids from import). Non-null INSTANCE_SWAP values remapped. */
+export function mapInstancePropertyOverrides(
+  overrides: Record<string, string | boolean | VariableAlias | null>,
+  propertyKeys: Map<string, string>,
+  propertyTypes: Map<string, string>,
+  definitions: ComponentPropertyDefinitions,
+  context: ImportContext
+): Record<string, string | boolean | VariableAlias> {
+  const result: Record<string, string | boolean | VariableAlias> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    const mappedKey = propertyKeys.get(key) || key;
+    const propType = propertyTypes.get(key) || propertyTypes.get(mappedKey) || "";
+    if (value === null) {
+      const def = definitions[mappedKey] || definitions[key];
+      if (!def) throw new Error(`instance property '${key}' is not defined on the main component`);
+      result[mappedKey] = def.defaultValue as string | boolean | VariableAlias;
+      continue;
+    }
+    result[mappedKey] = resolveInstanceSwapTarget(key, propType, value, context) as string | boolean | VariableAlias;
+  }
+  return result;
+}
+
+/** Map authored componentPropertyReferences to generated keys (null fields omitted). */
+export function mapComponentPropertyReferences(
+  refs: { characters?: string | null; visible?: string | null; mainComponent?: string | null },
+  propertyKeys: Map<string, string>
+): { characters?: string; visible?: string; mainComponent?: string } {
+  const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
+  if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
+  if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
+  if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
+  return mapped;
+}
+
+
 /**
  * Assign componentPropertyReferences on a COMPONENT descendant tree.
  * Stops at nested COMPONENT (owns its own props) and INSTANCE (no authored sublayers).
  */
-function applyComponentPropertyReferencesTree(data: InternalNode, scene: SceneNode, propertyKeys: Map<string, string>): void {
+export function applyComponentPropertyReferencesTree(data: InternalNode, scene: SceneNode, propertyKeys: Map<string, string>): void {
   const refs = data.properties.componentPropertyReferences;
   if (refs && typeof refs === "object") {
     const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
     if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
     if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
+    if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
     if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
   }
   if (data.type === "COMPONENT" || data.type === "INSTANCE") return;

@@ -121,7 +121,7 @@ export type ImportMode = "CREATE" | "REPLACE" | "UPDATE";
  * keys present in the authored set appear here: no defaults are added.
  * Coordinates are parent-relative (the authoring convention).
  */
-export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout"> {
+export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences"> {
   name?: string;
   position?: { x?: number; y?: number };
   size?: { width?: number; height?: number };
@@ -129,6 +129,12 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
   font?: Partial<DesignFont>;
   constraints?: Partial<Constraints>;
   layout?: DesignLayout;
+  /** Shallow-merge; field `null` clears that entry; whole-key `null` clears the map. */
+  bindings?: Record<string, string | null> | null;
+  styleRefs?: Record<string, string | null> | null;
+  variableModes?: Record<string, string | null> | null;
+  instanceProperties?: Record<string, string | boolean | VariableAlias | null> | null;
+  componentPropertyReferences?: { characters?: string | null; visible?: string | null; mainComponent?: string | null } | null;
 }
 
 export interface PatchOperation {

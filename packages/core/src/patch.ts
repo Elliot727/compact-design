@@ -1,9 +1,9 @@
 import { validationIssues, type RepairIssue } from "./lint";
-import { patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
+import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
 import { documentIssueOwners, validateDocument } from "./validate";
 
-export interface PatchResult { document: InternalDocument; affectedIds: string[]; }
+export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
 
 /** Thrown by applyPatch. `issues` carries every problem as structured repair output. */
 export class PatchError extends Error {
@@ -61,13 +61,35 @@ export function corePatchContext(node: InternalNode, parent: InternalNode | null
   };
 }
 
-function detach(props: DesignProperties, field: "fill" | "stroke"): void {
-  for (const key of ["bindings", "styleRefs"] as const) {
-    const map = props[key];
-    if (!map || map[field] === undefined) continue;
-    const next = { ...map }; delete next[field];
-    if (Object.keys(next).length) props[key] = next; else delete props[key];
+function detachField(props: DesignProperties, mapKey: "bindings" | "styleRefs", field: string): boolean {
+  const map = props[mapKey];
+  if (!map || map[field] === undefined) return false;
+  const next = { ...map }; delete next[field];
+  if (Object.keys(next).length) props[mapKey] = next; else delete props[mapKey];
+  return true;
+}
+
+function detach(props: DesignProperties, field: "fill" | "stroke"): string[] {
+  const warnings: string[] = [];
+  if (detachField(props, "bindings", field)) warnings.push(`detached bindings.${field}`);
+  if (detachField(props, "styleRefs", field)) warnings.push(`detached styleRefs.${field}`);
+  return warnings;
+}
+
+/** Shallow-merge an object map; `null` field clears; whole-value `null` clears the map. */
+function mergeObjectMap<T extends Record<string, unknown>>(
+  current: T | undefined,
+  patch: T | null | undefined,
+  assign: (next: T | undefined) => void
+): void {
+  if (patch === undefined) return;
+  if (patch === null) { assign(undefined); return; }
+  const next: Record<string, unknown> = { ...(current || {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else next[key] = value;
   }
+  assign(Object.keys(next).length ? next as T : undefined);
 }
 
 function stripRuns(props: DesignProperties, keys: string[]): void {
@@ -92,9 +114,10 @@ function stripRuns(props: DesignProperties, keys: string[]): void {
  * (fills, strokes, effects, runs, grids, paths); everything else is a scalar.
  * x/y are parent-relative and move the whole subtree.
  */
-function mergeSet(ref: NodeRef, values: PatchSetValues): void {
+function mergeSet(ref: NodeRef, values: PatchSetValues, set: JsonObject, warnings: string[]): void {
   const { node, parent } = ref;
   const props = node.properties;
+  const path = `node '${node.id}'`;
   if (values.name !== undefined) node.name = values.name;
   if (values.position) {
     const base = origin(parent);
@@ -106,13 +129,12 @@ function mergeSet(ref: NodeRef, values: PatchSetValues): void {
   const styleKeys: string[] = [];
   if (values.styles?.fills) {
     props.styles.fills = cloneValue(values.styles.fills);
-    // Figma replaces bound / style-linked paints when fills are assigned; mirror that.
-    detach(props, "fill");
+    for (const message of detach(props, "fill")) warnings.push(`${path}: ${message} because fill was set`);
     styleKeys.push("fill");
   }
   if (values.styles?.strokes) {
     props.styles.strokes = cloneValue(values.styles.strokes);
-    detach(props, "stroke");
+    for (const message of detach(props, "stroke")) warnings.push(`${path}: ${message} because stroke was set`);
   }
   if (values.styles?.effects) props.styles.effects = cloneValue(values.styles.effects);
   if (values.layout) {
@@ -122,8 +144,12 @@ function mergeSet(ref: NodeRef, values: PatchSetValues): void {
   }
   if (values.constraints) props.constraints = { horizontal: "MIN", vertical: "MIN", ...(props.constraints || {}), ...values.constraints } as DesignProperties["constraints"];
   if (node.type === "TEXT") {
-    // Node-level typography applies to the whole text (Figma semantics), so
-    // range overrides of the same attribute on existing runs are cleared.
+    if (values.font || setTouchesTextStyle(set)) {
+      if (props.styleRefs?.text) {
+        detachField(props, "styleRefs", "text");
+        warnings.push(`${path}: detached styleRefs.text because typography was set`);
+      }
+    }
     if (values.font) {
       stripRuns(props, Object.keys(values.font).map((key) => `font.${key}`));
       props.font = { ...(props.font || {}), ...values.font } as DesignProperties["font"];
@@ -139,11 +165,36 @@ function mergeSet(ref: NodeRef, values: PatchSetValues): void {
       delete props.runs;
     }
   }
-  const handled = new Set(["name", "position", "size", "styles", "layout", "constraints", "font", "runs", "text"]);
+  // Detach non-paint bindings overwritten by scalar/layout/font fields (with warning).
+  const overwritten = patchSetBindingFields(set).filter((field) => props.bindings && props.bindings[field] !== undefined);
+  for (const field of [...new Set(overwritten)]) {
+    detachField(props, "bindings", field);
+    warnings.push(`${path}: detached bindings.${field} because the set overwrites it`);
+  }
+  mergeObjectMap(props.bindings as Record<string, unknown> | undefined, values.bindings as Record<string, unknown> | null | undefined, (next) => {
+    if (next) props.bindings = next as DesignProperties["bindings"]; else delete props.bindings;
+  });
+  mergeObjectMap(props.styleRefs as Record<string, unknown> | undefined, values.styleRefs as Record<string, unknown> | null | undefined, (next) => {
+    if (next) props.styleRefs = next as DesignProperties["styleRefs"]; else delete props.styleRefs;
+  });
+  mergeObjectMap(props.variableModes as Record<string, unknown> | undefined, values.variableModes as Record<string, unknown> | null | undefined, (next) => {
+    if (next) props.variableModes = next as DesignProperties["variableModes"]; else delete props.variableModes;
+  });
+  mergeObjectMap(props.instanceProperties as Record<string, unknown> | undefined, values.instanceProperties as Record<string, unknown> | null | undefined, (next) => {
+    if (next) props.instanceProperties = next as DesignProperties["instanceProperties"]; else delete props.instanceProperties;
+  });
+  mergeObjectMap(props.componentPropertyReferences as Record<string, unknown> | undefined, values.componentPropertyReferences as Record<string, unknown> | null | undefined, (next) => {
+    if (next) props.componentPropertyReferences = next as DesignProperties["componentPropertyReferences"]; else delete props.componentPropertyReferences;
+  });
+  const handled = new Set(["name", "position", "size", "styles", "layout", "constraints", "font", "runs", "text", "bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences"]);
   for (const [key, value] of Object.entries(values)) {
     if (handled.has(key)) continue;
     Object.assign(props, { [key]: cloneValue(value) });
   }
+}
+
+function setTouchesTextStyle(set: JsonObject): boolean {
+  return ["lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent", "listSpacing", "textCase", "textDecoration", "hangingPunctuation", "hangingList"].some((key) => key in set);
 }
 
 function clampIndex(index: number, length: number): number {
@@ -186,7 +237,7 @@ function patchIssue(code: string, path: string, message: string, suggestion: str
   return { severity: "ERROR", code, path, message, suggestion };
 }
 
-function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[]): void {
+function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[], warnings: string[]): void {
   if (operation.op === "APPEND" || operation.op === "INSERT") {
     const target = operation.parent ? index.get(operation.parent) : undefined;
     if (!target || !operation.node) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
@@ -248,7 +299,7 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
       return patchIssue("PATCH_SET_INVALID", `patch.operations[${operationIndex}].set.${message.slice(0, split)}`, message.slice(split + 1).trim(), "Use a key that applies to this node, or see the patch rules in DESIGN-LANGUAGE.md.");
     }));
   }
-  mergeSet(target, values);
+  mergeSet(target, values, set, warnings);
   affectedIds.push(target.node.id);
 }
 
@@ -260,12 +311,13 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
 export function applyDocumentPatch(document: InternalDocument, patch: InternalPatchDocument): PatchResult {
   const result: InternalDocument = { ...document, nodes: document.nodes.map(cloneNode), styles: cloneValue(document.styles), variables: cloneValue(document.variables) };
   const affectedIds: string[] = [];
+  const warnings: string[] = [];
   const index = new Map<string, NodeRef>();
   const visit = (nodes: InternalNode[], parent: InternalNode | null): void => nodes.forEach((node) => { index.set(node.id, { node, parent, siblings: nodes }); visit(node.children, node); });
   visit(result.nodes, null);
   for (const [operationIndex, operation] of patch.patch.operations.entries()) {
     try {
-      applyOperation(operation, operationIndex, index, visit, affectedIds);
+      applyOperation(operation, operationIndex, index, visit, affectedIds, warnings);
     } catch (error) {
       if (error instanceof PatchError) throw error;
       const message = error instanceof Error ? error.message : String(error);
@@ -275,7 +327,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
   }
   const introduced = newDocumentIssues(document, result);
   if (introduced.length) throw new PatchError(introduced);
-  return { document: result, affectedIds };
+  return { document: result, affectedIds, warnings };
 }
 
 /**
