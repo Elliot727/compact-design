@@ -1117,6 +1117,55 @@
         ]
       }
     },
+    "wrapNode": {
+      "description": "FRAME authored for patch wrap. w/h are optional: omitted sizes derive from the wrapped children's bounding box.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "type": { "const": "FRAME" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "$ref": "#/$defs/positiveNumber" },
+        "h": { "$ref": "#/$defs/positiveNumber" },
+        "fill": { "$ref": "#/$defs/paint" },
+        "fills": { "type": "array", "items": { "$ref": "#/$defs/paint" } },
+        "stroke": { "$ref": "#/$defs/paint" },
+        "strokes": { "type": "array", "items": { "$ref": "#/$defs/paint" } },
+        "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+        "elevation": { "enum": ["NONE", "LOW", "MEDIUM", "HIGH", "FLOATING"] },
+        "shadow": { "oneOf": [{ "$ref": "#/$defs/shadow" }, { "type": "array", "items": { "$ref": "#/$defs/shadow" } }] },
+        "cornerRadius": { "$ref": "#/$defs/nonNegativeNumber" },
+        "cornerRadii": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "$ref": "#/$defs/nonNegativeNumber" } },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blendMode": { "type": "string" },
+        "visible": { "type": "boolean" },
+        "locked": { "type": "boolean" },
+        "clipsContent": { "type": "boolean" },
+        "layout": { "$ref": "#/$defs/layout" },
+        "constraints": { "$ref": "#/$defs/constraints" },
+        "layoutSizingHorizontal": { "enum": ["FIXED", "HUG", "FILL"] },
+        "layoutSizingVertical": { "enum": ["FIXED", "HUG", "FILL"] },
+        "layoutAlign": { "enum": ["INHERIT", "STRETCH"] },
+        "layoutGrow": { "type": "number", "minimum": 0 },
+        "layoutPositioning": { "enum": ["AUTO", "ABSOLUTE"] },
+        "minWidth": { "$ref": "#/$defs/nullablePositiveNumber" },
+        "maxWidth": { "$ref": "#/$defs/nullablePositiveNumber" },
+        "minHeight": { "$ref": "#/$defs/nullablePositiveNumber" },
+        "maxHeight": { "$ref": "#/$defs/nullablePositiveNumber" },
+        "padding": { "$ref": "#/$defs/padding" },
+        "itemSpacing": { "type": "number" },
+        "styleRefs": { "type": "object", "additionalProperties": { "type": "string" } },
+        "bindings": { "type": "object", "additionalProperties": { "type": "string" } },
+        "variableModes": { "type": "object", "additionalProperties": { "type": "string" } },
+        "overflowDirection": { "enum": ["NONE", "HORIZONTAL", "VERTICAL", "BOTH", "HORIZONTAL_SCROLLING", "VERTICAL_SCROLLING", "HORIZONTAL_AND_VERTICAL_SCROLLING"] },
+        "numberOfFixedChildren": { "type": "integer", "minimum": 0 },
+        "layoutGrids": { "type": "array", "items": { "$ref": "#/$defs/grid" } },
+        "prototype": { "type": "array", "items": { "$ref": "#/$defs/prototype" } }
+      }
+    },
     "patchOperation": {
       "oneOf": [
         {
@@ -1178,6 +1227,35 @@
             "parent": { "type": "string", "minLength": 1, "description": "Optional new parent; omit to keep the source parent (or page-level for a top-level screen)." },
             "index": { "type": "integer", "minimum": 0, "description": "Optional insert index; default is right after the source when same parent, else end." },
             "ids": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "Optional sourceId→newId overrides. Keys must be ids within the source subtree." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "ids", "node"],
+          "properties": {
+            "op": { "const": "wrap" },
+            "ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Sibling ids to reparent into the new FRAME. Order becomes child order. Absolute positions are preserved when the wrapper has no Auto Layout direction."
+            },
+            "node": { "$ref": "#/$defs/wrapNode" },
+            "index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Final index of the wrapper among remaining siblings after wrapped ids are removed. Default: pre-removal index of ids[0]."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id"],
+          "properties": {
+            "op": { "const": "unwrap" },
+            "id": { "type": "string", "minLength": 1, "description": "FRAME or GROUP to dissolve. Children are promoted preserving absolute positions (or become AL flow items if the parent has Auto Layout)." }
           }
         }
       ]

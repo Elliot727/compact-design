@@ -156,7 +156,7 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
 }
 
 export interface PatchOperation {
-  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE" | "DUPLICATE";
+  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE" | "DUPLICATE" | "WRAP" | "UNWRAP";
   id?: string;
   parent?: string;
   index?: number;
@@ -169,6 +169,8 @@ export interface PatchOperation {
   idSuffix?: string;
   /** Optional DUPLICATE overrides: sourceId → newId (keys must be in the source subtree). */
   ids?: Record<string, string>;
+  /** WRAP only: sibling compact ids to reparent (order becomes child order). */
+  wrapIds?: string[];
 }
 
 /** Style carried on a patch document. TEXT font may be partial (merge on upsert). */

@@ -2055,3 +2055,247 @@ test("Gate #45.4: new variable missing a mode value fails in the shared plan", (
   assert.equal(document.variables[0].items.length, 0);
 });
 
+
+// --- wrap / unwrap -----------------------------------------------------------
+
+test("wrap: free-positioned siblings keep absolute coords; wrapper at bbox", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [
+      { id: "icon", type: "RECTANGLE", x: 24, y: 100, w: 40, h: 40, fill: "#f00" },
+      { id: "title", type: "RECTANGLE", x: 24, y: 160, w: 80, h: 24, fill: "#0f0" }
+    ]
+  });
+  const result = applyRaw(document, {
+    op: "wrap",
+    ids: ["icon", "title"],
+    node: { id: "row", type: "FRAME" }
+  });
+  const row = nodeById(result, "row");
+  assert.deepEqual(row.properties.position, { x: 24, y: 100 });
+  assert.deepEqual(row.properties.size, { width: 80, height: 84 });
+  assert.deepEqual(row.children.map((c) => c.id), ["icon", "title"]);
+  assert.deepEqual(nodeById(result, "icon").properties.position, { x: 24, y: 100 });
+  assert.deepEqual(nodeById(result, "title").properties.position, { x: 24, y: 160 });
+  assert.equal(findNode(result, "icon")!.properties.position.x - row.properties.position.x, 0);
+});
+
+test("wrap: Auto Layout wrapper + omitted vs authored size", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [
+      { id: "a", type: "RECTANGLE", x: 10, y: 20, w: 30, h: 30 },
+      { id: "b", type: "RECTANGLE", x: 50, y: 20, w: 30, h: 30 }
+    ]
+  });
+  const hugged = applyRaw(document, {
+    op: "wrap", ids: ["a", "b"],
+    node: { id: "row", type: "FRAME", layout: { direction: "HORIZONTAL", itemSpacing: 8, primaryAxisSizingMode: "HUG", counterAxisSizingMode: "HUG" } }
+  });
+  assert.equal(nodeById(hugged, "row").properties.layout?.direction, "HORIZONTAL");
+  assert.deepEqual(nodeById(hugged, "row").properties.size, { width: 70, height: 30 });
+
+  const sized = applyRaw(document, {
+    op: "wrap", ids: ["a", "b"],
+    node: { id: "box", type: "FRAME", w: 200, h: 100 }
+  });
+  assert.deepEqual(nodeById(sized, "box").properties.size, { width: 200, height: 100 });
+});
+
+test("wrap under AL parent: wrapper takes first listed child's slot; ABSOLUTE child and sibling", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [{
+      id: "stack", type: "FRAME", x: 0, y: 0, w: 300, h: 300,
+      layout: { direction: "VERTICAL", itemSpacing: 8 },
+      children: [
+        { id: "keep", type: "RECTANGLE", x: 0, y: 0, w: 40, h: 20, fill: "#111" },
+        { id: "icon", type: "RECTANGLE", x: 0, y: 28, w: 40, h: 40, fill: "#f00" },
+        { id: "badge", type: "RECTANGLE", x: 200, y: 10, w: 16, h: 16, fill: "#00f", layoutPositioning: "ABSOLUTE" },
+        { id: "title", type: "RECTANGLE", x: 0, y: 76, w: 80, h: 24, fill: "#0f0" }
+      ]
+    }]
+  });
+  // Wrap icon+title (non-ABSOLUTE); badge is ABSOLUTE sibling left outside.
+  const wrapped = applyRaw(document, {
+    op: "wrap", ids: ["icon", "title"],
+    node: { id: "row", type: "FRAME", layout: { direction: "HORIZONTAL", itemSpacing: 4 } }
+  });
+  const stack = nodeById(wrapped, "stack");
+  assert.deepEqual(stack.children.map((c) => c.id), ["keep", "row", "badge"]);
+  assert.equal(nodeById(wrapped, "badge").properties.layoutPositioning, "ABSOLUTE");
+  assert.deepEqual(nodeById(wrapped, "badge").properties.position, { x: 200, y: 10 });
+  assert.deepEqual(nodeById(wrapped, "row").children.map((c) => c.id), ["icon", "title"]);
+
+  // Separate: wrap including an ABSOLUTE child — it keeps layoutPositioning + absolute coords.
+  const withAbs = applyRaw(document, {
+    op: "wrap", ids: ["icon", "badge"],
+    node: { id: "chrome", type: "FRAME" }
+  });
+  const chrome = nodeById(withAbs, "chrome");
+  assert.equal(nodeById(withAbs, "badge").properties.layoutPositioning, "ABSOLUTE");
+  assert.deepEqual(nodeById(withAbs, "badge").properties.position, { x: 200, y: 10 });
+  assert.equal(chrome.children.map((c) => c.id).includes("badge"), true);
+  // Wrapper sits at first listed child's pre-removal slot (icon was after keep).
+  assert.equal(nodeById(withAbs, "stack").children[1].id, "chrome");
+});
+
+test("unwrap: FRAME/GROUP promote children with absolutes; AL parent + ABSOLUTE; visual WARNING", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [{
+      id: "stack", type: "FRAME", x: 0, y: 0, w: 300, h: 300,
+      layout: { direction: "VERTICAL", itemSpacing: 8 },
+      children: [
+        { id: "keep", type: "RECTANGLE", x: 0, y: 0, w: 40, h: 20 },
+        {
+          id: "row", type: "FRAME", x: 0, y: 28, w: 120, h: 50,
+          fill: "#abcdef", stroke: "#000", effects: [{ type: "DROP_SHADOW", color: "#00000040", offset: { x: 0, y: 2 }, blur: 4 }],
+          clipsContent: true,
+          children: [
+            { id: "icon", type: "RECTANGLE", x: 0, y: 0, w: 40, h: 40 },
+            { id: "pin", type: "RECTANGLE", x: 90, y: -23, w: 10, h: 10, layoutPositioning: "ABSOLUTE" }
+          ]
+        }
+      ]
+    }]
+  });
+  const patch = normalizePatch({ patch: { operations: [{ op: "unwrap", id: "row" }] } });
+  const result = applyPatch(document, patch);
+  assert.equal(findNode(result.document, "row"), null);
+  const stack = nodeById(result.document, "stack");
+  assert.deepEqual(stack.children.map((c) => c.id), ["keep", "icon", "pin"]);
+  assert.deepEqual(nodeById(result.document, "icon").properties.position, { x: 0, y: 28 });
+  assert.equal(nodeById(result.document, "pin").properties.layoutPositioning, "ABSOLUTE");
+  assert.deepEqual(nodeById(result.document, "pin").properties.position, { x: 90, y: 5 });
+  assert.ok(result.warnings.some((w) => /unwrap 'row': dropped wrapper/.test(w) && /fills/.test(w) && /strokes/.test(w) && /effects/.test(w) && /clipsContent/.test(w)));
+
+  // GROUP unwrap
+  const grouped = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [{
+      id: "g", type: "GROUP", x: 10, y: 10, w: 50, h: 50,
+      children: [
+        { id: "r1", type: "RECTANGLE", x: 10, y: 10, w: 20, h: 20 },
+        { id: "r2", type: "RECTANGLE", x: 40, y: 40, w: 20, h: 20 }
+      ]
+    }]
+  });
+  const ungrouped = applyRaw(grouped, { op: "unwrap", id: "g" });
+  assert.equal(findNode(ungrouped, "g"), null);
+  // Authored (10,10) under group at (10,10) → absolute (20,20); unwrap preserves absolute.
+  assert.deepEqual(nodeById(ungrouped, "r1").properties.position, { x: 20, y: 20 });
+});
+
+test("wrap/unwrap errors: non-siblings, collision, GROUP type, COMPONENT unwrap, rotation", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [
+      { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 10, h: 10 },
+      { id: "nest", type: "FRAME", x: 20, y: 0, w: 50, h: 50, children: [
+        { id: "b", type: "RECTANGLE", x: 20, y: 0, w: 10, h: 10 }
+      ] },
+      { id: "button", type: "COMPONENT", x: 100, y: 0, w: 40, h: 40, children: [{ id: "lab", type: "RECTANGLE", w: 10, h: 10 }] },
+      { id: "spin", type: "RECTANGLE", x: 0, y: 100, w: 10, h: 10, rotation: 15 }
+    ]
+  });
+  rejects(document, /same parent/, { op: "wrap", ids: ["a", "b"], node: { id: "row", type: "FRAME" } });
+  rejects(document, /already exists/, { op: "wrap", ids: ["a"], node: { id: "nest", type: "FRAME" } });
+  // Schema wrapNode.type is const FRAME — rejected at validate before normalize's message.
+  rejects(document, /must be equal to constant|must be FRAME/, { op: "wrap", ids: ["a"], node: { id: "g", type: "GROUP" } });
+  rejects(document, /cannot unwrap COMPONENT/, { op: "unwrap", id: "button" });
+  rejects(document, /rotated/, { op: "wrap", ids: ["spin"], node: { id: "box", type: "FRAME" } });
+  rejects(document, /was not found/, { op: "wrap", ids: ["ghost"], node: { id: "box", type: "FRAME" } });
+});
+
+test("unwrap GROUP at (40,60): children keep absolute (no group-origin shift)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [{
+      id: "holder", type: "FRAME", x: 0, y: 0, w: 400, h: 400,
+      children: [{
+        id: "g", type: "GROUP", x: 40, y: 60, w: 60, h: 60,
+        children: [
+          { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20, fill: "#f00" },
+          { id: "b", type: "RECTANGLE", x: 40, y: 40, w: 20, h: 20, fill: "#0f0" }
+        ]
+      }]
+    }]
+  });
+  assert.deepEqual(nodeById(document, "a").properties.position, { x: 40, y: 60 });
+  assert.deepEqual(nodeById(document, "b").properties.position, { x: 80, y: 100 });
+  const result = applyRaw(document, { op: "unwrap", id: "g" });
+  assert.equal(findNode(result, "g"), null);
+  assert.deepEqual(nodeById(result, "a").properties.position, { x: 40, y: 60 });
+  assert.deepEqual(nodeById(result, "b").properties.position, { x: 80, y: 100 });
+  const holder = nodeById(result, "holder");
+  assert.deepEqual(holder.children.map((c) => c.id).sort(), ["a", "b"]);
+});
+
+test("unwrap rejects rotated wrapper (same rule as wrap)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [{
+      id: "spin", type: "FRAME", x: 10, y: 10, w: 80, h: 80, rotation: 15,
+      children: [{ id: "leaf", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20 }]
+    }]
+  });
+  rejects(document, /unwrap does not support rotated/, { op: "unwrap", id: "spin" });
+});
+
+test("wrap of top-level NAVIGATE destination fails end-of-patch #42 check", () => {
+  const document = normalize({
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [
+        { id: "cta", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }] }
+      ] },
+      { id: "checkout", width: 200, height: 100, nodes: [] }
+    ]
+  });
+  // Wrapping checkout (top-level NAVIGATE dest) under a new frame with home makes it nested.
+  rejects(document, /must be a top-level frame|NAVIGATE/, {
+    op: "wrap", ids: ["home", "checkout"],
+    node: { id: "shell", type: "FRAME" }
+  });
+});
+
+test("unwrap of top-level frame breaks SCROLL_TO canvas rule at end-of-patch", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 300, height: 200 },
+    nodes: [
+      { id: "btn", type: "FRAME", x: 0, y: 0, w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "SCROLL_TO", destination: "panel" }] }] },
+      { id: "panel", type: "FRAME", x: 0, y: 40, w: 100, h: 80 }
+    ]
+  });
+  // screen is the canvas root; unwrap promotes btn+panel to separate roots → different canvases.
+  rejects(document, /SCROLL_TO destination.*same top-level canvas/, { op: "unwrap", id: "screen" });
+});
+
+test("unwrap fails eagerly when an outside prototype still targets the wrapper", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "cta", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }] },
+      { id: "checkout", type: "FRAME", x: 100, w: 80, h: 80, children: [{ id: "inner", type: "RECTANGLE", w: 10, h: 10 }] },
+      { id: "other", type: "FRAME", x: 200, w: 80, h: 80 }
+    ]
+  });
+  // checkout is nested (not top-level) — pre-existing NAVIGATE is import-lenient / exempt.
+  // But unwrap still eagerly fails because cta targets checkout.
+  rejects(document, /still targets it/, { op: "unwrap", id: "checkout" });
+});
+
+test("wrap then failing later op rolls back (core is pure — document unchanged)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [
+      { id: "a", type: "RECTANGLE", x: 10, y: 10, w: 20, h: 20 },
+      { id: "b", type: "RECTANGLE", x: 40, y: 10, w: 20, h: 20 }
+    ]
+  });
+  const before = JSON.stringify(document);
+  rejects(document, /was not found/, {
+    op: "wrap", ids: ["a", "b"], node: { id: "row", type: "FRAME" }
+  }, { op: "set", id: "ghost", set: { name: "nope" } });
+  assert.equal(JSON.stringify(document), before);
+});

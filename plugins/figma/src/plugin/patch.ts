@@ -596,6 +596,39 @@ function rewriteCloneCompactIds(source: SceneNode, copy: SceneNode, idMap: Map<s
   }
 }
 
+
+/** Parent-relative bbox of scene nodes (same space they currently sit in). */
+function sceneNodesBoundingBox(nodes: SceneNode[]): { x: number; y: number; width: number; height: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x);
+    minY = Math.min(minY, node.y);
+    maxX = Math.max(maxX, node.x + node.width);
+    maxY = Math.max(maxY, node.y + node.height);
+  }
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+function sceneHasNonZeroRotation(node: SceneNode): boolean {
+  let current: BaseNode | null = node;
+  while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+    if ("rotation" in current && typeof (current as { rotation?: number }).rotation === "number"
+      && Math.abs((current as { rotation: number }).rotation) > 1e-9) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+/** Visual chrome lost when unwrapping a FRAME/GROUP — mirrors core unwrapLostVisuals. */
+function sceneUnwrapLostVisuals(node: SceneNode): string[] {
+  const lost: string[] = [];
+  if ("fills" in node && Array.isArray(node.fills) && node.fills.length > 0) lost.push("fills");
+  if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length > 0) lost.push("strokes");
+  if ("effects" in node && Array.isArray(node.effects) && node.effects.length > 0) lost.push("effects");
+  if ("clipsContent" in node && (node as FrameNode).clipsContent === true) lost.push("clipsContent");
+  return lost;
+}
+
 function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode>): void {
   // Track ids (and authored trees) that will exist after each op so later ops in the same patch can see them.
   const known = new Map(nodes);
@@ -688,6 +721,55 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
       }
       for (const newId of map.values()) knownIds.add(newId);
     }
+    if (operation.op === "WRAP") {
+      const path = `patch.operations[${index}]`;
+      const wrapIds = operation.wrapIds || [];
+      if (!wrapIds.length) throw new Error(`${path}.ids must be a non-empty array.`);
+      if (!operation.node) throw new Error(`${path}.node is required.`);
+      if (operation.node.type !== "FRAME") throw new Error(`${path}.node.type must be FRAME.`);
+      if (knownIds.has(operation.node.id)) throw new Error(`${path}: ID '${operation.node.id}' already exists`);
+      if (wrapIds.includes(operation.node.id)) throw new Error(`${path}: cannot wrap a node into itself.`);
+      const liveNodes = wrapIds.map((id) => {
+        if (!knownIds.has(id)) throw new Error(`${path}: node '${id}' was not found`);
+        return known.get(id);
+      });
+      const first = liveNodes[0];
+      if (first) {
+        const parent = first.parent;
+        if (!parent) throw new Error(`${path}: node '${wrapIds[0]}' has no parent`);
+        // PAGE parent = wrapping top-level frames (allowed; wrapper becomes the new top-level).
+        if (parent.type !== "PAGE" && parent.type !== "DOCUMENT") {
+          if (isInsideInstance(parent)) {
+            throw new Error(`${path}: node '${wrapIds[0]}' is inside an INSTANCE and cannot be wrapped`);
+          }
+          assertStructuralParent(parent as SceneNode, index, (parent as SceneNode).getPluginData("compactDesignId") || parent.id);
+        }
+        for (const node of liveNodes) {
+          if (!node) continue;
+          if (node.parent !== parent) throw new Error(`${path}: all ids must share the same parent.`);
+        }
+      }
+      registerAuthored(operation.node);
+    }
+    if (operation.op === "UNWRAP") {
+      const path = `patch.operations[${index}]`;
+      if (!knownIds.has(operation.id!)) throw new Error(`${path}: node '${operation.id}' was not found`);
+      const live = known.get(operation.id!);
+      if (live) {
+        if (!live.parent) throw new Error(`${path}: node '${operation.id}' has no parent`);
+        // PAGE parent = unwrapping a top-level frame (allowed; children become top-level).
+        if (live.parent.type !== "PAGE" && live.parent.type !== "DOCUMENT" && isInsideInstance(live.parent)) {
+          throw new Error(`${path}: node '${operation.id}' is inside an INSTANCE and cannot be unwrapped`);
+        }
+        if (live.type === "COMPONENT" || live.type === "COMPONENT_SET" || live.type === "INSTANCE" || live.type === "BOOLEAN_OPERATION") {
+          throw new Error(`${path}: cannot unwrap ${live.type}.`);
+        }
+        if (live.type !== "FRAME" && live.type !== "GROUP") {
+          throw new Error(`${path}: unwrap only accepts FRAME or GROUP (received ${live.type}).`);
+        }
+      }
+      knownIds.delete(operation.id!);
+    }
   }
 }
 
@@ -716,6 +798,14 @@ async function assertNoDanglingPrototypeDestinations(nodes: Map<string, SceneNod
         const navigation = (action as { navigation?: string }).navigation;
         if (navigation && ["NAVIGATE", "SWAP", "OVERLAY"].includes(String(navigation)) && !isTopLevelSceneNode(target)) {
           throw new Error(`${navigation} destination on '${compactId}' must be a top-level frame after the patch`);
+        }
+        // SCROLL_TO must stay inside the same top-level canvas (lockstep with core validateDocument).
+        if (navigation === "SCROLL_TO" || (action as { type?: string }).type === "SCROLL_TO") {
+          const sourceRoot = prototypeRoot(node);
+          const destRoot = prototypeRoot(target);
+          if (sourceRoot !== destRoot) {
+            throw new Error(`SCROLL_TO destination on '${compactId}' must be inside the same top-level canvas as its source`);
+          }
         }
       }
     }
@@ -855,6 +945,155 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         if (node.x !== relative.x + to.x) node.x = relative.x + to.x;
         if (node.y !== relative.y + to.y) node.y = relative.y + to.y;
         affected.push(node);
+      }
+
+      if (operation.op === "WRAP") {
+        const wrapIds = operation.wrapIds || [];
+        if (!wrapIds.length) throw new Error(`patch.operations[${operationIndex}].ids must be a non-empty array.`);
+        if (!operation.node) throw new Error(`patch.operations[${operationIndex}].node is required.`);
+        if (operation.node.type !== "FRAME") throw new Error(`patch.operations[${operationIndex}].node.type must be FRAME.`);
+        if (nodes.has(operation.node.id)) throw new Error(`patch.operations[${operationIndex}]: ID '${operation.node.id}' already exists`);
+        const children = wrapIds.map((id) => {
+          const node = resolveNode(nodes, id);
+          if (!node) throw new Error(`patch.operations[${operationIndex}]: node '${id}' was not found`);
+          return node;
+        });
+        const rawParent = children[0].parent;
+        if (!rawParent) throw new Error(`patch.operations[${operationIndex}]: node '${wrapIds[0]}' has no parent`);
+        const sharedParent = rawParent as BaseNode & ChildrenMixin;
+        const wrappingTopLevel = rawParent.type === "PAGE" || rawParent.type === "DOCUMENT";
+        if (!wrappingTopLevel) {
+          if (isInsideInstance(sharedParent)) {
+            throw new Error(`patch.operations[${operationIndex}]: node '${wrapIds[0]}' is inside an INSTANCE and cannot be wrapped`);
+          }
+          assertStructuralParent(sharedParent as SceneNode, operationIndex, (sharedParent as SceneNode).getPluginData("compactDesignId") || sharedParent.id);
+        }
+        for (const child of children) {
+          if (child.parent !== sharedParent) throw new Error(`patch.operations[${operationIndex}]: all ids must share the same parent.`);
+          if (sceneHasNonZeroRotation(child)) {
+            throw new Error(`patch.operations[${operationIndex}]: wrap does not support rotated nodes or parents (node '${child.getPluginData("compactDesignId") || child.name}' or an ancestor has non-zero rotation).`);
+          }
+        }
+        const bbox = sceneNodesBoundingBox(children);
+        // Avoid JSON.stringify — it turns NaN (omitted w/h marker) into null.
+        const src = operation.node;
+        const authoredW = Number.isFinite(src.properties.size.width) && src.properties.size.width > 0;
+        const authoredH = Number.isFinite(src.properties.size.height) && src.properties.size.height > 0;
+        const seed = {
+          ...src,
+          children: [],
+          properties: {
+            ...src.properties,
+            position: { x: bbox.x, y: bbox.y },
+            size: {
+              width: authoredW ? src.properties.size.width : bbox.width,
+              height: authoredH ? src.properties.size.height : bbox.height
+            },
+            styles: src.properties.styles ? { ...src.properties.styles } : src.properties.styles,
+            layout: src.properties.layout ? { ...src.properties.layout } : src.properties.layout
+          }
+        };
+        // origin = -groupOffset(parent) so createNode writes parent-space coords (FRAME: 0; GROUP: cancel the group origin).
+        const offset = groupOffset(sharedParent);
+        const origin = { x: -offset.x, y: -offset.y };
+        const firstIndex = sharedParent.children.indexOf(children[0]);
+        const wrapper = await createNode(seed, sharedParent, origin, context);
+        log.push({ kind: "create", node: wrapper });
+        // Absolute-preserving reparent (unlike move's relative keep).
+        for (const child of children) {
+          const prevParent = child.parent as SceneNode & ChildrenMixin;
+          const prevIndex = prevParent.children.indexOf(child);
+          log.push({ kind: "move", node: child, parent: prevParent, index: prevIndex, x: child.x, y: child.y });
+          const absX = child.x;
+          const absY = child.y;
+          (wrapper as FrameNode & ChildrenMixin).appendChild(child);
+          // Child parent-relative under wrapper = previous parent-relative − wrapper origin.
+          child.x = absX - wrapper.x;
+          child.y = absY - wrapper.y;
+          affected.push(child);
+        }
+        // Seat wrapper at default/first-id index among remaining siblings.
+        const remainingLength = sharedParent.children.length; // includes wrapper (appended)
+        // createNode appended wrapper; after children left, wrapper may still be at end.
+        const at = clampIndex(operation.index !== undefined ? operation.index : firstIndex, remainingLength - 1);
+        sharedParent.insertChild(at, wrapper);
+        registerSubtreeIds(nodes, wrapper);
+        affected.push(wrapper);
+      }
+
+      if (operation.op === "UNWRAP") {
+        const wrapper = resolveNode(nodes, operation.id!)!;
+        if (!wrapper.parent) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id}' has no parent`);
+        const unwrappingTopLevel = wrapper.parent.type === "PAGE" || wrapper.parent.type === "DOCUMENT";
+        if (!unwrappingTopLevel && isInsideInstance(wrapper.parent)) {
+          throw new Error(`patch.operations[${operationIndex}]: node '${operation.id}' is inside an INSTANCE and cannot be unwrapped`);
+        }
+        if (wrapper.type === "COMPONENT" || wrapper.type === "COMPONENT_SET" || wrapper.type === "INSTANCE" || wrapper.type === "BOOLEAN_OPERATION") {
+          throw new Error(`patch.operations[${operationIndex}]: cannot unwrap ${wrapper.type}.`);
+        }
+        if (wrapper.type !== "FRAME" && wrapper.type !== "GROUP") {
+          throw new Error(`patch.operations[${operationIndex}]: unwrap only accepts FRAME or GROUP (received ${wrapper.type}).`);
+        }
+        if (sceneHasNonZeroRotation(wrapper)) {
+          throw new Error(`patch.operations[${operationIndex}]: unwrap does not support rotated nodes or parents (node '${operation.id}' or an ancestor has non-zero rotation).`);
+        }
+        const wrapperId = operation.id!;
+        // Eager: fail if anything outside the wrapper still targets it via prototype.
+        const childCompactIds = new Set<string>();
+        const collectIds = (node: SceneNode): void => {
+          const id = node.getPluginData("compactDesignId");
+          if (id) childCompactIds.add(id);
+          if ("children" in node) for (const child of node.children) collectIds(child);
+        };
+        collectIds(wrapper);
+        for (const [compactId, scene] of nodes) {
+          if (compactId === wrapperId || childCompactIds.has(compactId)) continue;
+          if (!("reactions" in scene) || !Array.isArray((scene as FrameNode).reactions)) continue;
+          for (const reaction of (scene as FrameNode).reactions) {
+            const actions = reaction.actions || (reaction.action ? [reaction.action] : []);
+            for (const action of actions) {
+              if (!action || typeof action !== "object") continue;
+              const dest = (action as { destinationId?: string | null }).destinationId;
+              if (typeof dest !== "string" || !dest) continue;
+              const target = nodes.get(wrapperId);
+              if (target && dest === target.id) {
+                throw new Error(`patch.operations[${operationIndex}]: cannot unwrap '${wrapperId}' while a prototype action still targets it`);
+              }
+            }
+          }
+        }
+        const lost = sceneUnwrapLostVisuals(wrapper);
+        if (lost.length) {
+          warnings.push(`unwrap '${wrapperId}': dropped wrapper ${lost.join(", ")}`);
+        }
+        const grandparent = wrapper.parent as SceneNode & ChildrenMixin;
+        const at = grandparent.children.indexOf(wrapper);
+        const kids = "children" in wrapper ? [...wrapper.children] : [];
+        // Park full wrapper backup for rollback; log promoted children as creates so
+        // rollback removes them after the backup (with clone children) is restored.
+        const backup = park(wrapper);
+        const counterparts: Array<[SceneNode, SceneNode]> = [];
+        pairSubtree(wrapper, backup, counterparts);
+        for (let i = 0; i < kids.length; i++) {
+          const child = kids[i];
+          // Absolute-preserving in the grandparent's child coordinate space.
+          // FRAME children are wrapper-relative; GROUP/BOOLEAN children already sit in
+          // the group's parent space (groupOffset == wrapper origin), so do not add twice.
+          const off = groupOffset(wrapper);
+          const absX = child.x + wrapper.x - off.x;
+          const absY = child.y + wrapper.y - off.y;
+          grandparent.insertChild(at + i, child);
+          child.x = absX;
+          child.y = absY;
+          log.push({ kind: "create", node: child });
+          affected.push(child);
+        }
+        // Remove empty wrapper; replace undo restores backup.
+        const wrapperIndex = grandparent.children.indexOf(wrapper);
+        if (!wrapper.removed) wrapper.remove();
+        nodes.delete(wrapperId);
+        log.push({ kind: "replace", original: wrapper, backup, parent: grandparent, index: wrapperIndex >= 0 ? wrapperIndex : at, counterparts });
+        affected.push(wrapper);
       }
     }
       assertPendingVariantAxesCarried(pendingVariantAxes);
