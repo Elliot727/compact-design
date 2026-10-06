@@ -8,6 +8,8 @@ import { clamp, finite } from "./value";
 export interface ImportContext {
   sourceNodes: Map<string, SceneNode>;
   componentPropertyKeys: Map<string, Map<string, string>>;
+  /** Authored property name (and generated key) → type, keyed by COMPONENT compact id. */
+  componentPropertyTypes: Map<string, Map<string, string>>;
   resources: Resources;
   createdNodes: SceneNode[];
 }
@@ -71,20 +73,29 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   if (node.type === "TEXT") await applyText(node, p);
   if (node.type === "COMPONENT") {
     const propertyKeys = new Map<string, string>();
+    const propertyTypes = new Map<string, string>();
     for (const property of p.componentProperties || []) {
-      const defaultValue = resolveComponentPropertyDefault(property, context);
-      const options = resolveComponentPropertyOptions(property.options);
-      const generatedKey = node.addComponentProperty(property.name, property.type, defaultValue, options);
+      const defaultValue = resolveInstanceSwapTarget(property.name, property.type, property.defaultValue, context);
+      const generatedKey = node.addComponentProperty(property.name, property.type, defaultValue, property.options || {});
       propertyKeys.set(property.name, generatedKey);
       propertyKeys.set(generatedKey, generatedKey);
+      propertyTypes.set(property.name, property.type);
+      propertyTypes.set(generatedKey, property.type);
     }
     context.componentPropertyKeys.set(data.id, propertyKeys);
+    context.componentPropertyTypes.set(data.id, propertyTypes);
   }
   if (node.type === "INSTANCE" && p.instanceProperties) {
     const propertyKeys = p.componentId ? context.componentPropertyKeys.get(p.componentId) : undefined;
+    const propertyTypes = p.componentId ? context.componentPropertyTypes.get(p.componentId) : undefined;
     const overrides = Object.fromEntries(Object.entries(p.instanceProperties).map(([key, value]) => {
       const mappedKey = propertyKeys?.get(key) || key;
-      const mappedValue = typeof value === "string" && context.sourceNodes.has(value) ? context.sourceNodes.get(value)!.id : value;
+      const propType = propertyTypes?.get(key) || propertyTypes?.get(mappedKey);
+      // Only INSTANCE_SWAP values are compact component ids; TEXT/BOOLEAN pass through unchanged
+      // (a TEXT value may legitimately equal a node id).
+      const mappedValue = propType === "INSTANCE_SWAP"
+        ? resolveInstanceSwapTarget(key, "INSTANCE_SWAP", value, context)
+        : value;
       return [mappedKey, mappedValue];
     })) as Record<string, string | boolean | VariableAlias>;
     node.setProperties(overrides);
@@ -114,17 +125,15 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   return node;
 }
 
-function resolveComponentPropertyDefault(property: { type: string; defaultValue: string | boolean }, context: ImportContext): string | boolean | VariableAlias {
-  if (property.type === "INSTANCE_SWAP" && typeof property.defaultValue === "string") {
-    const target = context.sourceNodes.get(property.defaultValue);
-    if (target) return target.id;
+/** Map an INSTANCE_SWAP compact id to a Figma COMPONENT id, or throw a clear error. Non-swap values pass through. */
+function resolveInstanceSwapTarget(propertyName: string, propertyType: string, value: string | boolean | VariableAlias, context: ImportContext): string | boolean | VariableAlias {
+  if (propertyType !== "INSTANCE_SWAP") return value;
+  if (typeof value !== "string") return value;
+  const target = context.sourceNodes.get(value);
+  if (!target || target.type !== "COMPONENT") {
+    throw new Error(`component property '${propertyName}' references missing component '${value}'`);
   }
-  return property.defaultValue;
-}
-
-function resolveComponentPropertyOptions(options: { preferredValues?: Array<{ type: "COMPONENT" | "COMPONENT_SET"; key: string }> } | undefined): ComponentPropertyOptions | undefined {
-  // preferredValues.key is a Figma publish key; pass through when already modeled.
-  return options;
+  return target.id;
 }
 
 /**

@@ -1139,3 +1139,58 @@ test("rejects instanceProperties keys/types that do not match the main component
   assert.equal(wrongValue.valid, false);
   assert.ok(wrongValue.issues.some((issue) => /boolean/.test(issue.message)));
 });
+
+
+test("rejects INSTANCE_SWAP defaultValue or override that is missing or not a COMPONENT", () => {
+  const missingDefault = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button", type: "COMPONENT", w: 40, h: 40,
+      componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "ghost-icon" }]
+    }]
+  });
+  assert.equal(missingDefault.valid, false);
+  assert.ok(missingDefault.issues.some((issue) => issue.path.includes("componentProperties") && /ghost-icon/.test(issue.message) && /not defined/.test(issue.message)));
+
+  const nonComponentDefault = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "frame-slot", type: "FRAME", w: 16, h: 16 },
+      {
+        id: "button", type: "COMPONENT", w: 40, h: 40,
+        componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "frame-slot" }]
+      }
+    ]
+  });
+  assert.equal(nonComponentDefault.valid, false);
+  assert.ok(nonComponentDefault.issues.some((issue) => issue.path.includes("componentProperties") && /frame-slot/.test(issue.message) && /FRAME/.test(issue.message) && /COMPONENT/.test(issue.message)));
+
+  const missingOverride = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 8, h: 8 },
+      {
+        id: "button", type: "COMPONENT", w: 40, h: 40,
+        componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon" }]
+      },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40, instanceProperties: { Icon: "missing-icon" } }
+    ]
+  });
+  assert.equal(missingOverride.valid, false);
+  assert.ok(missingOverride.issues.some((issue) => issue.path.includes("instanceProperties.Icon") && /missing-icon/.test(issue.message)));
+
+  const nonComponentOverride = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 8, h: 8 },
+      { id: "frame-slot", type: "FRAME", w: 8, h: 8 },
+      {
+        id: "button", type: "COMPONENT", w: 40, h: 40,
+        componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon" }]
+      },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40, instanceProperties: { Icon: "frame-slot" } }
+    ]
+  });
+  assert.equal(nonComponentOverride.valid, false);
+  assert.ok(nonComponentOverride.issues.some((issue) => issue.path.includes("instanceProperties.Icon") && /frame-slot/.test(issue.message) && /FRAME/.test(issue.message)));
+});

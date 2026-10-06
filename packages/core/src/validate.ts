@@ -6,6 +6,7 @@ export function validateDocument(document: InternalDocument, limit = 30): string
   const errors: string[] = [];
   const ids = new Set<string>();
   const components = new Set<string>();
+  const nodeTypes = new Map<string, string>();
   const add = (path: string, message: string) => { if (errors.length < limit) errors.push(`${path}: ${message}`); };
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
   const triggers = new Set(["ON_CLICK", "ON_HOVER", "ON_PRESS", "ON_DRAG", "AFTER_TIMEOUT", "MOUSE_UP", "MOUSE_DOWN", "MOUSE_ENTER", "MOUSE_LEAVE", "ON_KEY_DOWN", "ON_MEDIA_HIT", "ON_MEDIA_END"]);
@@ -109,6 +110,7 @@ export function validateDocument(document: InternalDocument, limit = 30): string
   function walk(node: InternalNode, path: string, ancestors: Ancestor[] = []): void {
     if (ids.has(node.id)) add(`${path}.id`, `duplicate ID '${node.id}'`); else ids.add(node.id);
     if (!SUPPORTED_NODE_TYPES.has(node.type)) add(`${path}.type`, `unsupported node type '${node.type}'`);
+    nodeTypes.set(node.id, node.type);
     if (node.type === "COMPONENT") {
       components.add(node.id);
       if (node.properties.componentProperties) componentPropsById.set(node.id, node.properties.componentProperties);
@@ -144,8 +146,24 @@ export function validateDocument(document: InternalDocument, limit = 30): string
   }
 
   document.nodes.forEach((node, index) => walk(node, `nodes[${index}]`));
+  function requireComponentId(targetId: string, issuePath: string): void {
+    const targetType = nodeTypes.get(targetId);
+    if (!targetType) add(issuePath, `component '${targetId}' is not defined in this import`);
+    else if (targetType !== "COMPONENT") add(issuePath, `'${targetId}' is a ${targetType} but INSTANCE_SWAP requires a COMPONENT`);
+  }
+
   function references(node: InternalNode, path: string): void {
     if (node.type === "INSTANCE" && (!node.properties.componentId || !components.has(node.properties.componentId))) add(`${path}.componentId`, `component '${node.properties.componentId || ""}' is not defined in this import`);
+    if (node.type === "COMPONENT" && node.properties.componentProperties) {
+      node.properties.componentProperties.forEach((property, index) => {
+        if (property.type !== "INSTANCE_SWAP") return;
+        if (typeof property.defaultValue !== "string" || !property.defaultValue) {
+          add(`${path}.componentProperties[${index}].defaultValue`, "INSTANCE_SWAP requires a component id string");
+          return;
+        }
+        requireComponentId(property.defaultValue, `${path}.componentProperties[${index}].defaultValue`);
+      });
+    }
     const overrides = node.properties.instanceProperties;
     if (node.type === "INSTANCE" && overrides && typeof node.properties.componentId === "string") {
       const declared = componentPropsById.get(node.properties.componentId);
@@ -159,6 +177,7 @@ export function validateDocument(document: InternalDocument, limit = 30): string
           }
           if (property.type === "BOOLEAN" && typeof value !== "boolean") add(`${path}.instanceProperties.${key}`, `property '${key}' expects a boolean`);
           else if ((property.type === "TEXT" || property.type === "INSTANCE_SWAP") && typeof value !== "string" && !(value && typeof value === "object" && (value as { type?: string }).type === "VARIABLE_ALIAS")) add(`${path}.instanceProperties.${key}`, `property '${key}' expects a string`);
+          else if (property.type === "INSTANCE_SWAP" && typeof value === "string") requireComponentId(value, `${path}.instanceProperties.${key}`);
         }
       }
     }

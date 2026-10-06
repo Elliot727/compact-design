@@ -3,6 +3,8 @@
 ## Unreleased
 
 - feat(core,figma,html,mcp): link component properties to child layers via `componentPropertyReferences` (TEXT `characters`, BOOLEAN `visible`, INSTANCE_SWAP `mainComponent`). Validates against the nearest ancestor COMPONENT; Figma import/export round-trips authored names ↔ generated `#id` keys; HTML honours TEXT/BOOLEAN overrides when refs are present. VARIANT stays on `variantAxes`/`variant` (removed from authorable `componentProperties` types). Patching refs/props remains deferred.
+- fix(figma): only remap INSTANCE_SWAP instance/default values from compact ids to Figma ids (TEXT overrides that match a node id stay text). Core validates INSTANCE_SWAP targets are COMPONENT ids; Figma throws a clear missing-component error instead of passing a raw id through.
+- Export of a linked INSTANCE no longer includes its children (structure comes from the main component), matching import which already ignored them.
 
 **Breaking (pre-1.0): patch `set` now has a typed contract.**
 

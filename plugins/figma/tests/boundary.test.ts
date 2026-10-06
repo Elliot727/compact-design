@@ -813,6 +813,7 @@ function emptyPatchContext() {
   return {
     sourceNodes: new Map(),
     componentPropertyKeys: new Map(),
+    componentPropertyTypes: new Map(),
     resources: {
       paintStyles: new Map(),
       textStyles: new Map(),
@@ -1125,6 +1126,7 @@ function importContext(variables = new Map<string, { id: string }>(), collection
   return {
     sourceNodes: new Map(),
     componentPropertyKeys: new Map(),
+    componentPropertyTypes: new Map(),
     resources: { paintStyles: new Map(), textStyles: new Map(), variables, variableCollections: collections, createdStyles: [], createdCollections: [], warnings: [], unavailableVariableModes: new Map() },
     createdNodes: [] as MockNode[]
   };
@@ -1624,4 +1626,79 @@ test("Figma-native component with generated keys exports through the same author
   const children = exportedButton.children as Array<Record<string, unknown>>;
   assert.deepEqual(children.find((child) => child.id === "button-label")?.componentPropertyReferences, { characters: "Label" });
   assert.deepEqual(children.find((child) => child.id === "button-icon")?.componentPropertyReferences, { visible: "ShowIcon" });
+});
+
+
+test("TEXT instance override equal to a node id is not remapped to a Figma id", async () => {
+  const source = {
+    canvas: { id: "screen", width: 300, height: 100, fill: "#FFFFFF" },
+    nodes: [
+      // A node whose compact id equals the TEXT override value — must stay as text "submit".
+      { id: "submit", type: "FRAME", w: 10, h: 10, fill: "#000000" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        w: 120,
+        h: 40,
+        componentProperties: [{ name: "Label", type: "TEXT", defaultValue: "Go" }],
+        children: [
+          { id: "button-label", type: "TEXT", w: 80, h: 20, text: "Go", componentPropertyReferences: { characters: "Label" } }
+        ]
+      },
+      {
+        id: "button-1",
+        type: "INSTANCE",
+        componentId: "button",
+        x: 40,
+        w: 120,
+        h: 40,
+        instanceProperties: { Label: "submit" }
+      }
+    ]
+  };
+  const document = normalize(source);
+  const context = importContext();
+  const page = await importIntoMock(document, context);
+  const instance = mockById(page, "button-1");
+  const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+  const labelEntry = Object.entries(props).find(([key]) => key.startsWith("Label#") || key === "Label");
+  assert.ok(labelEntry, `expected Label property, got ${Object.keys(props).join(",")}`);
+  assert.equal(labelEntry![1].value, "submit");
+  assert.notEqual(labelEntry![1].value, mockById(page, "submit").id);
+});
+
+test("INSTANCE_SWAP default or override naming a missing component throws a clear error", async () => {
+  const missingDefault = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button",
+      type: "COMPONENT",
+      w: 40,
+      h: 40,
+      componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "ghost-icon" }]
+    }]
+  });
+  await assert.rejects(
+    () => importIntoMock(missingDefault),
+    /component property 'Icon' references missing component 'ghost-icon'/
+  );
+
+  const missingOverride = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 8, h: 8 },
+      {
+        id: "button",
+        type: "COMPONENT",
+        w: 40,
+        h: 40,
+        componentProperties: [{ name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon" }]
+      },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40, instanceProperties: { Icon: "nope" } }
+    ]
+  });
+  await assert.rejects(
+    () => importIntoMock(missingOverride),
+    /component property 'Icon' references missing component 'nope'/
+  );
 });

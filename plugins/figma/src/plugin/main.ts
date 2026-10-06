@@ -36,7 +36,7 @@ figma.ui.onmessage = async (message: { type?: string; document?: InternalDocumen
   }
   if (message.type === "apply-patch" && message.patch) {
     const resources = await createResources({ nodes: [], styles: [], variables: [] });
-    const context = { sourceNodes: new Map<string, SceneNode>(), componentPropertyKeys: new Map<string, Map<string, string>>(), resources, createdNodes: [] as SceneNode[] };
+    const context = { sourceNodes: new Map<string, SceneNode>(), componentPropertyKeys: new Map<string, Map<string, string>>(), componentPropertyTypes: new Map<string, Map<string, string>>(), resources, createdNodes: [] as SceneNode[] };
     try {
       const { affected, warnings } = await applyPatch(message.patch, context);
       figma.currentPage.selection = affected; if (affected.length) figma.viewport.scrollAndZoomIntoView(affected);
