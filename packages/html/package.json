@@ -1,6 +1,6 @@
 {
   "name": "@compact-design/html",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "HTML and CSS renderer for Compact Design JSON.",
   "license": "MPL-2.0",
   "type": "module",
@@ -53,6 +53,6 @@
     "render": "node scripts/render.mjs"
   },
   "dependencies": {
-    "@compact-design/core": "0.2.0"
+    "@compact-design/core": "0.3.0"
   }
 }
