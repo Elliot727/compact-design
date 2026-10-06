@@ -127,6 +127,12 @@ export interface ComponentPropertyPatchEntry {
   options?: ComponentPropertyOptions;
 }
 
+/** variantAxes patch value: string[] replaces options (never renames); object form renames explicitly. */
+export type VariantAxisPatchEntry =
+  | null
+  | string[]
+  | { rename?: string; options?: string[]; renameOptions?: Record<string, string> };
+
 export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences" | "componentProperties" | "variantAxes" | "variant"> {
   name?: string;
   position?: { x?: number; y?: number };
@@ -143,9 +149,9 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
   componentPropertyReferences?: { characters?: string | null; visible?: string | null; mainComponent?: string | null } | null;
   /** Name-keyed upsert of COMPONENT property definitions; `null` deletes a TEXT/BOOLEAN/INSTANCE_SWAP def. */
   componentProperties?: Record<string, ComponentPropertyPatchEntry | null> | null;
-  /** Shallow-merge axes→options; cannot delete an axis (null / omitting to empty). */
-  variantAxes?: Record<string, string[] | null> | null;
-  /** Merge variant selection on a COMPONENT inside a set. */
+  /** Shallow-merge axes; array replaces options (never renames); object form `{ rename, options, renameOptions }` is explicit. Null axis deletes are rejected. */
+  variantAxes?: Record<string, VariantAxisPatchEntry> | null;
+  /** Merge variant selection on a COMPONENT inside a set. Whole-key or per-axis null is rejected. */
   variant?: Record<string, string | null> | null;
 }
 

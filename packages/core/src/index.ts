@@ -94,8 +94,7 @@ export {
 } from "./patch-keys";
 export type { PatchSetKey, PatchSetSemantics, PatchTargetContext } from "./patch-keys";
 export { indexDocument } from "./references";
-export { detectVariantRenames, applyVariantRenamesInForest, applyComponentPropertiesPatch, applyVariantPatchOnComponent, rewriteVariantChildNames } from "./patch-definitions";
-export type { AxisRename, OptionRename } from "./patch-definitions";
+export { detectVariantRenames, variantAxesUncarriedOptions, type AxisRename, type OptionRename, type VariantAxisPatchEntry, type VariantAxesPatch } from "./patch-definitions";
 export type { DocumentIndex } from "./references";
 export type { PatchResult, RepairIssue };
 export type * from "./types";

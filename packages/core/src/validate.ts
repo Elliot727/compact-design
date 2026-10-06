@@ -1,5 +1,6 @@
 import { SUPPORTED_NODE_TYPES, SUPPORTED_PAINT_TYPES } from "./constants";
 import type { DesignPaint, DesignProperties, InternalDocument, InternalNode, JsonObject } from "./types";
+import { variantAxesUncarriedOptions } from "./patch-definitions";
 
 /** Validate a canonical document. Reports at most `limit` errors (default 30; pass Infinity for all). */
 export function validateDocument(document: InternalDocument, limit = 30): string[] {
@@ -137,6 +138,11 @@ export function validateDocument(document: InternalDocument, limit = 30): string
       for (const [axis, options] of Object.entries(props.variantAxes)) if (!axis || !Array.isArray(options) || !options.length || options.some((option) => typeof option !== "string")) add(`${path}.variantAxes.${axis}`, "must be a non-empty string array");
       const variantAxes = props.variantAxes;
       node.children.forEach((child, index) => Object.entries(child.properties.variant || {}).forEach(([axis, value]) => { if (!variantAxes[axis]?.includes(value)) add(`${path}.children[${index}].variant.${axis}`, `value '${value}' is not declared in variantAxes`); }));
+      for (const message of variantAxesUncarriedOptions(node, variantAxes)) {
+        const match = /^variantAxes\.([^:]+):\s*(.*)$/.exec(message);
+        if (match) add(`${path}.variantAxes.${match[1]}`, match[2]);
+        else add(path, message);
+      }
     }
     if (props.prototype !== undefined) Array.isArray(props.prototype) ? validatePrototype(props.prototype, `${path}.prototype`) : add(`${path}.prototype`, "must be an array of reactions");
     if (["GROUP", "BOOLEAN_OPERATION"].includes(node.type) && !node.children.length) add(`${path}.children`, `${node.type} requires children`);

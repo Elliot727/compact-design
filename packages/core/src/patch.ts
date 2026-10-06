@@ -1,7 +1,7 @@
 import { validationIssues, type RepairIssue } from "./lint";
 import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
-import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames } from "./patch-definitions";
+import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames, variantAxesChildConflicts, type VariantAxesPatch } from "./patch-definitions";
 import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -248,6 +248,15 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     // Authored node coordinates are parent-relative; core stores absolute.
     const base = origin(target.node);
     translate(child, base.x, base.y);
+    if (target.node.type === "COMPONENT_SET" && child.type === "COMPONENT") {
+      const axes = target.node.properties.variantAxes || {};
+      const selected = child.properties.variant || {};
+      if (Object.keys(axes).length) {
+        child.name = Object.keys(axes).map((axis) => `${axis}=${selected[axis] ?? axes[axis][0]}`).join(", ");
+      } else if (Object.keys(selected).length) {
+        child.name = Object.entries(selected).map(([axis, value]) => `${axis}=${value}`).join(", ");
+      }
+    }
     if (operation.op === "APPEND") {
       target.node.children.push(child);
     } else {
@@ -305,10 +314,8 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
   if (values.componentProperties !== undefined) {
     defErrors.push(...applyComponentPropertiesPatch(target.node.properties, values.componentProperties, `patch.operations[${operationIndex}].set`));
   }
-  if (values.variant !== undefined && values.variant !== null) {
+  if (values.variant !== undefined) {
     defErrors.push(...applyVariantPatchOnComponent(target.node, target.parent, values.variant, `patch.operations[${operationIndex}].set`));
-  } else if (values.variant === null) {
-    delete target.node.properties.variant;
   }
   if (values.variantAxes !== undefined) {
     if (target.node.type !== "COMPONENT_SET") {
@@ -317,13 +324,20 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
       defErrors.push(`patch.operations[${operationIndex}].set.variantAxes: clearing all axes is not supported (Figma cannot delete VARIANT properties)`);
     } else {
       const current = target.node.properties.variantAxes || {};
-      const detected = detectVariantRenames(current, values.variantAxes);
-      defErrors.push(...detected.errors.map((message) => `patch.operations[${operationIndex}].set.${message}`));
-      if (!detected.errors.length) {
+      const detected = detectVariantRenames(current, values.variantAxes as VariantAxesPatch);
+      const axisErrors = [
+        ...detected.errors,
+        ...(!detected.errors.length
+          ? variantAxesChildConflicts(target.node, current, detected.axes, detected.optionRenames, detected.axisRenames)
+          : [])
+      ].map((message) => `patch.operations[${operationIndex}].set.${message}`);
+      defErrors.push(...axisErrors);
+      if (!axisErrors.length) {
         target.node.properties.variantAxes = detected.axes;
-        // roots: walk from all indexed top-level nodes — use visit via collecting from index parents
         applyVariantRenamesInForest(roots, target.node.id, detected.axisRenames, detected.optionRenames, detected.axes);
         rewriteVariantChildNames(target.node);
+        // Uncarried options are checked in validateDocument so a later op in the same
+        // patch can set a child's variant to carry a newly declared option.
       }
     }
   }

@@ -2,7 +2,7 @@ import { patchSetBindingFields, patchSetTargetIssues, type InternalPatchDocument
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
-import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma } from "./patch-definitions";
+import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma, assertPendingVariantAxesCarried } from "./patch-definitions";
 import { applyResourcePatch } from "./resources";
 import { clamp, finite } from "./value";
 
@@ -117,7 +117,7 @@ async function applyTextSet(node: TextNode, values: PatchSetValues): Promise<voi
   }
 }
 
-type ApplyCtx = { warnings: string[]; context: ImportContext; set: JsonObject };
+type ApplyCtx = { warnings: string[]; context: ImportContext; set: JsonObject; pendingVariantAxes?: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }> };
 type SetHandler = (node: SceneNode, values: PatchSetValues, ctx: ApplyCtx) => void | Promise<void>;
 type SetPhase = "name" | "layout" | "child" | "geometry" | "appearance" | "text" | "shape" | "resources" | "component" | "rejected";
 interface SetEntry { phase: SetPhase; apply?: SetHandler; }
@@ -327,10 +327,10 @@ function checkSet(node: SceneNode, operation: PatchOperation, operationIndex: nu
   }
 }
 
-async function applySet(node: SceneNode, operation: PatchOperation, operationIndex: number, context: ImportContext, warnings: string[]): Promise<void> {
+async function applySet(node: SceneNode, operation: PatchOperation, operationIndex: number, context: ImportContext, warnings: string[], pendingVariantAxes: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }>): Promise<void> {
   checkSet(node, operation, operationIndex);
   const set = operation.set || {}; const values = operation.normalized!;
-  const ctx: ApplyCtx = { warnings, context, set };
+  const ctx: ApplyCtx = { warnings, context, set, pendingVariantAxes };
   // Detach conflicting bindings/styleRefs with WARNING (mirrors core).
   detachBoundScalars(node, set, warnings);
   const textStyleKeys = ["font", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent", "listSpacing", "textCase", "textDecoration", "hangingPunctuation", "hangingList"];
@@ -509,6 +509,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
 
   const affected: SceneNode[] = [];
   const warnings: string[] = [];
+  const pendingVariantAxes = new Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }>();
   const log: Undo[] = [];
   let holder: FrameNode | null = null;
   // Backups live in one hidden holder so they never appear inside the edited tree
@@ -533,7 +534,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         const counterparts: Array<[SceneNode, SceneNode]> = [];
         pairSubtree(original, backup, counterparts);
         log.push({ kind: "replace", original, backup, parent, index, counterparts });
-        if (operation.op === "SET") { await applySet(original, operation, operationIndex, context, warnings); affected.push(original); }
+        if (operation.op === "SET") { await applySet(original, operation, operationIndex, context, warnings, pendingVariantAxes); affected.push(original); }
         else { original.remove(); nodes.delete(operation.id!); }
       }
       if (operation.op === "APPEND" || operation.op === "INSERT") {
@@ -581,6 +582,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         affected.push(node);
       }
     }
+      assertPendingVariantAxesCarried(pendingVariantAxes);
   } catch (error) {
     await rollback(log, holder);
     throw error;

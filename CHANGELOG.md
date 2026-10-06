@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- feat(core,figma,mcp): enable patch `set` for `componentProperties`, `variantAxes`, and `variant` in lockstep. `componentProperties` is a name-keyed upsert on COMPONENT (null deletes; type immutable; Figma add/edit/delete + INSTANCE_SWAP remap). `variantAxes` shallow-merges on COMPONENT_SET (axis rename via null+new key; 1:1 option rename; axis delete errors). `variant` merges on COMPONENT children and rewrites names. Axis/option renames rewrite instance VARIANT overrides in core and Figma. COMPONENT rollback loads all pages (`loadAllPagesAsync` before `findAllWithCriteria`) so cross-page instances are re-linked. Still deferred: `prototype`, `componentId`.
+- feat(core,figma,mcp): enable patch `set` for `componentProperties`, `variantAxes`, and `variant` in lockstep. `componentProperties` is a name-keyed upsert on COMPONENT (null deletes; type immutable; Figma add/edit/delete only). `variantAxes` shallow-merges on COMPONENT_SET with **explicit** renames (`{ rename, options, renameOptions }`); plain option arrays never rename. Every declared option must be carried by a child (Figma derives options from child names). Renames rewrite instance VARIANT overrides only for instances of the patched set. `variant`/`variant: null` clearing is rejected. COMPONENT rollback loads all pages before `findAllWithCriteria`. Still deferred: `prototype`, `componentId`.
 
 - fix(figma): patch rollback re-links COMPONENT instances via `getMainComponentAsync` (no sync `mainComponent` under dynamic-page); per-key `instanceProperties: null` resets to the component defaultValue in lockstep with core; fill/stroke bindings require a SOLID first paint (clear error).
 

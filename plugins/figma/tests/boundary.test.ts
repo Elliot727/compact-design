@@ -652,13 +652,12 @@ function typeDefaults(type: string): Record<string, unknown> {
     componentPropertyReferences: null as { characters?: string; visible?: string; mainComponent?: string } | null
   });
   if (type === "COMPONENT" || type === "COMPONENT_SET") Object.assign(base, {
-    componentPropertyDefinitions: {} as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[] }>,
+    _componentPropertyDefinitions: {} as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[]; variantOptions?: string[] }>,
     _propSeq: 0,
     addComponentProperty(this: MockNode, name: string, propertyType: string, defaultValue: string | boolean, options: { preferredValues?: unknown[] } = {}) {
-      // VARIANT axes keep the bare name; TEXT/BOOLEAN/INSTANCE_SWAP get #id suffixes.
       const key = propertyType === "VARIANT" ? name : `${name}#${this._propSeq}:0`;
       if (propertyType !== "VARIANT") this._propSeq = Number(this._propSeq) + 1;
-      const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[]; variantOptions?: string[] }>;
+      const definitions = (this as MockNode & { _componentPropertyDefinitions: Record<string, unknown> })._componentPropertyDefinitions;
       definitions[key] = {
         type: propertyType,
         defaultValue,
@@ -668,7 +667,7 @@ function typeDefaults(type: string): Record<string, unknown> {
       return key;
     },
     editComponentProperty(this: MockNode, propertyName: string, update: { name?: string; defaultValue?: string | boolean; preferredValues?: unknown[] }) {
-      const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[]; variantOptions?: string[] }>;
+      const definitions = (this as MockNode & { _componentPropertyDefinitions: Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[]; variantOptions?: string[] }> })._componentPropertyDefinitions;
       const current = definitions[propertyName];
       if (!current) throw new Error(`unknown component property '${propertyName}'`);
       const nextKey = update.name && current.type !== "VARIANT" ? `${update.name}#${propertyName.split("#")[1] || "0:0"}` : (update.name || propertyName);
@@ -680,13 +679,27 @@ function typeDefaults(type: string): Record<string, unknown> {
       if (nextKey !== propertyName) {
         delete definitions[propertyName];
         definitions[nextKey] = next;
+        if (current.type === "VARIANT" && this.type === "COMPONENT_SET") {
+          const remap = (node: MockNode) => {
+            if (node.type === "INSTANCE") {
+              const props = (node as MockNode & { _componentProperties?: Record<string, { type: string; value: string | boolean }> })._componentProperties;
+              if (props && propertyName in props) {
+                props[nextKey] = { ...props[propertyName], type: "VARIANT" };
+                delete props[propertyName];
+              }
+            }
+            for (const child of node.children) remap(child);
+          };
+          const root = (globalThis as { figma?: { root?: { children: MockNode[] } } }).figma?.root;
+          if (root) for (const page of root.children) remap(page);
+        }
       } else {
         definitions[propertyName] = next;
       }
       return nextKey;
     },
     deleteComponentProperty(this: MockNode, propertyName: string) {
-      const definitions = this.componentPropertyDefinitions as Record<string, { type: string }>;
+      const definitions = (this as MockNode & { _componentPropertyDefinitions: Record<string, { type: string }> })._componentPropertyDefinitions;
       const current = definitions[propertyName];
       if (!current) return;
       if (current.type === "VARIANT") throw new Error(`cannot delete VARIANT property '${propertyName}'`);
@@ -699,15 +712,14 @@ function typeDefaults(type: string): Record<string, unknown> {
       const instance = createMockNode("INSTANCE", this.name);
       for (const child of this.children) {
         const copy = child.clone();
-        // Instance sublayers are not independently addressable in Compact Design.
         const clearIds = (node: MockNode) => { node.setPluginData("compactDesignId", ""); node.children.forEach(clearIds); };
         clearIds(copy);
         instance.appendChild(copy);
       }
-      // Store the main component id (not a live object) so clone() stays acyclic; resolve via figma.getNodeByIdAsync.
       instance.mainComponentId = this.id;
-      const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean }>;
-      instance.componentProperties = Object.fromEntries(Object.entries(definitions).map(([key, def]) => [key, { type: def.type, value: def.defaultValue }]));
+      const definitions = (this as MockNode & { _componentPropertyDefinitions: Record<string, { type: string; defaultValue: string | boolean }> })._componentPropertyDefinitions || {};
+      (instance as MockNode & { _componentProperties: Record<string, { type: string; value: string | boolean }> })._componentProperties =
+        Object.fromEntries(Object.entries(definitions).map(([key, def]) => [key, { type: def.type, value: def.defaultValue }]));
       instance.getMainComponentAsync = async () => {
         const api = (globalThis as { figma?: { getNodeByIdAsync?: (id: string) => Promise<MockNode | null> } }).figma;
         if (api?.getNodeByIdAsync) return api.getNodeByIdAsync(String(instance.mainComponentId));
@@ -717,7 +729,7 @@ function typeDefaults(type: string): Record<string, unknown> {
         instance.mainComponentId = component.id;
       };
       instance.setProperties = (overrides: Record<string, string | boolean>) => {
-        const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+        const props = (instance as MockNode & { _componentProperties: Record<string, { type: string; value: string | boolean }> })._componentProperties;
         for (const [key, value] of Object.entries(overrides)) {
           if (props[key]) props[key] = { ...props[key], value };
           else props[key] = { type: typeof value === "boolean" ? "BOOLEAN" : "TEXT", value };
@@ -752,10 +764,10 @@ function typeDefaults(type: string): Record<string, unknown> {
     }
   });
   if (type === "INSTANCE") Object.assign(base, {
-    componentProperties: {} as Record<string, { type: string; value: string | boolean }>,
+    _componentProperties: {} as Record<string, { type: string; value: string | boolean }>,
     getMainComponentAsync: async () => null as MockNode | null,
     setProperties(this: MockNode, overrides: Record<string, string | boolean>) {
-      const props = this.componentProperties as Record<string, { type: string; value: string | boolean }>;
+      const props = (this as MockNode & { _componentProperties: Record<string, { type: string; value: string | boolean }> })._componentProperties;
       for (const [key, value] of Object.entries(overrides)) {
         if (props[key]) props[key] = { ...props[key], value };
         else props[key] = { type: typeof value === "boolean" ? "BOOLEAN" : "TEXT", value };
@@ -821,6 +833,66 @@ function cloneMockValue(value: unknown): unknown {
   return value;
 }
 
+
+/** Like real Figma: componentPropertyDefinitions / componentProperties getters return deep copies. */
+function installFigmaCopyGetters(node: MockNode): void {
+  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+    if (!(node as MockNode & { _componentPropertyDefinitions?: unknown })._componentPropertyDefinitions) {
+      (node as MockNode & { _componentPropertyDefinitions: Record<string, unknown> })._componentPropertyDefinitions = {};
+    }
+    Object.defineProperty(node, "componentPropertyDefinitions", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const internal = (this as MockNode & { _componentPropertyDefinitions: Record<string, { type: string; variantOptions?: string[] }> })._componentPropertyDefinitions;
+        const copy = cloneMockValue(internal) as Record<string, { type: string; variantOptions?: string[] }>;
+        if (this.type === "COMPONENT_SET") {
+          const derived: Record<string, string[]> = {};
+          for (const child of this.children) {
+            if (child.type !== "COMPONENT") continue;
+            for (const part of String(child.name).split(",")) {
+              const trimmed = part.trim();
+              const eq = trimmed.indexOf("=");
+              if (eq <= 0) continue;
+              const axis = trimmed.slice(0, eq);
+              const option = trimmed.slice(eq + 1);
+              if (!derived[axis]) derived[axis] = [];
+              if (!derived[axis].includes(option)) derived[axis].push(option);
+            }
+          }
+          for (const [key, def] of Object.entries(copy)) {
+            if (def.type === "VARIANT") {
+              const axis = key.includes("#") ? key.slice(0, key.indexOf("#")) : key;
+              def.variantOptions = derived[axis] ? [...derived[axis]] : [...(def.variantOptions || [])];
+            }
+          }
+        }
+        return copy;
+      },
+      set(value: Record<string, unknown>) {
+        (this as MockNode & { _componentPropertyDefinitions: Record<string, unknown> })._componentPropertyDefinitions =
+          cloneMockValue(value || {}) as Record<string, unknown>;
+      }
+    });
+  }
+  if (node.type === "INSTANCE") {
+    if (!(node as MockNode & { _componentProperties?: unknown })._componentProperties) {
+      (node as MockNode & { _componentProperties: Record<string, unknown> })._componentProperties = {};
+    }
+    Object.defineProperty(node, "componentProperties", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        return cloneMockValue((this as MockNode & { _componentProperties: Record<string, unknown> })._componentProperties);
+      },
+      set(value: Record<string, unknown>) {
+        (this as MockNode & { _componentProperties: Record<string, unknown> })._componentProperties =
+          cloneMockValue(value || {}) as Record<string, unknown>;
+      }
+    });
+  }
+}
+
 function createMockNode(type: string, name = type): MockNode {
   const node: MockNode = {
     ...typeDefaults(type),
@@ -865,6 +937,13 @@ function createMockNode(type: string, name = type): MockNode {
         if (["id", "parent", "children", "removed"].includes(key) || typeof value === "function") continue;
         copy[key] = cloneMockValue(value);
       }
+      const self = this as MockNode & { _componentPropertyDefinitions?: unknown; _componentProperties?: unknown };
+      if (self._componentPropertyDefinitions) {
+        (copy as MockNode & { _componentPropertyDefinitions: unknown })._componentPropertyDefinitions = cloneMockValue(self._componentPropertyDefinitions);
+      }
+      if (self._componentProperties) {
+        (copy as MockNode & { _componentProperties: unknown })._componentProperties = cloneMockValue(self._componentProperties);
+      }
       if (this.type === "INSTANCE" && copy.mainComponentId) {
         copy.getMainComponentAsync = async () => {
           const api = (globalThis as { figma?: { getNodeByIdAsync?: (id: string) => Promise<MockNode | null> } }).figma;
@@ -877,6 +956,7 @@ function createMockNode(type: string, name = type): MockNode {
     getPluginData(key: string) { return this.pluginData[key] || ""; },
     setPluginData(key: string, value: string) { this.pluginData[key] = value; }
   };
+  installFigmaCopyGetters(node);
   return node;
 }
 
@@ -956,23 +1036,22 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
     createComponent: () => createMockNode("COMPONENT"),
     combineAsVariants: (components: MockNode[], parent: MockNode) => {
       const set = createMockNode("COMPONENT_SET", "set");
-      set.componentPropertyDefinitions = {};
       for (const component of components) {
         if (component.parent) {
           const from = component.parent.children.indexOf(component);
           if (from >= 0) component.parent.children.splice(from, 1);
         }
         set.appendChild(component);
-        // Derive VARIANT options from names like State=Default
         for (const part of String(component.name).split(",")) {
           const trimmed = part.trim();
           const eq = trimmed.indexOf("=");
           if (eq < 0) continue;
           const axis = trimmed.slice(0, eq);
           const option = trimmed.slice(eq + 1);
-          const defs = set.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string; variantOptions?: string[] }>;
-          if (!defs[axis]) defs[axis] = { type: "VARIANT", defaultValue: option, variantOptions: [option] };
-          else if (!defs[axis].variantOptions!.includes(option)) defs[axis].variantOptions!.push(option);
+          const defs = (set as MockNode & { _componentPropertyDefinitions: Record<string, { type: string }> })._componentPropertyDefinitions;
+          if (!defs[axis]) {
+            (set as MockNode & { addComponentProperty: Function }).addComponentProperty(axis, "VARIANT", option);
+          }
         }
       }
       parent.appendChild(set);
@@ -1406,7 +1485,7 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     textAutoResize: ["text", "HEIGHT"], textTruncation: ["text", "ENDING"], maxLines: ["text", 2], runs: ["text", [{ text: "Ab" }, { text: "cd", fill: "#FF0000" }]],
     pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
     svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
-    componentId: ["rect", "c"], componentProperties: ["comp", { Title: { type: "TEXT", defaultValue: "Hi" } }], instanceProperties: ["inst", { Label: "Go" }], componentPropertyReferences: ["comp-label", { characters: "Label" }], variantAxes: ["set", { State: ["Default", "Hover", "Pressed"] }], variant: ["set-a", { State: "Hover" }],
+    componentId: ["rect", "c"], componentProperties: ["comp", { Title: { type: "TEXT", defaultValue: "Hi" } }], instanceProperties: ["inst", { Label: "Go" }], componentPropertyReferences: ["comp-label", { characters: "Label" }], variantAxes: ["set", { State: { rename: "Status" } }], variant: ["set-a", { State: "Hover" }],
     operation: ["bool", "SUBTRACT"], prototype: ["rect", []], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
     styleRefs: ["rect", { fill: "Ink" }], bindings: ["rect", { opacity: "gap" }], variableModes: ["rect", { Theme: "Dark" }]
   };
@@ -2085,13 +2164,14 @@ test("lockstep: variantAxes rename rewrites child names and instance VARIANT ove
   };
   let document = normalize(source);
   const page = await importIntoMock(document, importContext());
-  // Seed a VARIANT override on the Figma instance (Compact model keeps those out of instanceProperties).
   const use = mockById(page, "use");
   use.componentProperties = {
     ...(use.componentProperties as object),
     State: { type: "VARIANT", value: "Hover" }
   };
-  const patch = checkedPatch(setOp("set", { variantAxes: { State: null, Status: ["Default", "Pressed"] } }));
+  const patch = checkedPatch(setOp("set", {
+    variantAxes: { State: { rename: "Status", options: ["Default", "Pressed"], renameOptions: { Hover: "Pressed" } } }
+  }));
   document = applyCorePatch(document, patch).document;
   await applyFigmaPatch(patch, emptyPatchContext() as never);
   assert.deepEqual(nodeById(document, "h").properties.variant, { Status: "Pressed" });
@@ -2104,24 +2184,83 @@ test("lockstep: variantAxes rename rewrites child names and instance VARIANT ove
   assert.equal(props.Status?.value, "Pressed", "VARIANT override follows option+axis rename");
   const labelKey = Object.keys(props).find((key) => key.startsWith("Label"));
   assert.equal(props[labelKey!]?.value, "Hi", "non-variant instanceProperties survive");
-  // Round-trip: export instance Label override matches core
-  const roots = [mockById(page, "set"), use];
-  const { document: exported } = await exportSelection(roots as never);
-  const exportedUse = (exported.nodes || []).concat(...(exported.nodes || []).map((n: { children?: unknown[] }) => n.children || [])).find((n: { id?: string }) => n.id === "use")
-    || (() => {
-      const visit = (nodes: Array<Record<string, unknown>>): Record<string, unknown> | null => {
-        for (const node of nodes) {
-          if (node.id === "use") return node;
-          const kids = node.children as Array<Record<string, unknown>> | undefined;
-          if (kids) { const found = visit(kids); if (found) return found; }
-        }
-        return null;
-      };
-      return visit((exported.nodes || exported.canvases?.[0]?.nodes || []) as Array<Record<string, unknown>>);
-    })();
-  // exportSelection structure varies; assert Figma live state already matched core above.
   assert.ok(hover.name.includes("Status=Pressed"));
   assert.deepEqual(nodeById(document, "set").properties.variantAxes, { Status: ["Default", "Pressed"] });
+});
+
+test("lockstep: variantAxes rename does not rewrite instances of other sets", async () => {
+  const source = {
+    canvas: { width: 400, height: 120 },
+    nodes: [
+      {
+        id: "set-a", type: "COMPONENT_SET", w: 100, h: 40,
+        variantAxes: { Size: ["S", "M"] },
+        children: [
+          { id: "as", type: "COMPONENT", w: 40, h: 20, variant: { Size: "S" } },
+          { id: "am", type: "COMPONENT", w: 40, h: 20, variant: { Size: "M" } }
+        ]
+      },
+      {
+        id: "set-b", type: "COMPONENT_SET", w: 100, h: 40, x: 120,
+        variantAxes: { Size: ["S", "M"] },
+        children: [
+          { id: "bs", type: "COMPONENT", w: 40, h: 20, variant: { Size: "S" } },
+          { id: "bm", type: "COMPONENT", w: 40, h: 20, variant: { Size: "M" } }
+        ]
+      },
+      { id: "ia", type: "INSTANCE", componentId: "as", w: 40, h: 20 },
+      { id: "ib", type: "INSTANCE", componentId: "bs", x: 120, w: 40, h: 20 }
+    ]
+  };
+  let document = normalize(source);
+  const page = await importIntoMock(document, importContext());
+  const ia = mockById(page, "ia");
+  const ib = mockById(page, "ib");
+  ia.componentProperties = { ...(ia.componentProperties as object), Size: { type: "VARIANT", value: "S" } };
+  ib.componentProperties = { ...(ib.componentProperties as object), Size: { type: "VARIANT", value: "S" } };
+  const patch = checkedPatch(setOp("set-a", {
+    variantAxes: { Size: { options: ["Small", "M"], renameOptions: { S: "Small" } } }
+  }));
+  document = applyCorePatch(document, patch).document;
+  await applyFigmaPatch(patch, emptyPatchContext() as never);
+  assert.deepEqual(nodeById(document, "ia").properties.instanceProperties?.Size ?? (ia.componentProperties as Record<string, { value: string }>).Size?.value, "Small");
+  assert.equal((ia.componentProperties as Record<string, { value: string }>).Size?.value, "Small");
+  assert.equal((ib.componentProperties as Record<string, { value: string }>).Size?.value, "S", "other set instance untouched");
+  assert.deepEqual(nodeById(document, "ib").properties.instanceProperties, undefined);
+});
+
+test("lockstep: variant null rejected; uncarried option rejected; same-patch child can carry", async () => {
+  const source = {
+    canvas: { width: 200, height: 80 },
+    nodes: [{
+      id: "set", type: "COMPONENT_SET", w: 100, h: 40,
+      variantAxes: { State: ["Default", "Hover"] },
+      children: [
+        { id: "d", type: "COMPONENT", w: 40, h: 20, variant: { State: "Default" } },
+        { id: "h", type: "COMPONENT", w: 40, h: 20, variant: { State: "Hover" } }
+      ]
+    }]
+  };
+  let document = normalize(source);
+  const page = await importIntoMock(document, importContext());
+  const ctx = emptyPatchContext();
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch(setOp("d", { variant: null as never })), ctx as never),
+    /clearing variant|not supported/
+  );
+  assert.equal(validatePatch(document, { patch: { operations: [setOp("d", { variant: null as never })] } }).valid, false);
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch(setOp("set", { variantAxes: { State: ["Default", "Hover", "Pressed"] } })), ctx as never),
+    /not carried by any variant child/
+  );
+  const patch = checkedPatch(
+    setOp("set", { variantAxes: { State: ["Default", "Hover", "Pressed"] } }),
+    { op: "append", parent: "set", node: { id: "p", type: "COMPONENT", w: 40, h: 20, variant: { State: "Pressed" } } }
+  );
+  document = applyCorePatch(document, patch).document;
+  await applyFigmaPatch(patch, ctx as never);
+  assert.deepEqual(nodeById(document, "set").properties.variantAxes, { State: ["Default", "Hover", "Pressed"] });
+  assert.match(mockById(page, "p").name, /State=Pressed/);
 });
 
 test("rollback after COMPONENT patch failure re-links instances across pages and calls loadAllPagesAsync first", async () => {

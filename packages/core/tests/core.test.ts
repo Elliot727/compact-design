@@ -705,8 +705,11 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
     else if (key === "font") assert.deepEqual(patchProperty, { $ref: "#/$defs/fontPatch" });
     else if (key === "componentProperties") {
       assert.ok(Array.isArray(patchProperty.oneOf), "componentProperties allows null / name-keyed upsert");
-    } else if (key === "variantAxes" || key === "variant") {
+    } else if (key === "variantAxes") {
       assert.equal(patchProperty.type, "object", key);
+      assert.ok(Array.isArray(patchProperty.additionalProperties?.oneOf), "variantAxes entries allow array | object | null");
+    } else if (key === "variant") {
+      assert.ok(Array.isArray(patchProperty.oneOf), "variant allows null clear (rejected at apply)");
     } else if (mergePatchKeys.has(key)) {
       assert.ok(Array.isArray(patchProperty.oneOf), `${key} patch schema allows null clear via oneOf`);
       assert.ok(patchProperty.oneOf.some((entry: { type?: string }) => entry.type === "null"), `${key} allows null`);
@@ -978,7 +981,7 @@ test("patch componentProperties name-keyed upsert, immutable type, delete + refe
   assert.equal(nodeById(dropped.document, "button").properties.componentProperties!.some((p) => p.name === "Show"), false);
 });
 
-test("patch variantAxes merge, rename, reject axis delete; variant merge rewrites names", () => {
+test("patch variantAxes merge, explicit rename, reject axis delete; variant merge rewrites names", () => {
   const document = normalize({
     canvas: { width: 400, height: 200 },
     nodes: [{
@@ -994,16 +997,78 @@ test("patch variantAxes merge, rename, reject axis delete; variant merge rewrite
   });
   assert.match(nodeById(document, "d-s").name, /State=Default/);
   rejects(document, /deleting a variant axis is not supported/, setOp("set", { variantAxes: { Size: null } }));
+  // Plain array replacement is NOT a rename — removing Hover while a child still uses it errors.
+  rejects(document, /removed without renameOptions|not carried/, setOp("set", { variantAxes: { State: ["Default", "Pressed"] } }));
   const renamed = applyPatch(document, normalizePatch(patchOf(setOp("set", {
-    variantAxes: { State: null, Status: ["Default", "Pressed"], Size: ["S", "L"] }
+    variantAxes: { State: { rename: "Status", options: ["Default", "Pressed"], renameOptions: { Hover: "Pressed" } } }
   }))));
   assert.deepEqual(nodeById(renamed.document, "set").properties.variantAxes, { Status: ["Default", "Pressed"], Size: ["S", "L"] });
   assert.deepEqual(nodeById(renamed.document, "h-l").properties.variant, { Status: "Pressed", Size: "L" });
   assert.match(nodeById(renamed.document, "h-l").name, /Status=Pressed/);
-  const selected = applyPatch(document, normalizePatch(patchOf(setOp("d-s", { variant: { State: "Hover" } }))));
+  // Swap d-s onto Pressed while h-l moves to Default so every option stays carried.
+  const selected = applyPatch(document, normalizePatch(patchOf(
+    setOp("d-s", { variant: { State: "Hover" } }),
+    setOp("h-l", { variant: { State: "Default" } })
+  )));
   assert.deepEqual(nodeById(selected.document, "d-s").properties.variant, { State: "Hover", Size: "S" });
-  assert.match(nodeById(selected.document, "d-s").name, /State=Hover/);
+  assert.deepEqual(nodeById(selected.document, "h-l").properties.variant, { State: "Default", Size: "L" });
   rejects(document, /not declared/, setOp("d-s", { variant: { State: "Nope" } }));
+  rejects(document, /clearing variant|not supported/, setOp("d-s", { variant: null as never }));
+});
+
+test("variantAxes rename scopes instance rewrites to the patched set only", () => {
+  const document = normalize({
+    canvas: { width: 400, height: 200 },
+    nodes: [
+      {
+        id: "set-a", type: "COMPONENT_SET", w: 100, h: 40,
+        variantAxes: { Size: ["S", "M"] },
+        children: [
+          { id: "as", type: "COMPONENT", w: 40, h: 20, variant: { Size: "S" } },
+          { id: "am", type: "COMPONENT", w: 40, h: 20, variant: { Size: "M" } }
+        ]
+      },
+      {
+        id: "set-b", type: "COMPONENT_SET", w: 100, h: 40, x: 120,
+        variantAxes: { Size: ["S", "M"] },
+        children: [
+          { id: "bs", type: "COMPONENT", w: 40, h: 20, variant: { Size: "S" } },
+          { id: "bm", type: "COMPONENT", w: 40, h: 20, variant: { Size: "M" } }
+        ]
+      },
+      { id: "ia", type: "INSTANCE", componentId: "as", w: 40, h: 20, instanceProperties: { Size: "S" } },
+      { id: "ib", type: "INSTANCE", componentId: "bs", x: 120, w: 40, h: 20, instanceProperties: { Size: "S" } }
+    ]
+  });
+  const patched = applyPatch(document, normalizePatch(patchOf(setOp("set-a", {
+    variantAxes: { Size: { options: ["Small", "M"], renameOptions: { S: "Small" } } }
+  }))));
+  assert.deepEqual(nodeById(patched.document, "set-a").properties.variantAxes, { Size: ["Small", "M"] });
+  assert.deepEqual(nodeById(patched.document, "ia").properties.instanceProperties, { Size: "Small" });
+  assert.deepEqual(nodeById(patched.document, "ib").properties.instanceProperties, { Size: "S" }, "set B instance untouched");
+  assert.deepEqual(nodeById(patched.document, "set-b").properties.variantAxes, { Size: ["S", "M"] });
+});
+
+test("variantAxes rejects uncarried options; same-patch child variant can carry them", () => {
+  const document = normalize({
+    canvas: { width: 200, height: 100 },
+    nodes: [{
+      id: "set", type: "COMPONENT_SET", w: 100, h: 40,
+      variantAxes: { State: ["Default", "Hover"] },
+      children: [
+        { id: "d", type: "COMPONENT", w: 40, h: 20, variant: { State: "Default" } },
+        { id: "h", type: "COMPONENT", w: 40, h: 20, variant: { State: "Hover" } }
+      ]
+    }]
+  });
+  rejects(document, /not carried by any variant child/, setOp("set", { variantAxes: { State: ["Default", "Hover", "Pressed"] } }));
+  // Same patch: declare Pressed, then insert a child that carries it (Hover/Default stay carried).
+  const ok = applyPatch(document, normalizePatch(patchOf(
+    setOp("set", { variantAxes: { State: ["Default", "Hover", "Pressed"] } }),
+    { op: "append", parent: "set", node: { id: "p", type: "COMPONENT", w: 40, h: 20, variant: { State: "Pressed" } } }
+  )));
+  assert.deepEqual(nodeById(ok.document, "set").properties.variantAxes, { State: ["Default", "Hover", "Pressed"] });
+  assert.deepEqual(nodeById(ok.document, "p").properties.variant, { State: "Pressed" });
 });
 
 test("validatePatch reports bad references in the patched document", () => {
