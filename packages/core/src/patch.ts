@@ -3,6 +3,7 @@ import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } 
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
 import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames, variantAxesChildConflicts, type VariantAxesPatch } from "./patch-definitions";
 import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, subtreeContainsType } from "./patch-duplicate";
+import { assertPrototypeSetDestinations, canvasRootId } from "./patch-prototype";
 import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -363,6 +364,24 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
       const split = message.indexOf(":");
       return patchIssue("PATCH_SET_INVALID", `patch.operations[${operationIndex}].set.${message.slice(0, split)}`, message.slice(split + 1).trim(), "Use a key that applies to this node, or see the patch rules in DESIGN-LANGUAGE.md.");
     }));
+  }
+  if (values.prototype !== undefined) {
+    const protoErrors = assertPrototypeSetDestinations(
+      values.prototype,
+      {
+        has: (id) => index.has(id),
+        typeOf: (id) => index.get(id)?.node.type,
+        canvasOf: (id) => canvasRootId(roots, id)
+      },
+      `patch.operations[${operationIndex}].set.prototype`,
+      target.node.id
+    );
+    if (protoErrors.length) {
+      throw new PatchError(protoErrors.map((message) => {
+        const split = message.indexOf(": ");
+        return patchIssue("PATCH_OPERATION", split > 0 ? message.slice(0, split) : `patch.operations[${operationIndex}].set.prototype`, split > 0 ? message.slice(split + 2) : message, "Use a destination id that exists (including ids created earlier in this patch).");
+      }));
+    }
   }
   mergeSet(target, values, set, warnings);
   const defErrors: string[] = [];

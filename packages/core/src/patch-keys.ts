@@ -50,7 +50,7 @@ export const PATCH_SET_SEMANTICS: Readonly<Record<PatchSetKey, PatchSetSemantics
   textAutoResize: "scalar", textTruncation: "scalar", maxLines: "scalar", runs: "replace",
   pointCount: "scalar", innerRadius: "scalar", startingAngle: "scalar", endingAngle: "scalar", innerRadiusRatio: "scalar",
   svg: "immutable", vectorPaths: "replace", componentId: "deferred", componentProperties: "merge", instanceProperties: "merge", componentPropertyReferences: "merge", variantAxes: "merge", variant: "merge",
-  operation: "scalar", prototype: "deferred", overflowDirection: "scalar", numberOfFixedChildren: "scalar", styleRefs: "merge", bindings: "merge", variableModes: "merge"
+  operation: "scalar", prototype: "replace", overflowDirection: "scalar", numberOfFixedChildren: "scalar", styleRefs: "merge", bindings: "merge", variableModes: "merge"
 };
 
 export const PATCH_SET_DEFERRED_KEYS: readonly PatchSetKey[] = PATCH_SET_KEYS.filter((key) => PATCH_SET_SEMANTICS[key] === "deferred");

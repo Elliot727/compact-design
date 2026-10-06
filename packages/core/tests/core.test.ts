@@ -100,6 +100,7 @@ test("validates geometry, auto layout, variables, and prototype destinations", (
   const errors = validateDocument(document);
   assert.ok(errors.some((value) => value.includes("positive finite")));
   assert.ok(errors.some((value) => value.includes("HORIZONTAL")));
+  assert.ok(errors.some((value) => /destination 'missing' was not found/i.test(value)), errors.join("\n"));
   assert.ok(lintDocument(document).some((issue) => issue.code === "BROKEN_PROTOTYPE_DESTINATION"));
 });
 
@@ -718,7 +719,7 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
   }
   assert.equal(specSchema.$defs.layoutPatch.required, undefined);
   assert.deepEqual(specSchema.$defs.patchOperation.oneOf[0].properties.set, { $ref: "#/$defs/patchSet" });
-  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "prototype"]);
+  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId"]);
 });
 
 test("a typo set key fails in the schema and in core", () => {
@@ -741,13 +742,13 @@ test("a typo set key fails in the schema and in core", () => {
 
 test("patch documents no longer short-circuit validation", () => {
   // Still rejected: deferred keys, immutable svg, and conflicting fill+fills.
-  for (const set of [{ prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }, { componentId: "x" }]) {
+  for (const set of [{ svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }, { componentId: "x" }]) {
     const result = validate(patchOf(setOp("title", set)));
     assert.equal(result.valid, false, JSON.stringify(set));
   }
-  const deferred = validate(patchOf(setOp("title", { prototype: [] })));
+  const deferred = validate(patchOf(setOp("title", { componentId: "x" })));
   assert.equal(deferred.issues[0].code, "PATCH_SET_UNSUPPORTED");
-  assert.equal(deferred.issues[0].path, "patch.operations[0].set.prototype");
+  assert.equal(deferred.issues[0].path, "patch.operations[0].set.componentId");
   assert.match(deferred.issues[0].message, /cannot be patched yet/);
   // Newly patchable object keys pass shape validation (target rules run at apply).
   assert.equal(validate(patchOf(setOp("title", { bindings: { fill: "brand" } }))).valid, true);
@@ -1607,5 +1608,128 @@ test("remapIssueKeyThroughDuplicate uses exact owner and delimited ids (no subst
   ));
   assert.equal(ok.valid, true, ok.issues.map((i) => i.message).join("; "));
   assert.equal(validateDocument(ok.document!).length, 5);
+});
+
+
+test("patch set prototype: NAVIGATE, clear [], missing destination, same-patch dest", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "home", type: "FRAME", w: 100, h: 80, children: [
+        { id: "cta", type: "FRAME", w: 40, h: 20 }
+      ] },
+      { id: "checkout", type: "FRAME", x: 200, w: 100, h: 80, children: [] }
+    ]
+  });
+  const nav = applyRaw(document, setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout", transition: { type: "DISSOLVE", easing: "EASE_OUT", duration: 0.3 } }] }]
+  }));
+  const proto = nodeById(nav, "cta").properties.prototype as Array<{ actions: Array<{ destination: string; transition?: { easing?: string } }> }>;
+  assert.equal(proto[0].actions[0].destination, "checkout");
+  assert.equal(proto[0].actions[0].transition?.easing, "EASE_OUT");
+
+  const cleared = applyRaw(nav, setOp("cta", { prototype: [] }));
+  assert.deepEqual(nodeById(cleared, "cta").properties.prototype, []);
+
+  rejects(document, /was not found/, setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "ghost" }] }]
+  }));
+
+  // Same-patch destination from append
+  const same = applyRaw(document,
+    { op: "append", parent: "page", node: { id: "new-screen", type: "FRAME", w: 50, h: 50 } },
+    setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "new-screen" }] }] })
+  );
+  assert.equal((nodeById(same, "cta").properties.prototype as Array<{ actions: Array<{ destination: string }> }>)[0].actions[0].destination, "new-screen");
+
+  // Same-patch from duplicate
+  const dup = applyRaw(document,
+    { op: "duplicate", id: "checkout", idSuffix: "-2" },
+    setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout-2" }] }] })
+  );
+  assert.equal((nodeById(dup, "cta").properties.prototype as Array<{ actions: Array<{ destination: string }> }>)[0].actions[0].destination, "checkout-2");
+});
+
+test("patch set prototype: CHANGE_TO non-COMPONENT and SCROLL_TO across canvases fail", () => {
+  const document = normalize({
+    canvases: [
+      { id: "screen-a", width: 100, height: 80, nodes: [
+        { id: "btn", type: "FRAME", w: 20, h: 10 },
+        { id: "panel", type: "FRAME", w: 40, h: 40 }
+      ] },
+      { id: "screen-b", width: 100, height: 80, nodes: [
+        { id: "other", type: "FRAME", w: 20, h: 10 }
+      ] }
+    ]
+  });
+  rejects(document, /CHANGE_TO destination.*must be a component/, setOp("btn", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "CHANGE_TO", destination: "panel" }] }]
+  }));
+  rejects(document, /SCROLL_TO destination.*same top-level canvas/, setOp("btn", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "SCROLL_TO", destination: "other" }] }]
+  }));
+});
+
+test("patch set prototype: end-of-patch remove of destination or reaction host target fails", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "home", type: "FRAME", w: 100, h: 80, children: [
+        { id: "cta", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }] }
+      ] },
+      { id: "checkout", type: "FRAME", x: 200, w: 100, h: 80 }
+    ]
+  });
+  // Remove destination → dangling on cta
+  rejects(document, /was not found/, { op: "remove", id: "checkout" });
+  // Set then remove destination in same patch
+  rejects(document, /was not found/,
+    setOp("home", { name: "Home" }),
+    { op: "remove", id: "checkout" }
+  );
+  // Remove a node that another reaction points at (same)
+  const withTwo = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "b" }] }] },
+      { id: "b", type: "FRAME", x: 100, w: 40, h: 20 }
+    ]
+  });
+  rejects(withTwo, /was not found/, { op: "remove", id: "b" });
+});
+
+test("patch set prototype: idempotent set → read → set (preserves transition easing)", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 100 },
+    nodes: [
+      { id: "a", type: "FRAME", w: 40, h: 20 },
+      { id: "b", type: "FRAME", x: 80, w: 40, h: 20 }
+    ]
+  });
+  const reaction = [{
+    trigger: { type: "ON_CLICK" },
+    actions: [{ type: "NAVIGATE", destination: "b", transition: { type: "SMART_ANIMATE", easing: "GENTLE", duration: 0.45 }, resetScrollPosition: true }]
+  }];
+  const once = applyRaw(document, setOp("a", { prototype: reaction }));
+  const exported = nodeById(once, "a").properties.prototype;
+  const twice = applyRaw(once, setOp("a", { prototype: exported as unknown[] }));
+  assert.deepEqual(nodeById(twice, "a").properties.prototype, exported);
+});
+
+test("patch set prototype: componentId still rejected; AFTER_TIMEOUT stored on source in core", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 100 },
+    nodes: [
+      { id: "screen", type: "FRAME", w: 100, h: 80, children: [
+        { id: "child", type: "FRAME", w: 20, h: 10 }
+      ] },
+      { id: "next", type: "FRAME", x: 120, w: 50, h: 50 }
+    ]
+  });
+  rejects(document, /cannot be patched yet|PATCH_SET_UNSUPPORTED|componentId/, setOp("child", { componentId: "x" }));
+  const result = applyRaw(document, setOp("child", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  }));
+  assert.equal((nodeById(result, "child").properties.prototype as Array<{ trigger: { type: string } }>)[0].trigger.type, "AFTER_TIMEOUT");
 });
 

@@ -4,7 +4,7 @@ import type { JsonObject, JsonPrimitive } from "@compact-design/core";
 function object(value: unknown): JsonObject { return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {}; }
 function objects(value: unknown): JsonObject[] { return Array.isArray(value) ? value.filter((item): item is JsonObject => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : []; }
 
-function prototypeRoot(node: SceneNode): SceneNode {
+export function prototypeRoot(node: SceneNode): SceneNode {
   let current = node;
   while (current.parent && current.parent.type !== "PAGE" && "type" in current.parent) current = current.parent as SceneNode;
   return current;
