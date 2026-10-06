@@ -398,8 +398,8 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   }
   const operations: PatchOperation[] = source.patch.operations.map((operation, index) => {
     const op = String(operation.op || "").toUpperCase();
-    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE', 'WRAP', 'UNWRAP'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, duplicate, wrap, or unwrap.`);
-    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE' || op === 'DUPLICATE' || op === 'UNWRAP') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
+    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE', 'WRAP', 'UNWRAP', 'COMPONENTIZE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, duplicate, wrap, unwrap, or componentize.`);
+    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE' || op === 'DUPLICATE' || op === 'UNWRAP' || op === 'COMPONENTIZE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
     if (op === 'SET' && (!operation.set || typeof operation.set !== 'object' || Array.isArray(operation.set))) throw new Error(`patch.operations[${index}].set is required.`);
     if (op === 'APPEND' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
     if (op === 'INSERT' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
@@ -448,6 +448,38 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
         throw new Error(`patch.operations[${index}].id is required.`);
       }
     }
+    if (op === 'COMPONENTIZE') {
+      if (typeof operation.id !== "string" || !operation.id) {
+        throw new Error(`patch.operations[${index}].id is required.`);
+      }
+      if (operation.properties !== undefined) {
+        if (!operation.properties || typeof operation.properties !== "object" || Array.isArray(operation.properties)) {
+          throw new Error(`patch.operations[${index}].properties must be an object.`);
+        }
+        for (const [name, decl] of Object.entries(operation.properties as Record<string, unknown>)) {
+          if (!name) throw new Error(`patch.operations[${index}].properties: property names must be non-empty.`);
+          if (!decl || typeof decl !== "object" || Array.isArray(decl)) {
+            throw new Error(`patch.operations[${index}].properties.${name} must be an object.`);
+          }
+          const d = decl as Record<string, unknown>;
+          const t = String(d.type || "").toUpperCase();
+          if (!["TEXT", "BOOLEAN", "INSTANCE_SWAP"].includes(t)) {
+            throw new Error(`patch.operations[${index}].properties.${name}.type must be TEXT, BOOLEAN, or INSTANCE_SWAP.`);
+          }
+          if (typeof d.layer !== "string" || !d.layer) {
+            throw new Error(`patch.operations[${index}].properties.${name}.layer must be a non-empty string.`);
+          }
+        }
+      }
+      if (operation.instances !== undefined) {
+        if (!Array.isArray(operation.instances) || operation.instances.some((id) => typeof id !== "string" || !id)) {
+          throw new Error(`patch.operations[${index}].instances must be an array of non-empty strings.`);
+        }
+        if (new Set(operation.instances as string[]).size !== (operation.instances as string[]).length) {
+          throw new Error(`patch.operations[${index}].instances must not contain duplicates.`);
+        }
+      }
+    }
         const result: PatchOperation = {
       op: op as PatchOperation['op'],
       id: typeof operation.id === "string" ? operation.id : undefined,
@@ -458,7 +490,11 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
       ids: operation.ids && typeof operation.ids === "object" && !Array.isArray(operation.ids)
         ? { ...(operation.ids as Record<string, string>) }
         : undefined,
-      wrapIds: op === 'WRAP' && Array.isArray(operation.ids) ? [...(operation.ids as string[])] : undefined
+      wrapIds: op === 'WRAP' && Array.isArray(operation.ids) ? [...(operation.ids as string[])] : undefined,
+      componentizeProperties: op === 'COMPONENTIZE' && operation.properties && typeof operation.properties === "object" && !Array.isArray(operation.properties)
+        ? Object.fromEntries(Object.entries(operation.properties as Record<string, { type: string; layer: string }>).map(([name, decl]) => [name, { type: String(decl.type).toUpperCase() as "TEXT" | "BOOLEAN" | "INSTANCE_SWAP", layer: decl.layer }]))
+        : undefined,
+      componentizeInstances: op === 'COMPONENTIZE' && Array.isArray(operation.instances) ? [...(operation.instances as string[])] : undefined
     };
     if (op === 'SET') {
       const set = operation.set as JsonObject;

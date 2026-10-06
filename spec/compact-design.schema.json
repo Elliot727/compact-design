@@ -1257,6 +1257,34 @@
             "op": { "const": "unwrap" },
             "id": { "type": "string", "minLength": 1, "description": "FRAME or GROUP to dissolve. Children are promoted preserving absolute positions (or become AL flow items if the parent has Auto Layout)." }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id"],
+          "properties": {
+            "op": { "const": "componentize" },
+            "id": { "type": "string", "minLength": 1, "description": "FRAME to promote to COMPONENT in place (same id/parent/index/x/y/subtree)." },
+            "properties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "layer"],
+                "properties": {
+                  "type": { "enum": ["TEXT", "BOOLEAN", "INSTANCE_SWAP"] },
+                  "layer": { "type": "string", "minLength": 1, "description": "Descendant id of id that the property binds to." }
+                }
+              },
+              "description": "Property name → { type, layer }. Defaults are read from the source layer; wired via componentProperties + componentPropertyReferences."
+            },
+            "instances": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true,
+              "description": "Detached FRAME copy ids replaced by INSTANCEs of id. Omit for promote-only. Copy w/h must equal the source."
+            }
+          }
         }
       ]
     },

@@ -637,7 +637,7 @@ const NO_SCENE_PROPS = new Set(["PAGE"]);
 
 function typeDefaults(type: string): Record<string, unknown> {
   if (NO_SCENE_PROPS.has(type)) return {};
-  const base: Record<string, unknown> = { opacity: 1, blendMode: "PASS_THROUGH", visible: true, locked: false, isMask: false, boundVariables: {}, fillStyleId: "", strokeStyleId: "", textStyleId: "", explicitVariableModes: {} };
+  const base: Record<string, unknown> = { opacity: 1, blendMode: "PASS_THROUGH", visible: true, locked: false, isMask: false, boundVariables: {}, fillStyleId: "", strokeStyleId: "", textStyleId: "", effectStyleId: "", gridStyleId: "", explicitVariableModes: {} };
   if (type === "GROUP" || type === "BOOLEAN_OPERATION") return { ...base, layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO", ...(type === "BOOLEAN_OPERATION" ? { booleanOperation: "UNION", strokeWeight: 1, strokeAlign: "CENTER", strokeJoin: "MITER", dashPattern: [], constraints: { horizontal: "MIN", vertical: "MIN" } } : {}) };
   Object.assign(base, {
     strokeWeight: 1, strokeAlign: "INSIDE", strokeJoin: "MITER", dashPattern: [],
@@ -712,6 +712,14 @@ function typeDefaults(type: string): Record<string, unknown> {
     createInstance(this: MockNode) {
       const main = this;
       const instance = createMockNode("INSTANCE", this.name);
+      // Inherit root chrome from main (real Figma instances mirror the component's appearance).
+      instance.resize(main.width, main.height);
+      instance.fills = Array.isArray(main.fills) ? (main.fills as unknown[]).map((paint) => ({ ...(paint as object) })) : main.fills;
+      instance.strokes = Array.isArray(main.strokes) ? (main.strokes as unknown[]).map((paint) => ({ ...(paint as object) })) : main.strokes;
+      instance.effects = Array.isArray(main.effects) ? (main.effects as unknown[]).map((effect) => ({ ...(effect as object) })) : main.effects;
+      if ("cornerRadius" in main) instance.cornerRadius = main.cornerRadius;
+      if ("opacity" in main) instance.opacity = main.opacity;
+      if ("clipsContent" in main) instance.clipsContent = main.clipsContent;
       for (const child of this.children) {
         const copy = child.clone();
         const clearIds = (node: MockNode) => { node.setPluginData("compactDesignId", ""); node.children.forEach(clearIds); };
@@ -789,7 +797,13 @@ function typeDefaults(type: string): Record<string, unknown> {
     characters: "", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 },
     textDecoration: "NONE", textCase: "ORIGINAL", paragraphSpacing: 0, paragraphIndent: 0, listSpacing: 0, hangingPunctuation: false, hangingList: false,
     textAlignHorizontal: "LEFT", textAlignVertical: "TOP", textAutoResize: "NONE", textTruncation: "DISABLED", maxLines: null, hyperlink: null, textStyleId: "",
+    fillStyleId: "", fontWeight: 400, fontStyle: "REGULAR", listOptions: { type: "NONE" }, indentation: 0, openTypeFeatures: {},
     rangeFonts: [] as Array<{ start: number; end: number; font: { family: string; style: string } }>,
+    rangeFills: [] as Array<{ start: number; end: number; fills: unknown[] }>,
+    rangeFontSizes: [] as Array<{ start: number; end: number; fontSize: number }>,
+    rangeLetterSpacings: [] as Array<{ start: number; end: number; letterSpacing: unknown }>,
+    rangeLineHeights: [] as Array<{ start: number; end: number; lineHeight: unknown }>,
+    rangeTextDecorations: [] as Array<{ start: number; end: number; textDecoration: string }>,
     getRangeAllFontNames(this: MockNode) {
       const fonts = this.fontName === MIXED ? (this.rangeFonts as Array<{ font: { family: string; style: string } }>).map((range) => range.font) : [this.fontName as { family: string; style: string }];
       return [...new Map(fonts.map((font) => [`${font.family}/${font.style}`, font])).values()];
@@ -802,11 +816,123 @@ function typeDefaults(type: string): Record<string, unknown> {
       this.rangeFonts = [...(current !== MIXED ? [{ start: 0, end: String(this.characters).length, font: current }] : this.rangeFonts as unknown[]), { start, end, font }];
       this.fontName = MIXED;
     },
-    setRangeFontSize(this: MockNode, start: number, end: number, size: number) { if (start === 0 && end >= String(this.characters).length) this.fontSize = size; else if (size !== this.fontSize) this.fontSize = MIXED; },
-    setRangeFills(this: MockNode, start: number, end: number, fills: unknown[]) { this.fills = start === 0 && end >= String(this.characters).length ? fills : MIXED; },
-    setRangeTextDecoration(this: MockNode, _start: number, _end: number, value: string) { if (value !== this.textDecoration) this.textDecoration = MIXED; },
-    setRangeLetterSpacing(this: MockNode) { this.letterSpacing = MIXED; },
-    setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; }
+    setRangeFontSize(this: MockNode, start: number, end: number, size: number) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.fontSize = size; this.rangeFontSizes = []; return; }
+      if (this.fontSize !== MIXED && this.fontSize === size) return;
+      const len = String(this.characters).length;
+      if (this.fontSize !== MIXED) this.rangeFontSizes = [{ start: 0, end: len, fontSize: this.fontSize as number }];
+      this.rangeFontSizes = [...(this.rangeFontSizes as unknown[]), { start, end, fontSize: size }];
+      this.fontSize = MIXED;
+    },
+    setRangeFills(this: MockNode, start: number, end: number, fills: unknown[]) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.fills = fills; this.rangeFills = []; return; }
+      const len = String(this.characters).length;
+      if (this.fills !== MIXED && Array.isArray(this.fills)) this.rangeFills = [{ start: 0, end: len, fills: this.fills as unknown[] }];
+      this.rangeFills = [...(this.rangeFills as unknown[]), { start, end, fills }];
+      this.fills = MIXED;
+    },
+    setRangeTextDecoration(this: MockNode, start: number, end: number, value: string) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.textDecoration = value; this.rangeTextDecorations = []; return; }
+      if (this.textDecoration !== MIXED && this.textDecoration === value) return;
+      const len = String(this.characters).length;
+      if (this.textDecoration !== MIXED) this.rangeTextDecorations = [{ start: 0, end: len, textDecoration: this.textDecoration as string }];
+      this.rangeTextDecorations = [...(this.rangeTextDecorations as unknown[]), { start, end, textDecoration: value }];
+      this.textDecoration = MIXED;
+    },
+    setRangeLetterSpacing(this: MockNode, start: number, end: number, value: unknown) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.letterSpacing = value; this.rangeLetterSpacings = []; return; }
+      const len = String(this.characters).length;
+      if (this.letterSpacing !== MIXED) this.rangeLetterSpacings = [{ start: 0, end: len, letterSpacing: this.letterSpacing }];
+      this.rangeLetterSpacings = [...(this.rangeLetterSpacings as unknown[]), { start, end, letterSpacing: value }];
+      this.letterSpacing = MIXED;
+    },
+    setRangeLineHeight(this: MockNode, start: number, end: number, value: unknown) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.lineHeight = value; this.rangeLineHeights = []; return; }
+      const len = String(this.characters).length;
+      if (this.lineHeight !== MIXED) this.rangeLineHeights = [{ start: 0, end: len, lineHeight: this.lineHeight }];
+      this.rangeLineHeights = [...(this.rangeLineHeights as unknown[]), { start, end, lineHeight: value }];
+      this.lineHeight = MIXED;
+    },
+    setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; },
+    getStyledTextSegments(this: MockNode, fields: string[], start?: number, end?: number) {
+      const text = String(this.characters);
+      const from = start ?? 0;
+      const to = end ?? text.length;
+      if (from >= to) return [];
+      const breaks = new Set<number>([from, to]);
+      const addBreaks = (ranges: Array<{ start: number; end: number }>) => {
+        for (const range of ranges) {
+          if (range.start > from && range.start < to) breaks.add(range.start);
+          if (range.end > from && range.end < to) breaks.add(range.end);
+        }
+      };
+      const fieldMixed: Record<string, { mixed: boolean; ranges: Array<{ start: number; end: number }> }> = {
+        fontName: { mixed: this.fontName === MIXED, ranges: this.rangeFonts as Array<{ start: number; end: number }> },
+        fills: { mixed: this.fills === MIXED, ranges: this.rangeFills as Array<{ start: number; end: number }> },
+        fontSize: { mixed: this.fontSize === MIXED, ranges: this.rangeFontSizes as Array<{ start: number; end: number }> },
+        letterSpacing: { mixed: this.letterSpacing === MIXED, ranges: this.rangeLetterSpacings as Array<{ start: number; end: number }> },
+        lineHeight: { mixed: this.lineHeight === MIXED, ranges: this.rangeLineHeights as Array<{ start: number; end: number }> },
+        textDecoration: { mixed: this.textDecoration === MIXED, ranges: this.rangeTextDecorations as Array<{ start: number; end: number }> }
+      };
+      for (const field of fields) {
+        const info = fieldMixed[field];
+        if (!info?.mixed) continue;
+        if (info.ranges.length) addBreaks(info.ranges);
+        else if (to - from >= 2) breaks.add(from + 1);
+      }
+      const points = [...breaks].sort((a, b) => a - b);
+      const resolveAt = (index: number) => {
+        const pick = <T,>(ranges: Array<{ start: number; end: number } & T>, fallback: T): T => {
+          for (let i = ranges.length - 1; i >= 0; i--) {
+            const range = ranges[i];
+            if (index >= range.start && index < range.end) return range;
+          }
+          return fallback;
+        };
+        const fontRange = pick(this.rangeFonts as Array<{ start: number; end: number; font: { family: string; style: string } }>, { start: 0, end: 0, font: this.fontName === MIXED ? { family: "Inter", style: "Regular" } : this.fontName as { family: string; style: string } });
+        const fillRange = pick(this.rangeFills as Array<{ start: number; end: number; fills: unknown[] }>, { start: 0, end: 0, fills: this.fills === MIXED ? [] : (this.fills as unknown[]) });
+        const sizeRange = pick(this.rangeFontSizes as Array<{ start: number; end: number; fontSize: number }>, { start: 0, end: 0, fontSize: typeof this.fontSize === "number" ? this.fontSize : 12 });
+        const spacingRange = pick(this.rangeLetterSpacings as Array<{ start: number; end: number; letterSpacing: unknown }>, { start: 0, end: 0, letterSpacing: this.letterSpacing === MIXED ? { unit: "PERCENT", value: 0 } : this.letterSpacing });
+        const heightRange = pick(this.rangeLineHeights as Array<{ start: number; end: number; lineHeight: unknown }>, { start: 0, end: 0, lineHeight: this.lineHeight === MIXED ? { unit: "AUTO" } : this.lineHeight });
+        const decoRange = pick(this.rangeTextDecorations as Array<{ start: number; end: number; textDecoration: string }>, { start: 0, end: 0, textDecoration: this.textDecoration === MIXED ? "NONE" : String(this.textDecoration) });
+        return {
+          fontName: fontRange.font,
+          fills: fillRange.fills,
+          fontSize: sizeRange.fontSize,
+          letterSpacing: spacingRange.letterSpacing,
+          lineHeight: heightRange.lineHeight,
+          textDecoration: decoRange.textDecoration,
+          textCase: this.textCase === MIXED ? "ORIGINAL" : this.textCase,
+          textStyleId: this.textStyleId || "",
+          fillStyleId: this.fillStyleId || "",
+          fontWeight: this.fontWeight || 400,
+          fontStyle: this.fontStyle || "REGULAR",
+          listOptions: this.listOptions || { type: "NONE" },
+          indentation: this.indentation || 0,
+          paragraphIndent: this.paragraphIndent || 0,
+          paragraphSpacing: this.paragraphSpacing || 0,
+          listSpacing: this.listSpacing || 0,
+          hyperlink: this.hyperlink === MIXED ? null : this.hyperlink,
+          openTypeFeatures: this.openTypeFeatures || {}
+        };
+      };
+      const segments: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (a >= b) continue;
+        const props = resolveAt(a);
+        const segment: Record<string, unknown> = { characters: text.slice(a, b), start: a, end: b };
+        for (const field of fields) if (field in props) segment[field] = props[field as keyof typeof props];
+        segments.push(segment);
+      }
+      return segments;
+    }
   });
   base.setBoundVariable = function (this: MockNode, field: string, variable: { id: string } | null) {
     const bound = this.boundVariables as Record<string, unknown>;
@@ -1208,6 +1334,56 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
     createVector: () => createMockNode("VECTOR"),
     createText: () => createMockNode("TEXT"),
     createComponent: () => createMockNode("COMPONENT"),
+    union: (children: MockNode[], parent: MockNode) => {
+      const node = createMockNode("BOOLEAN_OPERATION", "Union");
+      node.booleanOperation = "UNION";
+      for (const child of children) node.appendChild(child);
+      parent.appendChild(node);
+      return node;
+    },
+    subtract: (children: MockNode[], parent: MockNode) => {
+      const node = createMockNode("BOOLEAN_OPERATION", "Subtract");
+      node.booleanOperation = "SUBTRACT";
+      for (const child of children) node.appendChild(child);
+      parent.appendChild(node);
+      return node;
+    },
+    intersect: (children: MockNode[], parent: MockNode) => {
+      const node = createMockNode("BOOLEAN_OPERATION", "Intersect");
+      node.booleanOperation = "INTERSECT";
+      for (const child of children) node.appendChild(child);
+      parent.appendChild(node);
+      return node;
+    },
+    exclude: (children: MockNode[], parent: MockNode) => {
+      const node = createMockNode("BOOLEAN_OPERATION", "Exclude");
+      node.booleanOperation = "EXCLUDE";
+      for (const child of children) node.appendChild(child);
+      parent.appendChild(node);
+      return node;
+    },
+    /**
+     * Real Figma: converts a FRAME into a COMPONENT in place. Plugin data, children, and
+     * reactions stay on the same object; the Figma node id may change (callers re-index
+     * by compactDesignId). Bound variables on fills/etc. are preserved on the node.
+     */
+    createComponentFromNode: (node: MockNode) => {
+      if (node.type !== "FRAME") throw new Error(`createComponentFromNode requires a FRAME (got ${node.type})`);
+      const oldId = node.id;
+      const template = createMockNode("COMPONENT", node.name);
+      node.type = "COMPONENT";
+      node.id = `figma:comp:${Math.random().toString(36).slice(2, 9)}`;
+      (node as MockNode & { __previousFigmaId?: string }).__previousFigmaId = oldId;
+      (node as MockNode & { _componentPropertyDefinitions: Record<string, unknown>; _propSeq: number })._componentPropertyDefinitions = {};
+      (node as MockNode & { _propSeq: number })._propSeq = 0;
+      node.addComponentProperty = template.addComponentProperty;
+      node.editComponentProperty = template.editComponentProperty;
+      node.deleteComponentProperty = template.deleteComponentProperty;
+      node.createInstance = template.createInstance;
+      // Attach componentPropertyDefinitions getter (FRAME never had it).
+      installFigmaCopyGetters(node);
+      return node;
+    },
     combineAsVariants: (components: MockNode[], parent: MockNode) => {
       const set = createMockNode("COMPONENT_SET", "set");
       for (const component of components) {
@@ -1265,7 +1441,9 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
         const variable = createMockVariable(name, collection, resolvedType);
         (figmaMock._variables as MockVariable[]).push(variable);
         return variable;
-      }
+      },
+      getVariableByIdAsync: async (id: string) => (figmaMock._variables as MockVariable[]).find((variable) => variable.id === id && !variable.removed) || null,
+      getVariableCollectionByIdAsync: async (id: string) => (figmaMock._variableCollections as MockVariableCollection[]).find((collection) => collection.id === id && !collection.removed) || null
     },
     createImage: () => ({ hash: "img" }),
     createImageAsync: async () => ({ hash: "img" })
@@ -1564,7 +1742,46 @@ async function figmaState(page: MockNode): Promise<Record<string, ComparableStat
     if (id) {
       const fillList = Array.isArray(node.fills) ? node.fills as Array<Record<string, unknown>> : [];
       const fills = Array.isArray(node.fills) ? fillList.map(({ boundVariables: _bound, ...paint }) => paint) : node.fills;
-      const state: ComparableState = { name: node.name, x: node.x, y: node.y, w: node.width, h: node.height, opacity: node.opacity, fills, fillBound: Boolean(fillList[0]?.boundVariables), strokes: node.strokes, effects: effectSummary(node.effects), constraints: node.constraints, children: node.children.map((child) => child.getPluginData("compactDesignId")) };
+      const childIds = node.type === "INSTANCE"
+        ? []
+        : node.children.map((child) => child.getPluginData("compactDesignId")).filter(Boolean);
+      const state: ComparableState = { type: node.type, name: node.name, x: node.x, y: node.y, w: node.width, h: node.height, opacity: node.opacity, fills, fillBound: Boolean(fillList[0]?.boundVariables), strokes: node.strokes, effects: effectSummary(node.effects), constraints: node.constraints, children: childIds };
+      if (node.type === "INSTANCE") {
+        const mainFigmaId = String((node as MockNode).mainComponentId || "");
+        const findMain = (n: MockNode): MockNode | undefined => {
+          if (n.id === mainFigmaId) return n;
+          for (const c of n.children) { const hit = findMain(c); if (hit) return hit; }
+          return undefined;
+        };
+        const main = findMain(page);
+        state.componentId = main?.getPluginData("compactDesignId") || mainFigmaId;
+        const props = (node as MockNode & { _componentProperties?: Record<string, { value: string | boolean }> })._componentProperties;
+        const defs = (main as MockNode & { _componentPropertyDefinitions?: Record<string, { defaultValue: string | boolean }> } | undefined)?._componentPropertyDefinitions || {};
+        if (props && Object.keys(props).length) {
+          const overrides: Record<string, string | boolean> = {};
+          for (const [k, v] of Object.entries(props)) {
+            const name = k.includes("#") ? k.slice(0, k.indexOf("#")) : k;
+            const def = defs[k] || Object.entries(defs).find(([dk]) => (dk.includes("#") ? dk.slice(0, dk.indexOf("#")) : dk) === name)?.[1];
+            if (!def || v.value !== def.defaultValue) overrides[name] = v.value;
+          }
+          if (Object.keys(overrides).length) state.instanceProperties = overrides;
+        }
+      }
+      if (node.type === "COMPONENT") {
+        const defs = (node as MockNode & { _componentPropertyDefinitions?: Record<string, { type: string; defaultValue: string | boolean }> })._componentPropertyDefinitions;
+        if (defs && Object.keys(defs).length) {
+          const resolveDefault = (type: string, value: string | boolean): string | boolean => {
+            if (type !== "INSTANCE_SWAP" || typeof value !== "string") return value;
+            const findCompact = (n: MockNode): string | undefined => {
+              if (n.id === value) return n.getPluginData("compactDesignId") || undefined;
+              for (const c of n.children) { const hit = findCompact(c); if (hit) return hit; }
+              return undefined;
+            };
+            return findCompact(page) || value;
+          };
+          state.componentProperties = Object.fromEntries(Object.entries(defs).map(([k, v]) => [k.includes("#") ? k.slice(0, k.indexOf("#")) : k, { type: v.type, defaultValue: resolveDefault(v.type, v.defaultValue) }]));
+        }
+      }
       if ("cornerRadius" in node) state.cornerRadius = node.cornerRadius;
       if (FRAME_TYPES.has(node.type)) {
         state.layoutMode = node.layoutMode;
@@ -1585,7 +1802,14 @@ async function coreState(document: InternalDocument): Promise<Record<string, Com
   const visit = async (node: InternalNode, parent: InternalNode | null) => {
     const p = node.properties;
     const origin = parent ? parent.properties.position : { x: 0, y: 0 };
-    const state: ComparableState = { name: node.name, x: p.position.x - origin.x, y: p.position.y - origin.y, w: p.size.width, h: p.size.height, opacity: p.opacity ?? 1, fills: await paints(p.styles.fills), fillBound: Boolean(p.bindings?.fill), strokes: await paints(p.styles.strokes), effects: effectSummary(await effectsFromData(p.styles.effects)), constraints: p.constraints ?? { horizontal: "MIN", vertical: "MIN" }, children: node.children.map((child) => child.id) };
+    const state: ComparableState = { type: node.type, name: node.name, x: p.position.x - origin.x, y: p.position.y - origin.y, w: p.size.width, h: p.size.height, opacity: p.opacity ?? 1, fills: await paints(p.styles.fills), fillBound: Boolean(p.bindings?.fill), strokes: await paints(p.styles.strokes), effects: effectSummary(await effectsFromData(p.styles.effects)), constraints: p.constraints ?? { horizontal: "MIN", vertical: "MIN" }, children: node.children.map((child) => child.id) };
+    if (node.type === "INSTANCE") {
+      state.componentId = p.componentId;
+      if (p.instanceProperties && Object.keys(p.instanceProperties).length) state.instanceProperties = { ...p.instanceProperties };
+    }
+    if (node.type === "COMPONENT" && p.componentProperties?.length) {
+      state.componentProperties = Object.fromEntries(p.componentProperties.map((prop) => [prop.name, { type: prop.type, defaultValue: prop.defaultValue }]));
+    }
     if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "RECTANGLE"].includes(node.type)) state.cornerRadius = p.cornerRadius ?? 0;
     if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"].includes(node.type)) {
       state.layoutMode = p.layout?.direction ?? "NONE";
@@ -3517,3 +3741,482 @@ test("lockstep unwrap rejects rotated wrapper (same rule as wrap)", async () => 
   assert.equal(validatePatch(document, { patch: { operations: [{ op: "unwrap", id: "spin" }] } }).valid, false);
 });
 
+
+// --- componentize lockstep --------------------------------------------------
+
+const componentizeCard = (id: string, x: number, text = "Hello", badgeVisible = true) => ({
+  id, type: "FRAME", name: `Card`, x, y: 0, w: 120, h: 80, fill: "#FFFFFF",
+  children: [
+    { id: `${id}-title`, type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text, font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+    { id: `${id}-badge`, type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00", ...(badgeVisible ? {} : { visible: false }) }
+  ]
+});
+
+test("lockstep componentize: promote-only + properties/instances + AL parent", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 600, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Other", false),
+      componentizeCard("c", 280),
+      {
+        id: "row", type: "FRAME", x: 0, y: 100, w: 300, h: 60,
+        layout: { direction: "HORIZONTAL", itemSpacing: 8 },
+        children: [
+          { id: "chip", type: "FRAME", w: 60, h: 40, fill: "#EEE", children: [
+            { id: "chip-t", type: "TEXT", name: "Label", w: 40, h: 20, text: "Chip", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+          ] },
+          { id: "gap", type: "RECTANGLE", w: 8, h: 8, fill: "#000" }
+        ]
+      }
+    ]
+  });
+  await assertParity(document, [
+    [{
+      op: "componentize", id: "a",
+      properties: { Title: { type: "TEXT", layer: "a-title" }, ShowBadge: { type: "BOOLEAN", layer: "a-badge" } },
+      instances: ["b", "c"]
+    }],
+    [{ op: "componentize", id: "chip", properties: { Title: { type: "TEXT", layer: "chip-t" } } }]
+  ]);
+});
+
+test("lockstep componentize: size mismatch is PATCH_OPERATION in both engines", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      { id: "b", type: "FRAME", name: "Card", x: 140, y: 0, w: 120, h: 90, fill: "#FFFFFF", children: [
+        { id: "b-title", type: "TEXT", name: "Title", x: 8, y: 8, w: 100, h: 24, text: "Hello", font: { family: "Inter", style: "Bold", size: 16 }, fills: [] },
+        { id: "b-badge", type: "RECTANGLE", name: "Badge", x: 8, y: 40, w: 20, h: 20, fill: "#00FF00" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  const patch = { op: "componentize", id: "a", instances: ["b"] };
+  assert.throws(() => applyCorePatch(document, checkedPatch(patch)), /differs at size/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(patch), emptyPatchContext() as never), /differs at size/);
+  assert.deepEqual(await figmaState(page), before, "size mismatch rolled back");
+});
+
+test("lockstep componentize: bindings-only mismatch fails in both engines", async () => {
+  const source = {
+    canvas: { id: "page", width: 400, height: 200 },
+    variables: [{ name: "Tokens", modes: ["Default"], items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Default: 8 } }] }],
+    nodes: [
+      { id: "a", type: "FRAME", name: "A", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111", bindings: { opacity: "gap" } }
+      ] },
+      { id: "b", type: "FRAME", name: "B", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] }
+    ]
+  };
+  const document = normalize(source);
+  assert.throws(() => applyCorePatch(document, checkedPatch({ op: "componentize", id: "a", instances: ["b"] })), /differs at children\[0\]\.bindings/);
+  // Figma: import without bindings, then stamp boundVariables on one leaf only.
+  const plain = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "A", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] },
+      { id: "b", type: "FRAME", name: "B", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(plain);
+  const api = (globalThis as { figma: { variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable }; _variables: MockVariable[] } }).figma;
+  const collection = api.variables.createVariableCollection("Tokens");
+  const gap = api.variables.createVariable("gap", collection, "FLOAT");
+  gap.setValueForMode(collection.modes[0].modeId, 8);
+  mockById(page, "a-leaf").boundVariables = { opacity: { type: "VARIABLE_ALIAS", id: gap.id } };
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), /differs at children\[0\]\.bindings/);
+  assert.deepEqual(await figmaState(page), before);
+});
+
+test("lockstep componentize then set on source (Figma id remapped; compact id stable)", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [componentizeCard("card", 0)]
+  });
+  await assertParity(document, [[
+    { op: "componentize", id: "card" },
+    { op: "set", id: "card", set: { name: "CardMaster" } }
+  ]]);
+});
+
+test("Figma componentize rollback: two copies, second fails mid-way", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 600, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140),
+      componentizeCard("c", 280)
+    ]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  // Second instance id is unknown → fails after first instance would have been replaced.
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch({
+      op: "componentize", id: "a",
+      properties: { Title: { type: "TEXT", layer: "a-title" } },
+      instances: ["b", "ghost"]
+    }), emptyPatchContext() as never),
+    /ghost|was not found/
+  );
+  assert.deepEqual(await figmaState(page), before, "two-copy partial failure rolled back");
+  // a still FRAME, b still FRAME
+  assert.equal(mockById(page, "a").type, "FRAME");
+  assert.equal(mockById(page, "b").type, "FRAME");
+});
+
+test("Figma componentize + export round-trip: COMPONENT and INSTANCE survive", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Other", false)
+    ]
+  });
+  const page = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch({
+    op: "componentize", id: "a",
+    properties: { Title: { type: "TEXT", layer: "a-title" }, ShowBadge: { type: "BOOLEAN", layer: "a-badge" } },
+    instances: ["b"]
+  }), emptyPatchContext() as never);
+  assert.equal(mockById(page, "a").type, "COMPONENT");
+  assert.equal(mockById(page, "b").type, "INSTANCE");
+  // Export the page frame (canvas) that holds both so COMPONENT/INSTANCE stay siblings.
+  const { exportSelection } = await import("../src/plugin/exporter");
+  const canvas = page.children[0];
+  const exported = await exportSelection([canvas as never]);
+  const round = normalize(exported.document);
+  const byId: Record<string, InternalNode> = {};
+  const walk = (n: InternalNode) => { byId[n.id] = n; n.children.forEach(walk); };
+  for (const root of round.nodes) walk(root);
+  // Prefer compact ids when present; else find by type.
+  const comp = byId["a"] || Object.values(byId).find((n) => n.type === "COMPONENT");
+  const inst = byId["b"] || Object.values(byId).find((n) => n.type === "INSTANCE");
+  assert.ok(comp && comp.type === "COMPONENT", `exported COMPONENT (keys=${Object.keys(byId).join(",")})`);
+  assert.ok(inst && inst.type === "INSTANCE", "exported INSTANCE");
+  const propNames = (comp.properties.componentProperties || []).map((p) => p.name);
+  assert.ok(propNames.includes("Title") || propNames.includes("ShowBadge"), `props=${propNames.join(",")}`);
+  assert.equal(inst.properties.componentId, comp.id);
+  // TEXT override survived as instanceProperties on export.
+  assert.equal(inst.properties.instanceProperties?.Title, "Other");
+});
+
+test("lockstep componentize: #id property keys round-trip on instance overrides", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      componentizeCard("a", 0),
+      componentizeCard("b", 140, "Hey")
+    ]
+  });
+  const final = await assertParity(document, [[{
+    op: "componentize", id: "a",
+    properties: { Title: { type: "TEXT", layer: "a-title" } },
+    instances: ["b"]
+  }]]);
+  assert.equal(nodeById(final, "b").properties.instanceProperties?.Title, "Hey");
+  // Figma generated keys use #id suffix — authored name still wins in parity via stripping.
+  const page = (globalThis as { figma: { currentPage: MockNode } }).figma.currentPage;
+  const inst = mockById(page, "b");
+  const props = (inst as MockNode & { _componentProperties: Record<string, { value: string | boolean }> })._componentProperties;
+  assert.ok(Object.keys(props).some((k) => k.startsWith("Title#") || k === "Title"));
+});
+
+test("lockstep componentize: hangingPunctuation / hangingList-only copies rejected in both engines", async () => {
+  const withHang = (hang: { hangingPunctuation?: boolean; hangingList?: boolean }) => normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+      ] },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [], ...hang }
+      ] }
+    ]
+  });
+  for (const [key, hang] of [["hangingPunctuation", { hangingPunctuation: true }], ["hangingList", { hangingList: true }]] as const) {
+    const document = withHang(hang);
+    assert.throws(() => applyCorePatch(document, checkedPatch({ op: "componentize", id: "a", instances: ["b"] })), new RegExp(`differs at children\\[0\\]\\.${key}`));
+    const page = await importIntoMock(withHang({}));
+    // Stamp the differing field on the copy's text only (import omits false defaults).
+    (mockById(page, "b-t") as MockNode)[key] = true;
+    const before = await figmaState(page);
+    await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), new RegExp(`differs at children\\[0\\]\\.${key}`));
+    assert.deepEqual(await figmaState(page), before);
+  }
+});
+
+test("lockstep componentize: fail-closed representative PATCH_SET_KEYS subset", async () => {
+  // Representative non-exempt keys — full PATCH_SET_KEYS walk lives in core; Figma mirrors the contract.
+  const cases: Array<{ key: string; apply: (leaf: MockNode) => void; pattern: RegExp }> = [
+    { key: "opacity", apply: (leaf) => { leaf.opacity = 0.42; }, pattern: /differs at children\[0\]\.opacity/ },
+    { key: "rotation", apply: (leaf) => { leaf.rotation = 15; }, pattern: /differs at children\[0\]\.rotation/ },
+    { key: "hangingPunctuation", apply: (leaf) => { leaf.hangingPunctuation = true; }, pattern: /differs at children\[0\]\.hangingPunctuation/ },
+    { key: "cornerRadius", apply: (leaf) => { leaf.cornerRadius = 8; }, pattern: /differs at children\[0\]\.cornerRadius/ },
+    { key: "w", apply: (leaf) => { leaf.resize(77, leaf.height); }, pattern: /differs at children\[0\]\.size/ }
+  ];
+  for (const { key, apply, pattern } of cases) {
+    const isText = key === "hangingPunctuation";
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [
+          isText
+            ? { id: "a-leaf", type: "TEXT", name: "Leaf", x: 4, y: 4, w: 40, h: 24, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+            : { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 120, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [
+          isText
+            ? { id: "b-leaf", type: "TEXT", name: "Leaf", x: 4, y: 4, w: 40, h: 24, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+            : { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    apply(mockById(page, "b-leaf"));
+    await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), pattern, key);
+  }
+});
+
+test("Figma componentize via export: per-corner radii / vectorPaths / boolean operation differences rejected", async () => {
+  // Per-corner radii (cornerRadius mixed on both; topLeft differs)
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111", cornerRadii: [1, 2, 3, 4] }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111", cornerRadii: [9, 2, 3, 4] }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /differs at children\[0\]\.(cornerRadii|cornerRadius)/
+    );
+    assert.equal(mockById(page, "a").type, "FRAME");
+  }
+  // Vector paths
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-leaf", type: "VECTOR", name: "Leaf", x: 4, y: 4, w: 40, h: 24, vectorPaths: [{ windingRule: "NONZERO", data: "M 0 0 L 10 10 Z" }] }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-leaf", type: "VECTOR", name: "Leaf", x: 4, y: 4, w: 40, h: 24, vectorPaths: [{ windingRule: "EVENODD", data: "M 0 0 L 10 10 Z" }] }
+        ] }
+      ]
+    });
+    await importIntoMock(document);
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /differs at children\[0\]\.vectorPaths/
+    );
+  }
+  // Boolean operation — import identical UNIONs, then flip the copy.
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-bool", type: "BOOLEAN_OPERATION", name: "Leaf", operation: "UNION", x: 4, y: 4, w: 40, h: 24, children: [
+            { id: "a-b1", type: "RECTANGLE", name: "p1", w: 20, h: 20, fill: "#111111" },
+            { id: "a-b2", type: "RECTANGLE", name: "p2", x: 10, y: 10, w: 20, h: 20, fill: "#111111" }
+          ] }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-bool", type: "BOOLEAN_OPERATION", name: "Leaf", operation: "UNION", x: 4, y: 4, w: 40, h: 24, children: [
+            { id: "b-b1", type: "RECTANGLE", name: "p1", w: 20, h: 20, fill: "#111111" },
+            { id: "b-b2", type: "RECTANGLE", name: "p2", x: 10, y: 10, w: 20, h: 20, fill: "#111111" }
+          ] }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    mockById(page, "b-bool").booleanOperation = "EXCLUDE";
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /differs at children\[0\]\.operation/
+    );
+  }
+});
+
+test("Figma componentize fail-closed: export-lossy rich-text / effectStyle / gridStyle / per-side strokes rejected", async () => {
+  // Rich-text / mixed font via getStyledTextSegments
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    const leaf = mockById(page, "b-t");
+    leaf.setRangeFontName(1, 2, { family: "Roboto", style: "Bold" });
+    assert.equal(leaf.fontName, MIXED);
+    assert.ok(leaf.getStyledTextSegments(["fontName"]).length > 1);
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /mixed text styling|styled segments/
+    );
+  }
+  // Mixed fill on one word only (fills export as [] when mixed — must fail closed)
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    const leaf = mockById(page, "b-t");
+    leaf.setRangeFills(0, 1, [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1, visible: true }]);
+    assert.equal(leaf.fills, MIXED);
+    assert.ok(leaf.getStyledTextSegments(["fills", "fontName", "fontSize"]).length > 1);
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /mixed text styling|styled segments/
+    );
+  }
+  // effectStyleId
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    mockById(page, "b-leaf").effectStyleId = "S:effect-shadow";
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /effectStyleId/
+    );
+  }
+  // gridStyleId
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-leaf", type: "FRAME", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#EEEEEE" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-leaf", type: "FRAME", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#EEEEEE" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    mockById(page, "b-leaf").gridStyleId = "S:grid-8";
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /gridStyleId/
+    );
+  }
+  // Per-side stroke weights (export only writes uniform strokeWeight)
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111", stroke: "#000", strokeWeight: 1 }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111", stroke: "#000", strokeWeight: 1 }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    mockById(page, "b-leaf").strokeTopWeight = 5;
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /per-side stroke/
+    );
+  }
+});
+
+/** Reparent compact roots onto the Figma PAGE so they are true page-level frames (no shared FRAME parent). */
+function reparentRootsToPage(page: MockNode, ids: string[]): void {
+  for (const id of ids) {
+    const node = mockById(page, id);
+    page.appendChild(node);
+  }
+  // Drop empty canvas frames left behind by importIntoMock.
+  for (const child of [...page.children]) {
+    if (child.type === "FRAME" && child.children.length === 0 && !child.getPluginData("compactDesignId")) child.remove();
+    if (child.type === "FRAME" && child.getPluginData("compactDesignId") === "page" && !ids.includes("page")) {
+      // canvas frame may still hold nothing useful
+      if (child.children.length === 0) child.remove();
+    }
+  }
+}
+
+test("Figma componentize top-level: cornerRadius-only difference rejected via asNodes export", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 4 },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 12 }
+    ]
+  });
+  const page = await importIntoMock(document);
+  reparentRootsToPage(page, ["a", "b"]);
+  assert.equal(mockById(page, "a").parent?.type, "PAGE");
+  assert.equal(mockById(page, "b").parent?.type, "PAGE");
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+    /differs at cornerRadius/
+  );
+  assert.equal(mockById(page, "a").type, "FRAME");
+  assert.equal(mockById(page, "b").type, "FRAME");
+});
+
+test("Figma componentize top-level: identical cards still componentize", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 8, children: [
+        { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+      ] },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 8, children: [
+        { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  reparentRootsToPage(page, ["a", "b"]);
+  assert.equal(mockById(page, "a").parent?.type, "PAGE");
+  await applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never);
+  assert.equal(mockById(page, "a").type, "COMPONENT");
+  assert.equal(mockById(page, "b").type, "INSTANCE");
+});

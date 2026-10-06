@@ -449,8 +449,11 @@ export async function collectExportCandidates(page: PageNode): Promise<{ candida
   return { candidates, nodes };
 }
 
-export async function exportSelection(selection: readonly SceneNode[]): Promise<{ document: CompactValue; warnings: string[] }> {
+export type ExportSelectionOptions = { asNodes?: boolean };
+
+export async function exportSelection(selection: readonly SceneNode[], options?: ExportSelectionOptions): Promise<{ document: CompactValue; warnings: string[] }> {
   if (!selection.length) throw new Error("Select at least one frame or layer to export.");
+  const asNodes = options?.asNodes === true;
   const exportedNodes: SceneNode[] = [];
   const exportedIds = new Set<string>();
   selection.forEach((node) => collectNodes(node, exportedNodes));
@@ -478,13 +481,16 @@ export async function exportSelection(selection: readonly SceneNode[]): Promise<
     const styles = await activeStyles.buildStylesArray(compactPaints);
     warnings.push(...activeStyles.warnings);
     for (const [index, node] of selection.entries()) {
-      const canBecomeCanvas = node.type === "FRAME";
+      // Default: FRAME roots become canvases. asNodes: always wrap as a full node (never canvas).
+      const canBecomeCanvas = !asNodes && node.type === "FRAME";
       const exported = await compactNode(node, exportedIds);
       const exportedFills = Array.isArray(exported.fills) ? exported.fills : [];
       const fill = canBecomeCanvas ? (exported.fill ?? exportedFills[0] ?? "#FFFFFF") : "#FFFFFF";
       const children = canBecomeCanvas && Array.isArray(exported.children) ? exported.children : [{ ...exported, x: 0, y: 0 }];
       // Canvas schema forbids node-only props (bindings, variableModes, styleRefs).
-      const canvas: CompactValue = { id: exportCanvasId(compactId(node), node.type), name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children };
+      // When asNodes, force a distinct canvas id so it cannot collide with the wrapped node.
+      const canvasId = canBecomeCanvas ? exportCanvasId(compactId(node), node.type) : exportCanvasId(compactId(node), "GROUP");
+      const canvas: CompactValue = { id: canvasId, name: node.name, x: index * (node.width + 120), width: node.width, height: node.height, fill, clipsContent: "clipsContent" in node ? node.clipsContent : true, nodes: children };
       canvases.push(canvas);
       if (node.type === "INSTANCE") {
         const mainComponent = await instanceMainComponent(node);

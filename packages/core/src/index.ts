@@ -98,6 +98,7 @@ export { detectVariantRenames, variantAxesUncarriedOptions, type AxisRename, typ
 export { buildDuplicateIdMap, buildDuplicateIdMapFromIds, collectSubtreeIds, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, remapDelimitedIds, subtreeContainsType } from "./patch-duplicate";
 export { assertPrototypeSetDestinations, assertPrototypePatchRules, prototypeDestinationErrors, prototypePatchStrictErrors, forEachPrototypeDestination, isAfterTimeoutReaction, isTopLevelNodeId } from "./patch-prototype";
 export { nodesBoundingBox, unwrapLostVisuals, isAutoLayout, keepsAbsoluteInAutoLayout, hasNonZeroRotation } from "./patch-wrap";
+export { matchLayer, structuralDiff, readPropertyValue, collectIds, findDescendant, frameToInstanceShell, subtreeHasPropertyReferences, COMPONENTIZE_DIFF_EXEMPT, COMPONENTIZE_DIFF_EXEMPT_PATCH_KEYS } from "./patch-componentize";
 export { applyResourceUpsert, matchStyle, matchVariable, type ResourceUpsertInput, type ResourceUpsertOptions, type ResourceUpsertPatch, type ResourceUpsertResult } from "./patch-resources";
 export type { DocumentIndex } from "./references";
 export type { PatchResult, RepairIssue };
