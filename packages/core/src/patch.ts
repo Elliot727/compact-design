@@ -2,6 +2,7 @@ import { validationIssues, type RepairIssue } from "./lint";
 import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
 import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames, variantAxesChildConflicts, type VariantAxesPatch } from "./patch-definitions";
+import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, subtreeContainsType } from "./patch-duplicate";
 import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -238,7 +239,7 @@ function patchIssue(code: string, path: string, message: string, suggestion: str
   return { severity: "ERROR", code, path, message, suggestion };
 }
 
-function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[], warnings: string[], roots: InternalNode[]): void {
+function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[], warnings: string[], roots: InternalNode[], duplicateMaps: Array<Map<string, string>>): void {
   if (operation.op === "APPEND" || operation.op === "INSERT") {
     const target = operation.parent ? index.get(operation.parent) : undefined;
     if (!target || !operation.node) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
@@ -265,6 +266,60 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     }
     visit([child], target.node);
     affectedIds.push(child.id);
+    return;
+  }
+
+  if (operation.op === "DUPLICATE") {
+    const sourceRef = operation.id ? index.get(operation.id) : undefined;
+    if (!sourceRef) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);
+    assertNotInsideInstance(sourceRef.parent, operationIndex, operation.id || "", index);
+    if (subtreeContainsType(sourceRef.node, new Set(["COMPONENT", "COMPONENT_SET"]))) {
+      throw new Error(`patch.operations[${operationIndex}]: cannot duplicate a COMPONENT or COMPONENT_SET (or a subtree that contains one)`);
+    }
+    const path = `patch.operations[${operationIndex}]`;
+    const { map, errors } = buildDuplicateIdMap(sourceRef.node, operation.idSuffix || "", operation.ids, path);
+    if (errors.length) throw new Error(errors[0]);
+    // Collisions with existing document ids
+    for (const [, newId] of map) {
+      if (index.has(newId)) throw new Error(`${path}: new id '${newId}' already exists`);
+    }
+    let destParent: InternalNode | null;
+    let destSiblings: InternalNode[];
+    if (operation.parent !== undefined) {
+      const dest = index.get(operation.parent);
+      if (!dest) throw new Error(`${path}: parent '${operation.parent}' was not found.`);
+      assertContainerParent(dest.node, operationIndex, operation.parent, index);
+      destParent = dest.node;
+      destSiblings = dest.node.children;
+    } else if (sourceRef.parent) {
+      destParent = sourceRef.parent;
+      destSiblings = sourceRef.siblings;
+      // Parent could be INSTANCE? Source is not inside INSTANCE (asserted), so parent is fine.
+    } else {
+      // Top-level screen: duplicate among document roots
+      destParent = null;
+      destSiblings = roots;
+    }
+    if (destParent) assertContainerParent(destParent, operationIndex, destParent.id, index);
+    const copy = cloneSubtreeWithIds(sourceRef.node, map);
+    // Keep parent-relative x/y (same as move / Figma clone+insertChild): core stores
+    // absolute coords, so translate by the origin delta when the parent changes.
+    const fromOrigin = origin(sourceRef.parent);
+    const toOrigin = origin(destParent);
+    translate(copy, toOrigin.x - fromOrigin.x, toOrigin.y - fromOrigin.y);
+    let at: number;
+    if (operation.index !== undefined) {
+      at = clampIndex(operation.index, destSiblings.length);
+    } else if (destParent === sourceRef.parent || (destParent === null && sourceRef.parent === null)) {
+      const sourceIndex = sourceRef.siblings.indexOf(sourceRef.node);
+      at = clampIndex(sourceIndex + 1, destSiblings.length);
+    } else {
+      at = destSiblings.length;
+    }
+    destSiblings.splice(at, 0, copy);
+    visit([copy], destParent);
+    duplicateMaps.push(map);
+    affectedIds.push(copy.id);
     return;
   }
   if (operation.op === "MOVE") {
@@ -359,12 +414,13 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
   const result: InternalDocument = { ...document, nodes: document.nodes.map(cloneNode), styles: cloneValue(document.styles), variables: cloneValue(document.variables) };
   const affectedIds: string[] = [];
   const warnings: string[] = [];
+  const duplicateMaps: Array<Map<string, string>> = [];
   const index = new Map<string, NodeRef>();
   const visit = (nodes: InternalNode[], parent: InternalNode | null): void => nodes.forEach((node) => { index.set(node.id, { node, parent, siblings: nodes }); visit(node.children, node); });
   visit(result.nodes, null);
   for (const [operationIndex, operation] of patch.patch.operations.entries()) {
     try {
-      applyOperation(operation, operationIndex, index, visit, affectedIds, warnings, result.nodes);
+      applyOperation(operation, operationIndex, index, visit, affectedIds, warnings, result.nodes, duplicateMaps);
     } catch (error) {
       if (error instanceof PatchError) throw error;
       const message = error instanceof Error ? error.message : String(error);
@@ -372,7 +428,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
       throw new PatchError([patchIssue("PATCH_OPERATION", split > 0 ? message.slice(0, split) : `patch.operations[${operationIndex}]`, split > 0 ? message.slice(split + 2) : message, "Target nodes that exist and containers that can accept children.")]);
     }
   }
-  const introduced = newDocumentIssues(document, result);
+  const introduced = newDocumentIssues(document, result, duplicateMaps);
   if (introduced.length) throw new PatchError(introduced);
   return { document: result, affectedIds, warnings };
 }
@@ -385,7 +441,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
  * property path inside the owner + message, never an array index, and the
  * comparison is a multiset so a second copy of an existing issue counts as new.
  */
-export function newDocumentIssues(before: InternalDocument, after: InternalDocument): RepairIssue[] {
+export function newDocumentIssues(before: InternalDocument, after: InternalDocument, duplicateMaps: Array<Map<string, string>> = []): RepairIssue[] {
   const keyed = (document: InternalDocument) => {
     const owners = documentIssueOwners(document);
     return validationIssues(validateDocument(document, Infinity)).map((issue) => {
@@ -394,7 +450,15 @@ export function newDocumentIssues(before: InternalDocument, after: InternalDocum
     });
   };
   const existing = new Map<string, number>();
-  for (const { key } of keyed(before)) existing.set(key, (existing.get(key) || 0) + 1);
+  const beforeKeyed = keyed(before);
+  for (const { key } of beforeKeyed) existing.set(key, (existing.get(key) || 0) + 1);
+  // Exempt issues on duplicate copies that the source already had (map owner/path/message ids).
+  for (const idMap of duplicateMaps) {
+    for (const { key } of beforeKeyed) {
+      const remapped = remapIssueKeyThroughDuplicate(key, idMap);
+      if (remapped) existing.set(remapped, (existing.get(remapped) || 0) + 1);
+    }
+  }
   const introduced: RepairIssue[] = [];
   for (const { issue, owner, key } of keyed(after)) {
     const count = existing.get(key) || 0;

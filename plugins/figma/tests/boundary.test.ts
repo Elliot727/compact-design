@@ -305,7 +305,7 @@ test("selection export still requires a selection", () => {
   assert.throws(() => planExport([], { scope: "selection", selectionIds: [] }), /Select at least one/);
 });
 
-test("export and patch paths read instance main components asynchronously under dynamic-page", () => {
+test("export and patch paths use async APIs under dynamic-page (no sync mainComponent / reactions setter)", () => {
   const exporter = readFileSync("src/plugin/exporter.ts", "utf8");
   const patch = readFileSync("src/plugin/patch.ts", "utf8");
   const nodes = readFileSync("src/plugin/nodes.ts", "utf8");
@@ -319,10 +319,12 @@ test("export and patch paths read instance main components asynchronously under 
     assert.doesNotMatch(cleaned, /\.mainComponent\b/, `${name} must not sync-read InstanceNode.mainComponent`);
     assert.doesNotMatch(cleaned, /\["mainComponent"\]|\['mainComponent'\]/, `${name} must not bracket-access mainComponent on a Figma node`);
     assert.doesNotMatch(cleaned, /(?<!get)getMainComponent\s*\(/, `${name} must not call sync getMainComponent()`);
+    assert.doesNotMatch(cleaned, /\.reactions\s*=/, `${name} must not sync-assign node.reactions (use setReactionsAsync)`);
   }
   assert.match(exporter, /getMainComponentAsync\s*\(/);
   assert.match(patch, /getMainComponentAsync\s*\(/);
   assert.match(patch, /loadAllPagesAsync\s*\(/);
+  assert.match(patch, /setReactionsAsync\s*\(/);
   assert.match(main, /await collectExportCandidates\(/);
   assert.match(readFileSync("manifest.json", "utf8"), /"documentAccess"\s*:\s*"dynamic-page"/);
 });
@@ -953,8 +955,10 @@ function createMockNode(type: string, name = type): MockNode {
       for (const child of this.children) copy.appendChild(child.clone());
       return copy;
     },
+    reactions: [] as Array<Record<string, unknown>>,
     getPluginData(key: string) { return this.pluginData[key] || ""; },
-    setPluginData(key: string, value: string) { this.pluginData[key] = value; }
+    setPluginData(key: string, value: string) { this.pluginData[key] = value; },
+    async setReactionsAsync(reactions: Array<Record<string, unknown>>) { this.reactions = reactions; }
   };
   installFigmaCopyGetters(node);
   return node;
@@ -1588,11 +1592,10 @@ test("Figma effects/shadow replace the effect list", async () => {
   assert.deepEqual(effectSummary(mockById(page, "card").effects).map((effect) => effect.type), ["DROP_SHADOW"]);
 });
 
-test("set on a node inserted in the same patch: Figma preflight rejects it and changes nothing", async () => {
+test("set on a node inserted in the same patch applies (lockstep with core)", async () => {
   const page = await importIntoMock(parityDocument());
-  const before = await figmaState(page);
-  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 })), emptyPatchContext() as never), /node 'fresh' was not found/);
-  assert.deepEqual(await figmaState(page), before);
+  await applyFigmaPatch(checkedPatch({ op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 })), emptyPatchContext() as never);
+  assert.equal(mockById(page, "fresh").width, 9);
 });
 
 test("Figma rolls back sets and moves when a later set breaks a rule", async () => {
@@ -2308,4 +2311,141 @@ function nodeById(document: InternalDocument, id: string): InternalNode {
   assert.ok(found, id);
   return found!;
 }
+
+
+test("lockstep: duplicate single layer, subtree + same-patch set, ids override", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 300, height: 200 },
+    nodes: [{ id: "list", type: "FRAME", w: 200, h: 100, children: [
+      { id: "card", type: "FRAME", w: 40, h: 40, children: [
+        { id: "title", type: "TEXT", w: 20, h: 10, text: "Hi" },
+        { id: "icon", type: "RECTANGLE", w: 8, h: 8 }
+      ] },
+      { id: "other", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  });
+  await assertParity(document, [
+    [{ op: "duplicate", id: "other", idSuffix: "-2" }],
+    [
+      { op: "duplicate", id: "card", idSuffix: "-copy", ids: { card: "card-featured", title: "title-featured" } },
+      setOp("title-featured", { text: "Featured" })
+    ]
+  ]);
+});
+
+test("lockstep: duplicate top-level screen keeps x/y and seats after source", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 800, height: 600 },
+    nodes: [
+      { id: "screen-a", type: "FRAME", x: 10, y: 20, w: 100, h: 80, children: [{ id: "btn", type: "RECTANGLE", x: 5, y: 5, w: 20, h: 10 }] },
+      { id: "screen-b", type: "FRAME", x: 200, y: 20, w: 100, h: 80, children: [] }
+    ]
+  });
+  await assertParity(document, [[{ op: "duplicate", id: "screen-a", idSuffix: "-2" }]]);
+});
+
+test("lockstep: duplicate rejects collision, COMPONENT, INSTANCE parent, bad ids override", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 200 },
+    nodes: [
+      { id: "host", type: "FRAME", w: 100, h: 100, children: [
+        { id: "card", type: "FRAME", w: 40, h: 40, children: [{ id: "dot", type: "RECTANGLE", w: 4, h: 4 }] },
+        { id: "card-2", type: "RECTANGLE", w: 10, h: 10 }
+      ] },
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 20, h: 20 }
+    ]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "duplicate", id: "card", idSuffix: "-2" }), emptyPatchContext() as never), /already exists/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "duplicate", id: "button", idSuffix: "-2" }), emptyPatchContext() as never), /COMPONENT or COMPONENT_SET/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "duplicate", id: "card", idSuffix: "-z", parent: "copy" }), emptyPatchContext() as never), /INSTANCE/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "duplicate", id: "card", idSuffix: "-z", ids: { ghost: "ghost-2" } }), emptyPatchContext() as never), /not an id in the source subtree/);
+  assert.deepEqual(await figmaState(page), before, "rejected duplicates leave the page unchanged");
+});
+
+test("lockstep: duplicate rewrites plugin data; rollback removes copy", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 100 },
+    nodes: [{ id: "list", type: "FRAME", w: 100, h: 80, children: [
+      { id: "card", type: "FRAME", w: 40, h: 40, children: [{ id: "dot", type: "RECTANGLE", w: 4, h: 4 }] }
+    ] }]
+  });
+  const page = await importIntoMock(document);
+  const before = await figmaState(page);
+  // Success path: plugin data rewritten
+  await applyFigmaPatch(checkedPatch({ op: "duplicate", id: "card", idSuffix: "-2" }), emptyPatchContext() as never);
+  assert.ok(mockById(page, "card-2"));
+  assert.ok(mockById(page, "dot-2"));
+  assert.equal(mockById(page, "card").getPluginData("compactDesignId"), "card");
+  // Rollback: later op fails → copy removed, no leftover compact ids
+  const page2 = await importIntoMock(document);
+  const before2 = await figmaState(page2);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(
+    { op: "duplicate", id: "card", idSuffix: "-2" },
+    setOp("card-2", { text: "nope" })
+  ), emptyPatchContext() as never), /does not apply/);
+  assert.deepEqual(await figmaState(page2), before2);
+  const leftover: string[] = [];
+  const walk = (node: MockNode) => {
+    const id = node.getPluginData("compactDesignId");
+    if (id) leftover.push(id);
+    node.children.forEach(walk);
+  };
+  page2.children.forEach(walk);
+  assert.deepEqual(leftover.sort(), ["card", "dot", "list", "page"].sort());
+});
+
+test("lockstep: duplicate with INSTANCE child keeps componentId", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "wrap", type: "FRAME", w: 80, h: 40, children: [
+        { id: "inst", type: "INSTANCE", componentId: "button", w: 20, h: 20 }
+      ] }
+    ]
+  });
+  const final = await assertParity(document, [[{ op: "duplicate", id: "wrap", idSuffix: "-2" }]]);
+  assert.equal(nodeById(final, "inst-2").properties.componentId, "button");
+});
+
+test("Figma duplicate reuses imageHash on cloned IMAGE fills (no re-upload)", async () => {
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  const photo = createMockNode("RECTANGLE", "photo");
+  photo.setPluginData("compactDesignId", "photo");
+  photo.fills = [{ type: "IMAGE", imageHash: "hash-xyz", scaleMode: "FILL" }];
+  list.appendChild(photo);
+  installFigmaMock([list]);
+  await applyFigmaPatch(checkedPatch({ op: "duplicate", id: "photo", idSuffix: "-2" }), emptyPatchContext() as never);
+  const copy = mockById(list.parent as MockNode, "photo-2");
+  // list's parent is the mock page from installFigmaMock — resolve via find on list's siblings or walk from list.parent
+  const copyFills = (mockById((globalThis as { figma: { currentPage: MockNode } }).figma.currentPage, "photo-2").fills as Array<{ imageHash?: string }>);
+  assert.equal(copyFills[0]?.imageHash, "hash-xyz");
+});
+
+
+test("lockstep: duplicate into a different parent keeps parent-relative x/y", async () => {
+  // Gate repro: A at (0,0) with box at (10,10); B at (300,100). Duplicate box into B → relative (10,10) inside B.
+  const document = normalize({
+    canvas: { id: "page", width: 800, height: 400 },
+    nodes: [
+      { id: "A", type: "FRAME", x: 0, y: 0, w: 100, h: 100, children: [
+        { id: "box", type: "RECTANGLE", x: 10, y: 10, w: 20, h: 20 }
+      ] },
+      { id: "B", type: "FRAME", x: 300, y: 100, w: 100, h: 100, children: [] }
+    ]
+  });
+  const final = await assertParity(document, [[{ op: "duplicate", id: "box", idSuffix: "-2", parent: "B" }]]);
+  const box2 = nodeById(final, "box-2");
+  // Core stores absolute: B(300,100) + relative(10,10) = (310,110)
+  assert.deepEqual(box2.properties.position, { x: 310, y: 110 });
+  const page = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch({ op: "duplicate", id: "box", idSuffix: "-2", parent: "B" }), emptyPatchContext() as never);
+  const figmaCopy = mockById(page, "box-2");
+  assert.equal(figmaCopy.parent && (figmaCopy.parent as MockNode).getPluginData("compactDesignId"), "B");
+  assert.deepEqual({ x: figmaCopy.x, y: figmaCopy.y }, { x: 10, y: 10 }, "Figma keeps parent-relative x/y after reparent");
+});
 

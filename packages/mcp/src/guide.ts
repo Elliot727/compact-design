@@ -100,10 +100,11 @@ Without \`componentPropertyReferences\`, instance overrides do not affect childr
     { "op": "remove", "id": "old-badge" },
     { "op": "append", "parent": "list", "node": { "type": "FRAME", "w": 100, "h": 40 } },
     { "op": "insert", "parent": "list", "index": 0, "node": { "id": "pin", "type": "FRAME", "w": 100, "h": 40 } },
-    { "op": "move", "id": "pin", "parent": "list", "index": 2 }
+    { "op": "move", "id": "pin", "parent": "list", "index": 2 },
+    { "op": "duplicate", "id": "card", "idSuffix": "-2", "ids": { "card": "card-featured" } }
   ] }
 }
-\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end (same parent checks). Rejects missing id/parent, non-container or INSTANCE parents, moving the root, moving out of an INSTANCE, and cycles. Figma resolves ids only via imported compact-design plugin data, checked before any change. A set/remove/move on a node inserted in the same patch fails there, so put those props on the inserted node.
+\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end (same parent checks). \`duplicate\` clones a subtree: required \`id\` + non-empty \`idSuffix\` (every subtree id becomes \`<id><idSuffix>\` unless overridden in optional \`ids\`); optional \`parent\`/\`index\` (default: same parent, right after source). Keeps parent-relative x/y when reparented (like move). Rejects id collisions, \`ids\` keys outside the source subtree, sources that are/contain COMPONENT or COMPONENT_SET, and INSTANCE parents/sources. Prototype destinations inside the source are re-pointed to the copies. Pre-existing issues on the source are not counted as new on the copy. Prefer \`duplicate\` for screens/states/one-offs; COMPONENT/INSTANCE for repeats. Figma tracks ids created earlier in the same patch (append/insert/duplicate), so a later set can target a just-created node.
 
 \`set\` changes only the keys it lists. Unknown keys are ERRORs. Nothing is defaulted (no Arial, no TEXT fill).
 - Merge: \`layout\` (and \`layout.padding\` per side), \`font\`, \`constraints\`. \`{ "layout": { "itemSpacing": 24 } }\` keeps direction and padding; \`{ "font": { "size": 32 } }\` keeps family and style.

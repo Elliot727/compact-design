@@ -356,8 +356,8 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   if (!Array.isArray(source.patch?.operations) || !source.patch.operations.length) throw new Error("patch.operations must be a non-empty array.");
   const operations: PatchOperation[] = source.patch.operations.map((operation, index) => {
     const op = String(operation.op || "").toUpperCase();
-    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, or move.`);
-    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
+    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, or duplicate.`);
+    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE' || op === 'DUPLICATE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
     if (op === 'SET' && (!operation.set || typeof operation.set !== 'object' || Array.isArray(operation.set))) throw new Error(`patch.operations[${index}].set is required.`);
     if (op === 'APPEND' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
     if (op === 'INSERT' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
@@ -365,12 +365,34 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
     if ((op === 'INSERT' || op === 'MOVE') && (typeof operation.index !== 'number' || !Number.isInteger(operation.index) || operation.index < 0)) {
       throw new Error(`patch.operations[${index}].index must be a non-negative integer.`);
     }
+    if (op === 'DUPLICATE') {
+      if (typeof operation.idSuffix !== "string" || !operation.idSuffix) {
+        throw new Error(`patch.operations[${index}].idSuffix must be a non-empty string.`);
+      }
+      if (operation.index !== undefined && (typeof operation.index !== "number" || !Number.isInteger(operation.index) || operation.index < 0)) {
+        throw new Error(`patch.operations[${index}].index must be a non-negative integer.`);
+      }
+      if (operation.ids !== undefined) {
+        if (typeof operation.ids !== "object" || operation.ids === null || Array.isArray(operation.ids)) {
+          throw new Error(`patch.operations[${index}].ids must be an object.`);
+        }
+        for (const [key, value] of Object.entries(operation.ids as Record<string, unknown>)) {
+          if (typeof value !== "string" || !value) {
+            throw new Error(`patch.operations[${index}].ids.${key} must be a non-empty string.`);
+          }
+        }
+      }
+    }
     const result: PatchOperation = {
       op: op as PatchOperation['op'],
       id: typeof operation.id === "string" ? operation.id : undefined,
       parent: typeof operation.parent === "string" ? operation.parent : undefined,
       index: typeof operation.index === "number" ? operation.index : undefined,
-      set: operation.set as JsonObject | undefined
+      set: operation.set as JsonObject | undefined,
+      idSuffix: typeof operation.idSuffix === "string" ? operation.idSuffix : undefined,
+      ids: operation.ids && typeof operation.ids === "object" && !Array.isArray(operation.ids)
+        ? { ...(operation.ids as Record<string, string>) }
+        : undefined
     };
     if (op === 'SET') {
       const set = operation.set as JsonObject;

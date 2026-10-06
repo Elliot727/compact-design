@@ -156,7 +156,7 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
 }
 
 export interface PatchOperation {
-  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE";
+  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE" | "DUPLICATE";
   id?: string;
   parent?: string;
   index?: number;
@@ -165,6 +165,10 @@ export interface PatchOperation {
   /** Type-agnostic normalized set values; target-type rules run at apply time. */
   normalized?: PatchSetValues;
   node?: InternalNode;
+  /** Required for DUPLICATE: non-empty suffix appended to every subtree id (unless overridden). */
+  idSuffix?: string;
+  /** Optional DUPLICATE overrides: sourceId → newId (keys must be in the source subtree). */
+  ids?: Record<string, string>;
 }
 
 export interface InternalPatchDocument {
