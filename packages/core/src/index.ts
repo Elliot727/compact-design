@@ -65,8 +65,9 @@ export interface PatchValidationResult { valid: boolean; issues: RepairIssue[]; 
 /**
  * Validate a raw patch against the document it will be applied to: schema,
  * key rules, target-type rules, and validateDocument on the patched result
- * (bindings, styleRefs, variants, sizes, ...). Returns the patched document
- * when valid. Never throws.
+ * (bindings, styleRefs, variants, sizes, ...). Only issues the patch
+ * introduces are reported; issues already in the input document never block.
+ * Returns the patched document when valid. Never throws.
  */
 export function validatePatch(document: InternalDocument, patch: unknown): PatchValidationResult {
   const checked = validate(patch);
@@ -86,7 +87,7 @@ export function applyPatch(document: InternalDocument, patch: InternalPatchDocum
 
 export { isPatchDocument, schema, PatchError };
 export { normalizePatchSet } from "./normalize";
-export { corePatchContext } from "./patch";
+export { corePatchContext, newDocumentIssues } from "./patch";
 export {
   PATCH_SET_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_SEMANTICS, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_TEXT_STYLE_KEYS,
   isPatchSetKey, patchSetShapeIssues, patchSetTargetIssues, patchSetBindingFields

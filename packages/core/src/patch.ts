@@ -1,7 +1,7 @@
 import { validationIssues, type RepairIssue } from "./lint";
 import { patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
-import { validateDocument } from "./validate";
+import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; }
 
@@ -273,7 +273,35 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
       throw new PatchError([patchIssue("PATCH_OPERATION", split > 0 ? message.slice(0, split) : `patch.operations[${operationIndex}]`, split > 0 ? message.slice(split + 2) : message, "Target nodes that exist and containers that can accept children.")]);
     }
   }
-  const resultIssues = validationIssues(validateDocument(result));
-  if (resultIssues.length) throw new PatchError(resultIssues.map((issue) => ({ ...issue, code: "PATCH_RESULT_INVALID", message: `after patch: ${issue.message}` })));
+  const introduced = newDocumentIssues(document, result);
+  if (introduced.length) throw new PatchError(introduced);
   return { document: result, affectedIds };
+}
+
+/**
+ * Issues present in `after` but not in `before`. Issues already in the input
+ * document never block a patch, even on nodes the patch touches; only issues
+ * the patch introduces (directly or through a move/insert/remove) are
+ * reported. Identity is code + owner (node id / variable / document) + the
+ * property path inside the owner + message, never an array index, and the
+ * comparison is a multiset so a second copy of an existing issue counts as new.
+ */
+export function newDocumentIssues(before: InternalDocument, after: InternalDocument): RepairIssue[] {
+  const keyed = (document: InternalDocument) => {
+    const owners = documentIssueOwners(document);
+    return validationIssues(validateDocument(document, Infinity)).map((issue) => {
+      const owner = owners(issue.path);
+      return { issue, owner, key: `${issue.code}|${owner.owner}|${owner.rest}|${issue.message}` };
+    });
+  };
+  const existing = new Map<string, number>();
+  for (const { key } of keyed(before)) existing.set(key, (existing.get(key) || 0) + 1);
+  const introduced: RepairIssue[] = [];
+  for (const { issue, owner, key } of keyed(after)) {
+    const count = existing.get(key) || 0;
+    if (count > 0) { existing.set(key, count - 1); continue; }
+    const where = owner.nodeId !== undefined ? ` (node '${owner.nodeId}')` : "";
+    introduced.push({ ...issue, code: "PATCH_RESULT_INVALID", message: `after patch${where}: ${issue.message}`, suggestion: "This issue is introduced by the patch; issues already in the input document are not reported." });
+  }
+  return introduced;
 }

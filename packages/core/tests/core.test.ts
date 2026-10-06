@@ -876,6 +876,116 @@ test("validatePatch reports bad references in the patched document", () => {
   assert.throws(() => applyPatch(document, normalizePatch(patchOf({ op: "append", parent: "sibling", node: { id: "inst", type: "INSTANCE", componentId: "ghost", w: 5, h: 5 } }))), PatchError);
 });
 
+// A document that is already invalid before any patch: two missing variables,
+// plus valid components, an instance and two variant sets for indirect issues.
+const preInvalidDocument = () => normalize({
+  canvas: { id: "screen", width: 800, height: 600, fill: "#FFFFFF" },
+  variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "ink", name: "ink", type: "COLOR", values: { Light: { r: 17, g: 17, b: 17 } } }] }],
+  nodes: [
+    { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 10, h: 10, fill: "#FF0000", bindings: { fill: "missing-var" } },
+    { id: "b", type: "RECTANGLE", x: 20, y: 0, w: 10, h: 10, fill: "#00FF00" },
+    { id: "box", type: "FRAME", x: 0, y: 100, w: 300, h: 200, children: [
+      { id: "x", type: "RECTANGLE", x: 0, y: 0, w: 10, h: 10 },
+      { id: "y", type: "RECTANGLE", x: 20, y: 0, w: 10, h: 10, fill: "#0000FF", bindings: { fill: "missing-2" } }
+    ] },
+    { id: "other", type: "FRAME", x: 400, y: 100, w: 300, h: 200, children: [] },
+    { id: "comp", type: "COMPONENT", x: 0, y: 400, w: 40, h: 40 },
+    { id: "inst", type: "INSTANCE", x: 100, y: 400, w: 40, h: 40, componentId: "comp" },
+    { id: "set-sm", type: "COMPONENT_SET", x: 200, y: 400, w: 100, h: 50, variantAxes: { size: ["sm"] }, children: [
+      { id: "sm-1", type: "COMPONENT", w: 40, h: 40, variant: { size: "sm" } },
+      { id: "sm-2", type: "COMPONENT", x: 50, w: 40, h: 40, variant: { size: "sm" } }
+    ] },
+    { id: "set-lg", type: "COMPONENT_SET", x: 400, y: 400, w: 100, h: 50, variantAxes: { size: ["lg"] }, children: [
+      { id: "lg-1", type: "COMPONENT", w: 40, h: 40, variant: { size: "lg" } }
+    ] }
+  ]
+});
+const preExisting = /missing-var|missing-2/;
+
+test("post-patch validation ignores issues already in the input (Gate repro: missing variable on a, rename b)", () => {
+  const document = preInvalidDocument();
+  const before = validateDocument(document);
+  assert.equal(before.length, 2, before.join("; "));
+  assert.match(before.join("\n"), /variable 'missing-var' is not defined/);
+  const result = validatePatch(document, patchOf(setOp("b", { name: "renamed" })));
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(nodeById(result.document!, "b").name, "renamed");
+  assert.deepEqual(validateDocument(result.document!), before, "pre-existing issues are still there, untouched, and not reported");
+  assert.doesNotThrow(() => applyPatch(document, normalizePatch(patchOf(setOp("b", { name: "renamed" })))));
+});
+
+test("post-patch validation still fails on issues the patch introduces and names only those", () => {
+  const document = preInvalidDocument();
+  const patch = patchOf(setOp("b", { name: "renamed" }), { op: "append", parent: "other", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "brand-new" } } });
+  const result = validatePatch(document, patch);
+  assert.equal(result.valid, false);
+  assert.equal(result.issues.length, 1, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(result.issues[0].code, "PATCH_RESULT_INVALID");
+  assert.match(result.issues[0].message, /node 'fresh'.*variable 'brand-new' is not defined/);
+  assert.doesNotMatch(JSON.stringify(result.issues), preExisting);
+  assert.throws(() => applyPatch(document, normalizePatch(patch)), (error: unknown) => error instanceof PatchError && error.issues.length === 1 && /brand-new/.test(error.message) && !preExisting.test(error.message));
+  // A second copy of an existing problem is new, too: the comparison is a multiset per node.
+  const copy = validatePatch(document, patchOf({ op: "append", parent: "other", node: { id: "twin", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "missing-var" } } }));
+  assert.equal(copy.valid, false);
+  assert.equal(copy.issues.length, 1);
+  assert.match(copy.issues[0].message, /node 'twin'/);
+  // The diff is uncapped: with more than 30 pre-existing issues a new one is still found.
+  const noisy = normalize({ canvas: { id: "screen", width: 800, height: 600 }, nodes: [
+    ...Array.from({ length: 35 }, (_, index) => ({ id: `n${index}`, type: "RECTANGLE", w: 5, h: 5, bindings: { fill: `gone-${index}` } })),
+    { id: "host", type: "FRAME", w: 50, h: 50, children: [] }
+  ] });
+  const late = validatePatch(noisy, patchOf({ op: "append", parent: "host", node: { id: "late", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "gone-late" } } }));
+  assert.equal(late.valid, false);
+  assert.deepEqual(late.issues.map((issue) => /gone-late/.test(issue.message)), [true]);
+});
+
+test("touching a node that already has an issue does not count that issue as new", () => {
+  const document = preInvalidDocument();
+  const result = validatePatch(document, patchOf(setOp("a", { name: "still broken", x: 5, opacity: 0.5 }), setOp("y", { name: "also broken", w: 12 })));
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(validateDocument(result.document!).length, 2);
+  // Fixing the issue (replacing the bound fill detaches the binding) is fine as well.
+  const fixed = validatePatch(document, patchOf(setOp("a", { fill: "#123456" })));
+  assert.equal(fixed.valid, true);
+  assert.equal(validateDocument(fixed.document!).length, 1);
+});
+
+test("issue identity is node id + property path, so index shifts from insert, move and remove don't make old issues new", () => {
+  const document = preInvalidDocument();
+  const ok = (label: string, ...operations: unknown[]) => {
+    const result = validatePatch(document, patchOf(...operations));
+    assert.equal(result.valid, true, `${label}: ${result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
+    assert.equal(validateDocument(result.document!).length, 2, `${label}: pre-existing issues remain`);
+    return result.document!;
+  };
+  // (a) insert a sibling before nodes that already have issues: y's and a's paths both shift.
+  ok("insert in box", { op: "insert", parent: "box", index: 0, node: { id: "new-1", type: "RECTANGLE", w: 5, h: 5 } });
+  ok("insert at root", { op: "insert", parent: "screen", index: 0, node: { id: "new-2", type: "FRAME", w: 5, h: 5, children: [] } });
+  // (b) move and remove that shift indexes, including moving the broken node itself.
+  ok("reorder", { op: "move", id: "x", parent: "box", index: 1 });
+  ok("move broken node", { op: "move", id: "y", parent: "other", index: 0 });
+  ok("move ahead of a", { op: "move", id: "other", parent: "screen", index: 0 });
+  ok("remove sibling", { op: "remove", id: "x" });
+  ok("remove before a", { op: "remove", id: "b" }, { op: "remove", id: "other" });
+  // Index-shifting remove plus insert plus move in one patch.
+  ok("combined", { op: "remove", id: "x" }, { op: "insert", parent: "screen", index: 0, node: { id: "new-3", type: "RECTANGLE", w: 5, h: 5 } }, { op: "move", id: "a", parent: "other", index: 0 });
+});
+
+test("issues the patch causes on nodes it only touched indirectly are still reported", () => {
+  const document = preInvalidDocument();
+  // Removing a component breaks the untouched instance that uses it.
+  const removed = validatePatch(document, patchOf({ op: "remove", id: "comp" }));
+  assert.equal(removed.valid, false);
+  assert.equal(removed.issues.length, 1);
+  assert.match(removed.issues[0].message, /node 'inst'.*component 'comp' is not defined/);
+  // Moving a variant into a set that doesn't declare its value creates a new conflict.
+  const moved = validatePatch(document, patchOf({ op: "move", id: "sm-2", parent: "set-lg", index: 1 }));
+  assert.equal(moved.valid, false);
+  assert.equal(moved.issues.length, 1, moved.issues.map((issue) => issue.message).join("; "));
+  assert.match(moved.issues[0].message, /node 'sm-2'.*value 'sm' is not declared in variantAxes/);
+  assert.doesNotMatch(JSON.stringify([...removed.issues, ...moved.issues]), preExisting);
+});
+
 test("e2e: the showcase document goes through a sequence of set patches, validates, and round-trips", () => {
   const original = normalize(fixture("design-language-showcase.json"));
   assert.deepEqual(validateDocument(original), []);
