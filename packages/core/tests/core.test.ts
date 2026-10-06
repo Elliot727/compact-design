@@ -497,6 +497,25 @@ test("append matches insert at children.length", () => {
   }));
   assert.deepEqual(childIds(viaAppend.document, "list"), childIds(viaInsert.document, "list"));
   assert.deepEqual(childIds(viaAppend.document, "list"), ["a", "b", "z"]);
+
+  // Same parent validation as insert: missing parent, non-container, INSTANCE.
+  for (const op of ["append", "insert"] as const) {
+    const missingParent = { op, parent: "nope", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(document, normalizePatch({ patch: { operations: [missingParent] } })), /was not found/);
+    const intoLeaf = { op, parent: "a", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(document, normalizePatch({ patch: { operations: [intoLeaf] } })), /cannot contain children/);
+  }
+  const withInstance = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 20, h: 20 }
+    ]
+  });
+  for (const op of ["append", "insert"] as const) {
+    const intoInstance = { op, parent: "copy", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(withInstance, normalizePatch({ patch: { operations: [intoInstance] } })), /INSTANCE/);
+  }
 });
 
 test("move reorders within parent using after-removal index", () => {
@@ -575,6 +594,10 @@ test("move reparents, clamps, and rejects cycles, missing targets, roots, and in
   assert.throws(
     () => applyPatch(withInstance, normalizePatch({ patch: { operations: [{ op: "move", id: "button", parent: "slot", index: 0 }] } })),
     /INSTANCE/
+  );
+  assert.throws(
+    () => applyPatch(withInstance, normalizePatch({ patch: { operations: [{ op: "move", id: "slot", parent: "button", index: 0 }] } })),
+    /inside an INSTANCE and cannot be moved/
   );
 });
 

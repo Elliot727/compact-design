@@ -87,7 +87,7 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
     { "op": "move", "id": "pin", "parent": "list", "index": 2 }
   ] }
 }
-\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end. Rejects missing id/parent, non-container or INSTANCE parents, moving the root, and cycles.
+\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end (same parent checks). Rejects missing id/parent, non-container or INSTANCE parents, moving the root, moving out of an INSTANCE, and cycles. Figma resolves ids only via imported compact-design plugin data.
 
 ## Workflow
 1. Author Compact Design JSON for the request.

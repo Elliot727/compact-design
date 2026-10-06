@@ -799,6 +799,15 @@ test("Figma patch move uses after-removal index and rejects cycles, roots, insta
     () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "list", parent: "nest", index: 0 }] } }), context as never),
     /itself or its descendants/
   );
+
+  // Nested child inside INSTANCE cannot be moved out.
+  const slot = createMockNode("FRAME", "slot");
+  slot.setPluginData("compactDesignId", "slot");
+  instance.appendChild(slot);
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "slot", parent: "list", index: 0 }] } }), context as never),
+    /inside an INSTANCE and cannot be moved/
+  );
 });
 
 test("core and Figma applicator agree on insert/move/reparent/append child order", async () => {
@@ -868,4 +877,91 @@ test("core and Figma applicator agree on insert/move/reparent/append child order
   assert.deepEqual(compactIds(other), coreOther);
   assert.deepEqual(coreList, ["c", "mid", "b", "tail"]);
   assert.deepEqual(coreOther, ["a", "z"]);
+});
+
+
+test("Figma patch rejects arbitrary non-imported Figma node ids", async () => {
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  const orphan = createMockNode("RECTANGLE", "orphan");
+  // orphan has a Figma id but no compactDesignId — not in the plugin index
+  list.appendChild(orphan);
+  installFigmaMock([list]);
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      patch: { operations: [{ op: "set", id: orphan.id, set: { name: "hijacked" } }] }
+    }), emptyPatchContext() as never),
+    /was not found/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      patch: { operations: [{ op: "move", id: orphan.id, parent: "list", index: 0 }] }
+    }), emptyPatchContext() as never),
+    /was not found/
+  );
+  assert.equal(orphan.getPluginData("compactDesignId"), "");
+  assert.equal(list.children.includes(orphan), true);
+});
+
+test("Figma patch rolls back insert and move when a later op fails", async () => {
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  for (const id of ["a", "b", "c"]) {
+    const child = createMockNode("RECTANGLE", id);
+    child.setPluginData("compactDesignId", id);
+    list.appendChild(child);
+  }
+  const other = createMockNode("FRAME", "other");
+  other.setPluginData("compactDesignId", "other");
+  installFigmaMock([list, other]);
+
+  const snapshot = () => ({
+    list: compactIds(list).slice(),
+    other: compactIds(other).slice(),
+    listLen: list.children.length,
+    otherLen: other.children.length
+  });
+  const before = snapshot();
+
+  // Preflight passes (all ids exist / parents valid). The third op fails mid-apply
+  // inside createNode, so insert + move must roll back.
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      patch: {
+        operations: [
+          { op: "insert", parent: "list", index: 1, node: { id: "mid", type: "RECTANGLE", w: 10, h: 10 } },
+          { op: "move", id: "c", parent: "other", index: 0 },
+          { op: "insert", parent: "list", index: 0, node: { id: "boom", type: "NOT_A_NODE", w: 10, h: 10 } }
+        ]
+      }
+    }), emptyPatchContext() as never),
+    /Unsupported node type/
+  );
+
+  assert.deepEqual(snapshot(), before, "tree must be unchanged after failed patch");
+  assert.equal(list.children.some((child) => child.getPluginData("compactDesignId") === "mid"), false);
+  assert.equal(other.children.some((child) => child.getPluginData("compactDesignId") === "c"), false);
+  assert.deepEqual(compactIds(list), ["a", "b", "c"]);
+});
+
+test("Figma append uses the same parent validation as insert", async () => {
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  const leaf = createMockNode("RECTANGLE", "leaf");
+  leaf.setPluginData("compactDesignId", "leaf");
+  list.appendChild(leaf);
+  const instance = createMockNode("INSTANCE", "copy");
+  instance.setPluginData("compactDesignId", "copy");
+  installFigmaMock([list, instance]);
+  const context = emptyPatchContext();
+
+  for (const op of ["append", "insert"] as const) {
+    const missing = { op, parent: "nope", ...(op === "insert" ? { index: 0 } : {}), node: { id: `x-${op}`, type: "RECTANGLE", w: 1, h: 1 } };
+    await assert.rejects(() => applyFigmaPatch(normalizePatch({ patch: { operations: [missing] } }), context as never), /was not found/);
+    const intoLeaf = { op, parent: "leaf", ...(op === "insert" ? { index: 0 } : {}), node: { id: `y-${op}`, type: "RECTANGLE", w: 1, h: 1 } };
+    await assert.rejects(() => applyFigmaPatch(normalizePatch({ patch: { operations: [intoLeaf] } }), context as never), /cannot contain children/);
+    const intoInstance = { op, parent: "copy", ...(op === "insert" ? { index: 0 } : {}), node: { id: `z-${op}`, type: "RECTANGLE", w: 1, h: 1 } };
+    await assert.rejects(() => applyFigmaPatch(normalizePatch({ patch: { operations: [intoInstance] } }), context as never), /INSTANCE/);
+  }
 });

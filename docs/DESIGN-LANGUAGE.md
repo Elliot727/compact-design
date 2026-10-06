@@ -48,11 +48,11 @@ A patch is the second accepted top-level document form. It targets layers previo
 
 - `set` changes only the listed geometry, appearance, text, layout, constraints, or grid fields.
 - `remove` deletes the matching node.
-- `append` creates a native child under a matching container (equivalent to `insert` at `index = children.length`).
+- `append` creates a native child under a matching container (equivalent to `insert` at `index = children.length`). It uses the same parent checks as `insert` (missing parent, non-container, INSTANCE or inside an INSTANCE).
 - `insert` creates a native child at `index` under a matching container. `index` is a non-negative integer; on apply it is clamped to `[0, children.length]` so oversized values append.
-- `move` reparents an existing node (or reorders within the same parent) to `index`. For same-parent moves, `index` is the **final** position after the node is removed. Moving a node under itself or a descendant, moving the document root, targeting a missing id/parent, or choosing a non-container / INSTANCE parent are errors.
+- `move` reparents an existing node (or reorders within the same parent) to `index`. For same-parent moves, `index` is the **final** position after the node is removed. Moving a node under itself or a descendant, moving the document root, moving a node **out of** an INSTANCE, targeting a missing id/parent, or choosing a non-container / INSTANCE parent are errors.
 
-All targets, parents, and appended IDs are checked before the first operation. Existing changed/removed nodes are cloned for rollback. Patch image fills use the same remote, local-file, embedded-image and downscaling pipeline as full documents.
+All targets, parents, and appended IDs are checked before the first operation against layers previously imported by this plugin (compact-design plugin data only — raw Figma ids are not accepted). Existing changed/removed nodes are cloned for rollback; inserts are removed and moves restored to their original parent/index if a later op fails. The Figma applicator preflights against the current page index, so a parent created earlier in the **same** patch is not yet visible there (use separate patches, or rely on core for abstract apply). Patch image fills use the same remote, local-file, embedded-image and downscaling pipeline as full documents.
 
 ## Preview, repair output, and design lint
 

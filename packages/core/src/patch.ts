@@ -65,6 +65,12 @@ function assertContainerParent(parent: InternalNode, operationIndex: number, par
   }
 }
 
+function assertNotInsideInstance(parent: InternalNode | null, operationIndex: number, id: string, index: Map<string, NodeRef>): void {
+  if (parent && hasInstanceAncestor(parent, index)) {
+    throw new Error(`patch.operations[${operationIndex}]: node '${id}' is inside an INSTANCE and cannot be moved.`);
+  }
+}
+
 export function applyDocumentPatch(document: InternalDocument, patch: InternalPatchDocument): PatchResult {
   const result: InternalDocument = { ...document, nodes: document.nodes.map(cloneNode), styles: cloneValue(document.styles), variables: cloneValue(document.variables) };
   const affectedIds: string[] = [];
@@ -75,7 +81,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
     if (operation.op === "APPEND" || operation.op === "INSERT") {
       const target = operation.parent ? index.get(operation.parent) : undefined;
       if (!target || !operation.node) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
-      if (operation.op === "INSERT") assertContainerParent(target.node, operationIndex, operation.parent || "", index);
+      assertContainerParent(target.node, operationIndex, operation.parent || "", index);
       if (index.has(operation.node.id)) throw new Error(`patch.operations[${operationIndex}]: ID '${operation.node.id}' already exists.`);
       const child = cloneNode(operation.node);
       if (operation.op === "APPEND") {
@@ -92,6 +98,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
       const moving = operation.id ? index.get(operation.id) : undefined;
       if (!moving) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);
       if (!moving.parent) throw new Error(`patch.operations[${operationIndex}]: cannot move the document root.`);
+      assertNotInsideInstance(moving.parent, operationIndex, operation.id || "", index);
       const destination = operation.parent ? index.get(operation.parent) : undefined;
       if (!destination) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
       assertContainerParent(destination.node, operationIndex, operation.parent || "", index);
