@@ -1911,7 +1911,8 @@ test("patch resource upsert: later op binds new token; without upsert still fail
     patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
   });
   assert.equal(incomplete.valid, false);
-  assert.equal(incomplete.issues[0].code, "PATCH_RESULT_INVALID");
+  assert.equal(incomplete.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(incomplete.issues[0].message, /missing values for mode.*Dark/);
 
   const nodesReject = validate({
     patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] },
@@ -1967,3 +1968,90 @@ test("patch resource upsert: pre-existing token issue does not block", () => {
   });
   assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
 });
+
+test("Gate #45.1: token-only patch with empty operations is valid", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#ff0000" }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const patch = {
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 0.2, g: 0.3, b: 0.4, a: 1 } } }] }],
+    patch: { operations: [] }
+  };
+  assert.equal(validate(patch).valid, true, validate(patch).issues.map((issue) => issue.message).join("; "));
+  const result = validatePatch(document, patch);
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.deepEqual(result.document!.variables[0].items[0].values?.Light, { r: 0.2, g: 0.3, b: 0.4, a: 1 });
+
+  const empty = validate({ patch: { operations: [] } });
+  assert.equal(empty.valid, false, "fully empty patch still rejected");
+});
+
+test("Gate #45.2: name match with different id is PATCH_RESOURCE_CONFLICT (styles + variables)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 32 } }]
+  });
+  const styleClash = validatePatch(document, {
+    styles: [{ id: "h2", name: "Heading", type: "TEXT", font: { size: 44 } }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(styleClash.valid, false);
+  assert.equal(styleClash.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(styleClash.issues[0].message, /already has id 'heading'/);
+
+  const varClash = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "brand2", name: "color/brand", type: "COLOR", value: { r: 0, g: 1, b: 0, a: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "screen", set: { name: "Screen" } }] }
+  });
+  assert.equal(varClash.valid, false);
+  assert.equal(varClash.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(varClash.issues[0].message, /already has id 'brand'/);
+});
+
+test("Gate #45.3: variable and style ids must be unique across collections", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#111"] }]
+  });
+  const dupVar = validatePatch(document, {
+    variables: [{ name: "Other", modes: ["Light"], items: [{ id: "brand", name: "other/brand", type: "COLOR", values: { Light: { r: 0, g: 1, b: 0, a: 1 } } }] }],
+    patch: { operations: [] }
+  });
+  assert.equal(dupVar.valid, false);
+  assert.equal(dupVar.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(dupVar.issues[0].message, /already used by 'Theme\/color\/brand'/);
+
+  // Style ids: matching by id with a different name is also CONFLICT (no rename / no second style with that id).
+  const dupStyle = validatePatch(document, {
+    styles: [{ id: "ink", name: "InkAlt", type: "PAINT", paints: ["#222222"] }],
+    patch: { operations: [] }
+  });
+  assert.equal(dupStyle.valid, false);
+  assert.equal(dupStyle.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+  assert.match(dupStyle.issues[0].message, /already bound to name 'Ink'|already used by 'Ink'/);
+});
+
+test("Gate #45.4: new variable missing a mode value fails in the shared plan", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [],
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [] }]
+  });
+  // Empty items on existing collection — patch creates incomplete variable
+  const result = validatePatch(document, {
+    variables: [{ name: "Theme", items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Light: 8 } }] }],
+    patch: { operations: [] }
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(result.issues[0].message, /missing values for mode.*Dark/);
+  // Input document unchanged
+  assert.equal(document.variables[0].items.length, 0);
+});
+

@@ -303,7 +303,7 @@ function resourcesAsUpsertInput(resources: Resources): { styles: StyleDefinition
       if (items.some((item) => item.name === variable.name)) continue;
       const compact = variable.getPluginData("compactDesignId") || undefined;
       items.push({
-        id: compact && compact !== variable.name ? compact : compact,
+        id: compact || undefined,
         name: variable.name,
         type: variable.resolvedType as VariableDefinition["type"],
         values: Object.fromEntries(collection.modes.map((mode) => [mode.name, true]))
@@ -314,8 +314,25 @@ function resourcesAsUpsertInput(resources: Resources): { styles: StyleDefinition
   return { styles, variables };
 }
 
-function registerStyle(resources: Resources, style: PaintStyle | TextStyle, compactId: string, type: "PAINT" | "TEXT"): void {
-  style.setPluginData("compactDesignId", compactId);
+/** Stamp compactDesignId, snapshotting the prior value (including absent) for rollback. */
+function registerStyle(
+  resources: Resources,
+  style: PaintStyle | TextStyle,
+  compactId: string,
+  type: "PAINT" | "TEXT",
+  undoLog: Array<ResourceUndoEntry | { kind: string }>,
+  isNew: boolean
+): void {
+  const previous = style.getPluginData?.("compactDesignId") || "";
+  if (previous !== compactId) {
+    style.setPluginData("compactDesignId", compactId);
+    if (!isNew) {
+      undoLog.push({
+        kind: "resource",
+        restore: async () => { style.setPluginData("compactDesignId", previous); }
+      });
+    }
+  }
   if (type === "PAINT") {
     resources.paintStyles.set(compactId, style as PaintStyle);
     resources.paintStyles.set(style.name, style as PaintStyle);
@@ -325,8 +342,24 @@ function registerStyle(resources: Resources, style: PaintStyle | TextStyle, comp
   }
 }
 
-function registerVariable(resources: Resources, variable: Variable, compactId: string, collection: VariableCollection): void {
-  variable.setPluginData("compactDesignId", compactId);
+function registerVariable(
+  resources: Resources,
+  variable: Variable,
+  compactId: string,
+  collection: VariableCollection,
+  undoLog: Array<ResourceUndoEntry | { kind: string }>,
+  isNew: boolean
+): void {
+  const previous = variable.getPluginData("compactDesignId") || "";
+  if (previous !== compactId) {
+    variable.setPluginData("compactDesignId", compactId);
+    if (!isNew) {
+      undoLog.push({
+        kind: "resource",
+        restore: async () => { variable.setPluginData("compactDesignId", previous); }
+      });
+    }
+  }
   resources.variables.set(compactId, variable);
   resources.variables.set(variable.name, variable);
   resources.variableCollections.set(collection.name, collection);
@@ -335,9 +368,10 @@ function registerVariable(resources: Resources, variable: Variable, compactId: s
 
 /**
  * Upsert patch variables/styles into the file before operations run.
- * Snapshots every touched token; restore callbacks are pushed onto undoLog
- * (replayed in reverse on failure). Same identity/conflict rules as core via
- * applyResourceUpsert / matchStyle / matchVariable. Never renames mode 0.
+ * Mode adds run first (recording plan-limit omissions), then shared
+ * applyResourceUpsert plans conflicts/coverage, then values/styles write.
+ * Snapshots every touched token including compactDesignId; restore callbacks
+ * are pushed onto undoLog (replayed in reverse on failure).
  */
 export async function upsertPatchResources(
   patch: InternalPatchDocument,
@@ -347,18 +381,12 @@ export async function upsertPatchResources(
   const warnings: string[] = [...resources.warnings];
   if (!(patch.variables?.length || patch.styles?.length)) return { warnings, affectedKeys: [] };
 
-  const existing = resourcesAsUpsertInput(resources);
-  const planned = applyResourceUpsert(existing, { styles: patch.styles, variables: patch.variables });
-  if (planned.issues.length) {
-    const message = planned.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n");
-    throw new Error(message);
-  }
+  const unavailableModes = new Map<string, Set<string>>();
 
-  // --- Collections / variables ---
+  // --- Phase 1: collections / modes (so the plan sees available modes only) ---
   for (const group of patch.variables || []) {
     const collectionName = group.name;
     let collection = resources.variableCollections.get(collectionName);
-    const createdCollection = !collection;
     if (!collection) {
       collection = figma.variables.createVariableCollection(collectionName);
       resources.createdCollections.push(collection);
@@ -367,7 +395,6 @@ export async function upsertPatchResources(
         kind: "resource",
         restore: async () => { try { created.remove(); } catch { /* already gone */ } }
       });
-      // New collection: rename mode 0 to the first requested mode (create, not patch-rename of an existing collection).
       const requested = Array.isArray(group.modes) && group.modes.length ? group.modes : [collection.modes[0].name];
       if (requested[0] && collection.modes[0].name !== requested[0]) {
         collection.renameMode(collection.modes[0].modeId, requested[0]);
@@ -379,6 +406,7 @@ export async function upsertPatchResources(
           if (!isVariableModeLimitError(error)) throw error;
           const omitted = requested.slice(requested.indexOf(name)).filter((modeName) => !collection!.modes.some((mode) => mode.name === modeName));
           const unavailable = new Set(omitted);
+          unavailableModes.set(collectionName, unavailable);
           resources.unavailableVariableModes.set(collectionName, unavailable);
           resources.unavailableVariableModes.set(collection.id, unavailable);
           warnings.push(variableModeLimitWarning(collectionName, collection.modes.map((mode) => mode.name), omitted));
@@ -386,7 +414,6 @@ export async function upsertPatchResources(
         }
       }
     } else {
-      // Existing: append missing modes only — never rename mode 0.
       const requested = Array.isArray(group.modes) && group.modes.length ? group.modes : [];
       const addedModeIds: string[] = [];
       for (const name of requested) {
@@ -397,6 +424,7 @@ export async function upsertPatchResources(
           if (!isVariableModeLimitError(error)) throw error;
           const omitted = requested.slice(requested.indexOf(name)).filter((modeName) => !collection!.modes.some((mode) => mode.name === modeName));
           const unavailable = new Set(omitted);
+          unavailableModes.set(collectionName, unavailable);
           resources.unavailableVariableModes.set(collectionName, unavailable);
           resources.unavailableVariableModes.set(collection.id, unavailable);
           warnings.push(variableModeLimitWarning(collectionName, collection.modes.map((mode) => mode.name), omitted));
@@ -419,8 +447,25 @@ export async function upsertPatchResources(
     }
     resources.variableCollections.set(collectionName, collection);
     resources.variableCollections.set(collection.id, collection);
+  }
 
-    const existingInCollection = (await figma.variables.getLocalVariablesAsync()).filter((candidate) => candidate.variableCollectionId === collection!.id);
+  // --- Phase 2: shared plan (conflicts, id uniqueness, create coverage) ---
+  const existing = resourcesAsUpsertInput(resources);
+  const planned = applyResourceUpsert(
+    existing,
+    { styles: patch.styles, variables: patch.variables },
+    { unavailableModes }
+  );
+  if (planned.issues.length) {
+    const message = planned.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n");
+    throw new Error(message);
+  }
+
+  // --- Phase 3: write variable values ---
+  for (const group of patch.variables || []) {
+    const collectionName = group.name;
+    const collection = resources.variableCollections.get(collectionName)!;
+    const existingInCollection = (await figma.variables.getLocalVariablesAsync()).filter((candidate) => candidate.variableCollectionId === collection.id);
     const itemsAsDefs: VariableDefinition[] = existingInCollection.map((variable) => ({
       id: variable.getPluginData("compactDesignId") || undefined,
       name: variable.name,
@@ -429,12 +474,8 @@ export async function upsertPatchResources(
 
     for (const incoming of group.items || []) {
       const matched = matchVariable(itemsAsDefs, incoming);
-      if (matched && (matched.variable.type !== incoming.type || (matched.by === "id" && matched.variable.name !== incoming.name))) {
-        // Conflicts already reported by applyResourceUpsert; defensive.
-        throw new Error(`PATCH_RESOURCE_CONFLICT: variable '${incoming.name}'`);
-      }
-
       let variable: Variable | undefined;
+      let isNew = false;
       if (matched) {
         variable = existingInCollection.find((candidate) =>
           (matched.by === "id" && (candidate.getPluginData("compactDesignId") === incoming.id || candidate.getPluginData("compactDesignId") === matched.variable.id))
@@ -443,7 +484,6 @@ export async function upsertPatchResources(
       }
 
       if (variable) {
-        // Snapshot per-mode values before write.
         const snapshot = { ...variable.valuesByMode };
         const target = variable;
         undoLog.push({
@@ -456,6 +496,7 @@ export async function upsertPatchResources(
         });
       } else {
         variable = figma.variables.createVariable(incoming.name, collection, incoming.type || "FLOAT");
+        isNew = true;
         const created = variable;
         undoLog.push({
           kind: "resource",
@@ -478,11 +519,11 @@ export async function upsertPatchResources(
         variable.setValueForMode(mode.modeId, resolved as VariableValue);
       }
       const compactId = incoming.id || variable.getPluginData("compactDesignId") || incoming.name;
-      registerVariable(resources, variable, compactId, collection);
+      registerVariable(resources, variable, compactId, collection, undoLog, isNew);
     }
   }
 
-  // --- Styles ---
+  // --- Phase 4: styles ---
   const paintList = uniqueStyles(resources.paintStyles as Map<string, PaintStyle | TextStyle>).map((style) => ({
     id: style.getPluginData?.("compactDesignId") || undefined,
     name: style.name,
@@ -490,12 +531,12 @@ export async function upsertPatchResources(
     paints: [] as StyleDefinition["paints"]
   }));
   const textList = uniqueStyles(resources.textStyles as Map<string, PaintStyle | TextStyle>).map((style) => {
-    const text = style as TextStyle;
+    const textStyle = style as TextStyle;
     return {
       id: style.getPluginData?.("compactDesignId") || undefined,
       name: style.name,
       type: "TEXT" as const,
-      font: { family: text.fontName.family, style: text.fontName.style, size: text.fontSize }
+      font: { family: textStyle.fontName.family, style: textStyle.fontName.style, size: textStyle.fontSize }
     };
   });
   const styleDefs: StyleDefinition[] = [...paintList, ...textList];
@@ -504,6 +545,7 @@ export async function upsertPatchResources(
     const matched = matchStyle(styleDefs, incoming);
     if (incoming.type === "PAINT") {
       let style: PaintStyle | undefined;
+      let isNew = false;
       if (matched) {
         style = (matched.by === "id"
           ? resources.paintStyles.get(incoming.id!)
@@ -524,6 +566,7 @@ export async function upsertPatchResources(
         style.name = incoming.name;
         if (incoming.paints) style.paints = await paints(incoming.paints);
         resources.createdStyles.push(style);
+        isNew = true;
         const created = style;
         undoLog.push({
           kind: "resource",
@@ -532,9 +575,10 @@ export async function upsertPatchResources(
         styleDefs.push({ id: incoming.id, name: incoming.name, type: "PAINT", paints: [] });
       }
       const compactId = incoming.id || style.getPluginData("compactDesignId") || incoming.name;
-      registerStyle(resources, style, compactId, "PAINT");
+      registerStyle(resources, style, compactId, "PAINT", undoLog, isNew);
     } else {
       let style: TextStyle | undefined;
+      let isNew = false;
       if (matched) {
         style = (matched.by === "id"
           ? resources.textStyles.get(incoming.id!)
@@ -587,6 +631,7 @@ export async function upsertPatchResources(
         style.fontName = await loadFont({ family, style: fontStyle, size: incoming.font?.size ?? 16 });
         if (typeof incoming.font?.size === "number") style.fontSize = incoming.font.size;
         resources.createdStyles.push(style);
+        isNew = true;
         const created = style;
         undoLog.push({
           kind: "resource",
@@ -595,7 +640,7 @@ export async function upsertPatchResources(
         styleDefs.push({ id: incoming.id, name: incoming.name, type: "TEXT", font: { family, style: fontStyle, size: incoming.font?.size ?? 16 } });
       }
       const compactId = incoming.id || style.getPluginData("compactDesignId") || incoming.name;
-      registerStyle(resources, style, compactId, "TEXT");
+      registerStyle(resources, style, compactId, "TEXT", undoLog, isNew);
     }
   }
 

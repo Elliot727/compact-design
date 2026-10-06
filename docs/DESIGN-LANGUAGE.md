@@ -60,7 +60,7 @@ Patches are atomic in Figma. Every `set` is checked against the rules below befo
 
 ### Tokens in patches
 
-A patch document may carry top-level `variables` and `styles` (the same shapes as a full document). They are **upserted before `operations` run**, so later `set` / `insert` / `duplicate` can bind to tokens declared in the same patch:
+A patch document may carry top-level `variables` and `styles` (the same shapes as a full document). They are **upserted before `operations` run**, so later `set` / `insert` / `duplicate` can bind to tokens declared in the same patch. `operations` may be empty when `variables` or `styles` are present (a token-only patch); a fully empty patch is still rejected:
 
 ```json
 {
@@ -91,6 +91,9 @@ Edges:
 
 - **Type conflict** (same name, different type) or **style type clash** → `PATCH_RESOURCE_CONFLICT`.
 - **Id matches, name differs** → error in v1 (no rename); keep the name or omit `id`.
+- **Name matches, id differs** (incoming id ≠ existing compact id) → `PATCH_RESOURCE_CONFLICT` in both engines (no silent drop / overwrite).
+- **Duplicate ids** across collections (or style ids) → `PATCH_RESOURCE_CONFLICT`.
+- **New variable missing a mode value** → `PATCH_RESOURCE_INVALID` in the shared plan (before any mutation); plan-limited modes are skipped.
 - **Unknown mode in `values`** → `PATCH_RESOURCE_INVALID` (not silently ignored).
 - **Mode 0 is never renamed** on an existing collection (import may rename mode 0; a patch appends instead). A new mode seeds unmentioned variables from mode 0.
 - **Plan mode limit** uses the same WARNING fallback as import.

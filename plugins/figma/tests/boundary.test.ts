@@ -3061,3 +3061,217 @@ test("Figma patch upsert: successful create + bind round-trip", async () => {
   const cta = mockById(page, "cta");
   assert.ok(cta.fills && Array.isArray(cta.fills) && (cta.fills[0] as { boundVariables?: unknown }).boundVariables, "fill bound");
 });
+
+test("Gate #45.1 lockstep: token-only patch with empty operations (core + Figma)", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }]
+  });
+  const page = await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: {
+    variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable };
+  } }).figma;
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("color/brand", collection, "COLOR");
+  variable.setPluginData("compactDesignId", "brand");
+  variable.setValueForMode(collection.modes[0].modeId, { r: 1, g: 0, b: 0, a: 1 });
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("brand", variable as never);
+
+  const patch = {
+    variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 0.2, g: 0.3, b: 0.4, a: 1 } } }] }],
+    patch: { operations: [] }
+  };
+  const coreDoc = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const core = validatePatch(coreDoc, patch);
+  assert.equal(core.valid, true, core.issues.map((issue) => issue.message).join("; "));
+
+  await applyFigmaPatch(normalizePatch(patch), ctx as never);
+  assert.deepEqual(variable.valuesByMode[collection.modes[0].modeId], { r: 0.2, g: 0.3, b: 0.4, a: 1 });
+  assert.ok(page);
+});
+
+test("Gate #45.2 lockstep: name match with different id conflicts in both engines", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }],
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 32 } }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const stylePatch = {
+    styles: [{ id: "h2", name: "Heading", type: "TEXT", font: { size: 44 } }],
+    patch: { operations: [] }
+  };
+  const coreStyle = validatePatch(document, stylePatch);
+  assert.equal(coreStyle.valid, false);
+  assert.equal(coreStyle.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+
+  await importIntoMock(normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }]
+  }));
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: { createTextStyle: () => MockStyle; variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable } } }).figma;
+  const style = api.createTextStyle();
+  style.name = "Heading";
+  style.setPluginData("compactDesignId", "heading");
+  style.fontName = { family: "Inter", style: "Bold" };
+  style.fontSize = 32;
+  ctx.resources.textStyles.set("heading", style as never);
+  ctx.resources.textStyles.set("Heading", style as never);
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch(stylePatch), ctx as never),
+    /already has id 'heading'|PATCH_RESOURCE_CONFLICT/
+  );
+  assert.equal(style.getPluginData("compactDesignId"), "heading", "Figma must not overwrite compactDesignId");
+
+  const varPatch = {
+    variables: [{ name: "Theme", items: [{ id: "brand2", name: "color/brand", type: "COLOR", value: { r: 0, g: 1, b: 0, a: 1 } }] }],
+    patch: { operations: [] }
+  };
+  assert.equal(validatePatch(document, varPatch).valid, false);
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("color/brand", collection, "COLOR");
+  variable.setPluginData("compactDesignId", "brand");
+  variable.setValueForMode(collection.modes[0].modeId, { r: 1, g: 0, b: 0, a: 1 });
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("brand", variable as never);
+  ctx.resources.variables.set("color/brand", variable as never);
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch(varPatch), ctx as never),
+    /already has id 'brand'|PATCH_RESOURCE_CONFLICT/
+  );
+  assert.equal(variable.getPluginData("compactDesignId"), "brand");
+});
+
+test("Gate #45.3 lockstep: duplicate variable id across collections rejected in both engines", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }]
+  });
+  const patch = {
+    variables: [{ name: "Other", modes: ["Light"], items: [{ id: "brand", name: "other/brand", type: "COLOR", values: { Light: { r: 0, g: 1, b: 0, a: 1 } } }] }],
+    patch: { operations: [] }
+  };
+  const core = validatePatch(document, patch);
+  assert.equal(core.valid, false);
+  assert.equal(core.issues[0].code, "PATCH_RESOURCE_CONFLICT");
+
+  await importIntoMock(normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }]
+  }));
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: { variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable }; _variableCollections: MockVariableCollection[]; _variables: MockVariable[] } }).figma;
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("color/brand", collection, "COLOR");
+  variable.setPluginData("compactDesignId", "brand");
+  variable.setValueForMode(collection.modes[0].modeId, { r: 1, g: 0, b: 0, a: 1 });
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("brand", variable as never);
+  ctx.resources.variables.set("color/brand", variable as never);
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch(patch), ctx as never),
+    /already used by|PATCH_RESOURCE_CONFLICT/
+  );
+  assert.equal(api._variableCollections.filter((c) => !c.removed && c.name === "Other").length, 0, "Other collection rolled back");
+});
+
+test("Gate #45.4 lockstep: incomplete new variable fails in plan before mutation", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }],
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [{ id: "keep", name: "keep", type: "FLOAT", values: { Light: 1, Dark: 2 } }] }]
+  });
+  const patch = {
+    variables: [{ name: "Theme", items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Light: 8 } }] }],
+    patch: { operations: [] }
+  };
+  const core = validatePatch(document, patch);
+  assert.equal(core.valid, false);
+  assert.equal(core.issues[0].code, "PATCH_RESOURCE_INVALID");
+  assert.match(core.issues[0].message, /missing values for mode.*Dark/);
+
+  await importIntoMock(normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }]
+  }));
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: { variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable }; _variables: MockVariable[] } }).figma;
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  collection.addMode("Dark");
+  const keep = api.variables.createVariable("keep", collection, "FLOAT");
+  keep.setPluginData("compactDesignId", "keep");
+  keep.setValueForMode(collection.modes[0].modeId, 1);
+  keep.setValueForMode(collection.modes[1].modeId, 2);
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("keep", keep as never);
+
+  const beforeCount = api._variables.filter((v) => !v.removed).length;
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch(patch), ctx as never),
+    /missing values for mode|PATCH_RESOURCE_INVALID/
+  );
+  assert.equal(api._variables.filter((v) => !v.removed).length, beforeCount, "no variable created");
+});
+
+test("Gate #45.5: Figma rollback restores prior compactDesignId (including absent)", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }]
+  });
+  await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: { createTextStyle: () => MockStyle; variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable } } }).figma;
+
+  // Style with NO compactDesignId — patch stamps one, then a later op fails.
+  const style = api.createTextStyle();
+  style.name = "Heading";
+  style.fontName = { family: "Inter", style: "Bold" };
+  style.fontSize = 32;
+  assert.equal(style.getPluginData("compactDesignId"), "");
+  ctx.resources.textStyles.set("Heading", style as never);
+
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("gap", collection, "FLOAT");
+  // Variable also has no compact id
+  assert.equal(variable.getPluginData("compactDesignId"), "");
+  variable.setValueForMode(collection.modes[0].modeId, 8);
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("gap", variable as never);
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [{ name: "gap", type: "FLOAT", values: { Dark: 16 } }] }],
+      styles: [{ name: "Heading", type: "TEXT", font: { size: 44 }, id: "heading" }],
+      patch: { operations: [
+        { op: "set", id: "cta", set: { name: "CTA" } },
+        { op: "set", id: "ghost", set: { name: "nope" } }
+      ] }
+    }), ctx as never),
+    /was not found|ghost/
+  );
+
+  assert.equal(style.getPluginData("compactDesignId"), "", "style compactDesignId restored to absent");
+  assert.equal(variable.getPluginData("compactDesignId"), "", "variable compactDesignId restored to absent");
+  assert.equal(style.fontSize, 32, "font size restored");
+  assert.equal(collection.modes.map((m) => m.name).join(","), "Light", "mode add rolled back");
+});

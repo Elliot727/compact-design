@@ -350,7 +350,6 @@ export function normalizePatchSet(set: JsonObject, path = "set"): PatchSetValues
 
 export function isPatchDocument(value: unknown): boolean { return Boolean(value && typeof value === "object" && !Array.isArray(value) && "patch" in value); }
 
-
 /** Patch styles: TEXT font may be partial (merged on upsert). PAINT paints still required when present. */
 function normalizePatchStyles(value: unknown): PatchStyleDefinition[] {
   if (value === undefined) return [];
@@ -391,8 +390,12 @@ function normalizePatchStyles(value: unknown): PatchStyleDefinition[] {
 
 export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   if (!isPatchDocument(value)) throw new Error("Patch document requires a patch object.");
-  const source = value as { patch?: { operations?: JsonObject[] } };
-  if (!Array.isArray(source.patch?.operations) || !source.patch.operations.length) throw new Error("patch.operations must be a non-empty array.");
+  const source = value as { patch?: { operations?: JsonObject[] }; variables?: unknown; styles?: unknown };
+  if (!Array.isArray(source.patch?.operations)) throw new Error("patch.operations must be an array.");
+  const hasTokens = (Array.isArray(source.variables) && source.variables.length > 0) || (Array.isArray(source.styles) && source.styles.length > 0);
+  if (!source.patch.operations.length && !hasTokens) {
+    throw new Error("patch.operations must be a non-empty array (or the patch must carry variables/styles).");
+  }
   const operations: PatchOperation[] = source.patch.operations.map((operation, index) => {
     const op = String(operation.op || "").toUpperCase();
     if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, or duplicate.`);
@@ -442,11 +445,10 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
     if (op === 'INSERT') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-insert`);
     return result;
   });
-  const sourceObj = value as { variables?: unknown; styles?: unknown };
   const result: InternalPatchDocument = { patch: { operations } };
-  const variables = normalizeVariables(sourceObj.variables);
+  const variables = normalizeVariables(source.variables);
   if (variables.length) result.variables = variables;
-  const styles = normalizePatchStyles(sourceObj.styles);
+  const styles = normalizePatchStyles(source.styles);
   if (styles.length) result.styles = styles;
   return result;
 }
