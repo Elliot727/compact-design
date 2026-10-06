@@ -7,8 +7,8 @@ import {
   sceneFindDescendant,
   sceneMatchLayer,
   sceneReadPropertyValue,
-  sceneStructuralDiff,
   sceneSubtreeHasPropertyReferences,
+  structuralDiffViaExport,
   type ComponentizeProperties
 } from "./patch-componentize-figma";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
@@ -1196,7 +1196,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
           if (sceneHasNonZeroRotation(copy)) {
             throw new Error(`patch.operations[${operationIndex}]: componentize does not support rotated nodes or parents (node '${instId}' or an ancestor has non-zero rotation).`);
           }
-          const diff = sceneStructuralDiff(source, copy, { properties: propsDecl });
+          const diff = await structuralDiffViaExport(source, copy, { properties: propsDecl });
           if (diff) {
             throw new Error(`patch.operations[${operationIndex}]: componentize '${operation.id}': instance '${instId}' differs at ${diff}; declare a property or edit first`);
           }

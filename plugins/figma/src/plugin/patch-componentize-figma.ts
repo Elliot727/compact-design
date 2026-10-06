@@ -1,32 +1,20 @@
 /**
  * Figma-side helpers for patch `componentize`.
- * Mirrors packages/core/src/patch-componentize.ts — same COMPONENTIZE_DIFF_EXEMPT
- * fail-closed contract against live SceneNodes.
+ * Structural equality uses exportSelection → normalize → core structuralDiff
+ * (same COMPONENTIZE_DIFF_EXEMPT). No second scene property reader.
  */
 
 import {
-  COMPONENTIZE_DIFF_EXEMPT,
-  type ComponentPropertyType
+  normalize,
+  structuralDiff,
+  type ComponentPropertyType,
+  type InternalDocument,
+  type InternalNode
 } from "@compact-design/core";
+import { exportSelection } from "./exporter";
 
 export type ComponentizePropertyDecl = { type: ComponentPropertyType; layer: string };
 export type ComponentizeProperties = Record<string, ComponentizePropertyDecl>;
-
-const ROOT_EXEMPT_PROPS: ReadonlySet<string> = new Set(
-  COMPONENTIZE_DIFF_EXEMPT.filter((e) => e.rootOnly && e.key !== "name").map((e) => e.key as string)
-);
-
-function stableStringify(value: unknown): string {
-  if (value === undefined) return "undefined";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
-}
-
-function eq(a: unknown, b: unknown): boolean {
-  return stableStringify(a) === stableStringify(b);
-}
 
 function compactId(node: SceneNode): string {
   return node.getPluginData("compactDesignId") || "";
@@ -113,207 +101,140 @@ export async function sceneReadPropertyValue(node: SceneNode, type: ComponentPro
   return undefined;
 }
 
-function ignoredFieldForProperty(type: ComponentPropertyType): string {
-  if (type === "TEXT") return "text";
-  if (type === "BOOLEAN") return "visible";
-  return "componentId";
-}
-
-function sceneFills(node: SceneNode): unknown {
-  if (!("fills" in node)) return [];
-  const fills = node.fills;
-  if (fills === figma.mixed || !Array.isArray(fills)) return [];
-  return fills;
-}
-
-function sceneStrokes(node: SceneNode): unknown {
-  if (!("strokes" in node)) return [];
-  return Array.isArray(node.strokes) ? node.strokes : [];
-}
-
-function sceneEffects(node: SceneNode): unknown {
-  if (!("effects" in node)) return [];
-  return Array.isArray(node.effects) ? node.effects : [];
-}
-
-/**
- * Build a DesignProperties-shaped bag from a SceneNode for fail-closed diff.
- * Keys align with core InternalNode.properties so COMPONENTIZE_DIFF_EXEMPT matches.
- */
-function scenePropertiesBag(node: SceneNode): Record<string, unknown> {
-  const bag: Record<string, unknown> = {
-    position: { x: node.x, y: node.y },
-    size: { width: node.width, height: node.height },
-    rotation: "rotation" in node ? ((node as LayoutMixin).rotation || 0) : 0,
-    styles: {
-      fills: sceneFills(node),
-      strokes: sceneStrokes(node),
-      effects: sceneEffects(node)
-    },
-    opacity: "opacity" in node ? node.opacity : 1,
-    blendMode: "blendMode" in node ? node.blendMode : "PASS_THROUGH",
-    visible: node.visible !== false,
-    locked: "locked" in node ? node.locked : false,
-    isMask: "isMask" in node ? node.isMask : false,
-    bindings: ("boundVariables" in node && node.boundVariables) ? node.boundVariables : {},
-    styleRefs: (() => {
-      const refs: Record<string, string> = {};
-      if ("fillStyleId" in node && typeof node.fillStyleId === "string" && node.fillStyleId) refs.fill = node.fillStyleId;
-      if ("strokeStyleId" in node && typeof node.strokeStyleId === "string" && node.strokeStyleId) refs.stroke = node.strokeStyleId;
-      if ("textStyleId" in node && typeof node.textStyleId === "string" && node.textStyleId) refs.text = node.textStyleId;
-      return refs;
-    })(),
-    prototype: ("reactions" in node && Array.isArray((node as FrameNode).reactions)) ? (node as FrameNode).reactions : []
+function findInternalById(document: InternalDocument, id: string): InternalNode | null {
+  const walk = (nodes: InternalNode[]): InternalNode | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      const hit = walk(node.children);
+      if (hit) return hit;
+    }
+    return null;
   };
-
-  if ("cornerRadius" in node) bag.cornerRadius = (node as RectangleNode).cornerRadius;
-  if ("clipsContent" in node) bag.clipsContent = (node as FrameNode).clipsContent;
-  if ("strokeWeight" in node) bag.strokeWeight = (node as GeometryMixin).strokeWeight;
-  if ("strokeAlign" in node) bag.strokeAlign = (node as GeometryMixin).strokeAlign;
-  if ("strokeCap" in node && (node as GeometryMixin).strokeCap !== figma.mixed) bag.strokeCap = (node as GeometryMixin).strokeCap;
-  if ("strokeJoin" in node && (node as GeometryMixin).strokeJoin !== figma.mixed) bag.strokeJoin = (node as GeometryMixin).strokeJoin;
-  if ("dashPattern" in node) bag.dashPattern = (node as GeometryMixin).dashPattern;
-  if ("constraints" in node) bag.constraints = (node as ConstraintMixin).constraints;
-  if ("layoutAlign" in node) bag.layoutAlign = (node as FrameNode).layoutAlign;
-  if ("layoutGrow" in node) bag.layoutGrow = (node as FrameNode).layoutGrow;
-  if ("layoutPositioning" in node) bag.layoutPositioning = (node as FrameNode).layoutPositioning;
-  if ("layoutSizingHorizontal" in node) bag.layoutSizingHorizontal = (node as FrameNode).layoutSizingHorizontal;
-  if ("layoutSizingVertical" in node) bag.layoutSizingVertical = (node as FrameNode).layoutSizingVertical;
-  if ("minWidth" in node) bag.minWidth = (node as FrameNode).minWidth;
-  if ("maxWidth" in node) bag.maxWidth = (node as FrameNode).maxWidth;
-  if ("minHeight" in node) bag.minHeight = (node as FrameNode).minHeight;
-  if ("maxHeight" in node) bag.maxHeight = (node as FrameNode).maxHeight;
-  if ("overflowDirection" in node) bag.overflowDirection = (node as FrameNode).overflowDirection;
-  if ("layoutGrids" in node) bag.layoutGrids = (node as FrameNode).layoutGrids;
-  if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
-    const frame = node as FrameNode;
-    bag.layout = {
-      direction: frame.layoutMode,
-      itemSpacing: frame.itemSpacing,
-      counterAxisSpacing: frame.counterAxisSpacing,
-      padding: { left: frame.paddingLeft, top: frame.paddingTop, right: frame.paddingRight, bottom: frame.paddingBottom },
-      primaryAxisAlignItems: frame.primaryAxisAlignItems,
-      counterAxisAlignItems: frame.counterAxisAlignItems,
-      primaryAxisSizingMode: frame.primaryAxisSizingMode,
-      counterAxisSizingMode: frame.counterAxisSizingMode,
-      wrap: frame.layoutWrap === "WRAP"
-    };
-  }
-  if ("explicitVariableModes" in node && node.explicitVariableModes && Object.keys(node.explicitVariableModes as object).length) {
-    bag.variableModes = node.explicitVariableModes;
-  }
-  if (node.type === "INSTANCE") {
-    bag.componentId = (node as InstanceNode & { mainComponentId?: string }).mainComponentId;
-  }
-  if (node.type === "TEXT") {
-    const text = node as TextNode;
-    bag.text = text.characters;
-    bag.font = text.fontName === figma.mixed ? undefined : text.fontName;
-    bag.fontSize = text.fontSize === figma.mixed ? undefined : text.fontSize;
-    // Mirror DesignProperties: hang font size under font when possible — keep parallel scalar for diff stability.
-    if (typeof text.fontSize === "number") {
-      const fn = text.fontName === figma.mixed ? { family: "Inter", style: "Regular" } : text.fontName as FontName;
-      bag.font = { family: fn.family, style: fn.style, size: text.fontSize };
-    }
-    bag.lineHeight = text.lineHeight === figma.mixed ? undefined : text.lineHeight;
-    bag.letterSpacing = text.letterSpacing === figma.mixed ? undefined : text.letterSpacing;
-    bag.alignment = text.textAlignHorizontal;
-    bag.verticalAlignment = text.textAlignVertical;
-    bag.textDecoration = text.textDecoration === figma.mixed ? undefined : text.textDecoration;
-    bag.textCase = text.textCase === figma.mixed ? undefined : text.textCase;
-    bag.paragraphSpacing = text.paragraphSpacing;
-    bag.paragraphIndent = text.paragraphIndent;
-    bag.listSpacing = text.listSpacing;
-    bag.hangingPunctuation = text.hangingPunctuation;
-    bag.hangingList = text.hangingList;
-    bag.textAutoResize = text.textAutoResize;
-    bag.textTruncation = text.textTruncation;
-    bag.maxLines = text.maxLines;
-  }
-  return bag;
-}
-
-function reportKey(key: string): string {
-  if (key === "alignment") return "align";
-  return key;
-}
-
-function stylesReportKey(key: string): string {
-  if (key === "fills") return "fill";
-  if (key === "strokes") return "stroke";
-  return key;
+  return walk(document.nodes);
 }
 
 /**
- * Strict structural diff on SceneNodes — fail-closed, same exempt set as core.
+ * Fields the exporter cannot round-trip for componentize diff. Carrying any of
+ * these on the source or a copy makes componentize fail closed (difference
+ * would otherwise be silently dropped when the copy becomes an instance).
  */
-export function sceneStructuralDiff(
-  source: SceneNode,
-  copy: SceneNode,
-  ignore: { properties: ComponentizeProperties },
-  path = "",
-  /** Position of this node relative to the compared roots (FRAME parent-relative accumulated). */
-  rel: { source: { x: number; y: number }; copy: { x: number; y: number } } = { source: { x: 0, y: 0 }, copy: { x: 0, y: 0 } }
-): string | null {
-  const isRoot = path === "";
-  const label = (key: string) => (path ? `${path}.${key}` : key);
-
-  if (source.type !== copy.type) return label("type");
-  if (!isRoot && source.name !== copy.name) return label("name");
-
-  const ignored = new Set<string>();
-  for (const decl of Object.values(ignore.properties)) {
-    if (decl.layer === compactId(source)) ignored.add(ignoredFieldForProperty(decl.type));
-  }
-
-  const sp = scenePropertiesBag(source);
-  const cp = scenePropertiesBag(copy);
-  // Root-relative position for non-root (mirrors core abs − rootOrigin).
-  if (!isRoot) {
-    sp.position = { x: rel.source.x, y: rel.source.y };
-    cp.position = { x: rel.copy.x, y: rel.copy.y };
-  }
-
-  const keys = new Set([...Object.keys(sp), ...Object.keys(cp)]);
-  for (const key of [...keys].sort()) {
-    if (ignored.has(key)) continue;
-    if (isRoot && ROOT_EXEMPT_PROPS.has(key)) continue;
-
-    if (key === "position") {
-      if (isRoot) continue;
-      if (!eq(sp.position, cp.position)) return label("position");
-      continue;
+export function exportLossyComponentizeReason(node: SceneNode): string | null {
+  const label = compactId(node) || node.name || node.type;
+  if (node.type === "TEXT") {
+    const text = node as TextNode & { rangeFonts?: unknown[] };
+    if (text.fontName === figma.mixed) {
+      return `node '${label}' has mixed/rich-text font runs that export cannot round-trip for componentize`;
     }
-
-    if (key === "styles") {
-      const sStyles = (sp.styles || {}) as Record<string, unknown>;
-      const cStyles = (cp.styles || {}) as Record<string, unknown>;
-      const styleKeys = new Set([...Object.keys(sStyles), ...Object.keys(cStyles)]);
-      for (const sk of [...styleKeys].sort()) {
-        const left = sStyles[sk] ?? (sk === "fills" || sk === "strokes" || sk === "effects" ? [] : undefined);
-        const right = cStyles[sk] ?? (sk === "fills" || sk === "strokes" || sk === "effects" ? [] : undefined);
-        if (!eq(left, right)) return label(stylesReportKey(sk));
-      }
-      continue;
+    if (Array.isArray(text.rangeFonts) && text.rangeFonts.length > 0) {
+      return `node '${label}' has rich-text runs that export cannot round-trip for componentize`;
     }
-
-    if (!eq(sp[key], cp[key])) return label(reportKey(key));
   }
-
-  const sourceKids = "children" in source ? source.children : [];
-  const copyKids = "children" in copy ? copy.children : [];
-  if (sourceKids.length !== copyKids.length) return label("children");
-  for (let i = 0; i < sourceKids.length; i++) {
-    const childS = sourceKids[i];
-    const childC = copyKids[i];
-    const nextRel = {
-      source: { x: rel.source.x + childS.x, y: rel.source.y + childS.y },
-      copy: { x: rel.copy.x + childC.x, y: rel.copy.y + childC.y }
+  if ("effectStyleId" in node && typeof (node as BlendMixin).effectStyleId === "string" && (node as BlendMixin).effectStyleId) {
+    return `node '${label}' has effectStyleId (styleRefs.effect) that export cannot round-trip for componentize`;
+  }
+  if ("gridStyleId" in node && typeof (node as BaseFrameMixin).gridStyleId === "string" && (node as BaseFrameMixin).gridStyleId) {
+    return `node '${label}' has gridStyleId (styleRefs.grid) that export cannot round-trip for componentize`;
+  }
+  if ("strokeWeight" in node && "strokeTopWeight" in node) {
+    const geom = node as GeometryMixin & {
+      strokeWeight: number | typeof figma.mixed;
+      strokeTopWeight: number;
+      strokeRightWeight: number;
+      strokeBottomWeight: number;
+      strokeLeftWeight: number;
     };
-    const hit = sceneStructuralDiff(childS, childC, ignore, path ? `${path}.children[${i}]` : `children[${i}]`, nextRel);
-    if (hit) return hit;
+    if (geom.strokeWeight === figma.mixed) {
+      return `node '${label}' has mixed per-side stroke weights that export cannot round-trip for componentize`;
+    }
+    if (typeof geom.strokeWeight === "number") {
+      const sides = [geom.strokeTopWeight, geom.strokeRightWeight, geom.strokeBottomWeight, geom.strokeLeftWeight];
+      if (sides.some((side) => typeof side === "number" && side !== geom.strokeWeight)) {
+        return `node '${label}' has per-side stroke weights that export cannot round-trip for componentize`;
+      }
+    }
+  }
+  if ("children" in node) {
+    for (const child of node.children) {
+      if (!("x" in child)) continue;
+      const hit = exportLossyComponentizeReason(child as SceneNode);
+      if (hit) return hit;
+    }
   }
   return null;
+}
+
+/**
+ * Root FRAME exported as a canvas drops most node props. Reject componentize
+ * when a PAGE-level root carries anything beyond the canvas authoring surface.
+ */
+function canvasLossyRootReason(node: SceneNode): string | null {
+  const label = compactId(node) || node.name || node.type;
+  if ("opacity" in node && node.opacity !== 1) {
+    return `top-level node '${label}' has opacity that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  if ("effects" in node && Array.isArray(node.effects) && node.effects.length) {
+    return `top-level node '${label}' has effects that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length) {
+    return `top-level node '${label}' has strokes that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  if ("rotation" in node && (node as LayoutMixin).rotation) {
+    return `top-level node '${label}' has rotation that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
+    return `top-level node '${label}' has Auto Layout that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  if ("boundVariables" in node && node.boundVariables && Object.keys(node.boundVariables as object).length) {
+    return `top-level node '${label}' has bindings that canvas export drops; nest it under a FRAME before componentize`;
+  }
+  return null;
+}
+
+/**
+ * Export source + copy through the real exporter, normalize, and run core
+ * structuralDiff so Figma cannot drift from core's fail-closed contract.
+ */
+export async function structuralDiffViaExport(
+  source: SceneNode,
+  copy: SceneNode,
+  ignore: { properties: ComponentizeProperties }
+): Promise<string | null> {
+  const lossySource = exportLossyComponentizeReason(source);
+  if (lossySource) throw new Error(lossySource);
+  const lossyCopy = exportLossyComponentizeReason(copy);
+  if (lossyCopy) throw new Error(lossyCopy);
+
+  const parent = source.parent;
+  const sharedParent =
+    parent &&
+    parent === copy.parent &&
+    parent.type !== "PAGE" &&
+    parent.type !== "DOCUMENT" &&
+    "children" in parent
+      ? (parent as SceneNode)
+      : null;
+
+  let sourceNode: InternalNode | null = null;
+  let copyNode: InternalNode | null = null;
+
+  if (sharedParent) {
+    const { document: compact } = await exportSelection([sharedParent]);
+    const doc = normalize(compact);
+    sourceNode = findInternalById(doc, compactId(source));
+    copyNode = findInternalById(doc, compactId(copy));
+  } else {
+    const rootLossy = canvasLossyRootReason(source) || canvasLossyRootReason(copy);
+    if (rootLossy) throw new Error(rootLossy);
+    const srcDoc = normalize((await exportSelection([source])).document);
+    const copyDoc = normalize((await exportSelection([copy])).document);
+    sourceNode = srcDoc.nodes[0] || null;
+    copyNode = copyDoc.nodes[0] || null;
+  }
+
+  if (!sourceNode || !copyNode) {
+    throw new Error("componentize export diff could not resolve source/copy compact nodes");
+  }
+  return structuralDiff(sourceNode, copyNode, ignore);
 }
 
 /** Rewrite reaction destinationIds from oldFigmaId → newFigmaId across the page (async). */
