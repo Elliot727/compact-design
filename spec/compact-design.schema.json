@@ -1166,6 +1166,19 @@
             "parent": { "type": "string" },
             "index": { "type": "integer", "minimum": 0 }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id", "idSuffix"],
+          "properties": {
+            "op": { "const": "duplicate" },
+            "id": { "type": "string", "minLength": 1, "description": "Source node to duplicate." },
+            "idSuffix": { "type": "string", "minLength": 1, "description": "Appended to every subtree id unless overridden in ids." },
+            "parent": { "type": "string", "minLength": 1, "description": "Optional new parent; omit to keep the source parent (or page-level for a top-level screen)." },
+            "index": { "type": "integer", "minimum": 0, "description": "Optional insert index; default is right after the source when same parent, else end." },
+            "ids": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "Optional sourceId→newId overrides. Keys must be ids within the source subtree." }
+          }
         }
       ]
     },

@@ -859,12 +859,6 @@ test("move keeps parent-relative x/y, then set x is relative to the new parent",
   assert.deepEqual(nodeById(result, "leaf").properties.position, { x: 307, y: 295 });
 });
 
-test("set on a node inserted earlier in the same patch applies in core (Figma preflight rejects it)", () => {
-  const document = baseDocument();
-  const result = applyRaw(document, { op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 }));
-  assert.equal(nodeById(result, "fresh").properties.size.width, 9);
-});
-
 test("set rejects keys that do not apply to the target type; bound/style overwrite detaches with WARNING", () => {
   const document = baseDocument();
   rejects(document, /'text' does not apply to RECTANGLE/, setOp("leaf", { text: "x" }));
@@ -1397,4 +1391,162 @@ test("rejects INSTANCE_SWAP defaultValue or override that is missing or not a CO
   });
   assert.equal(nonComponentOverride.valid, false);
   assert.ok(nonComponentOverride.issues.some((issue) => issue.path.includes("instanceProperties.Icon") && /frame-slot/.test(issue.message) && /FRAME/.test(issue.message)));
+});
+
+test("set on a node inserted earlier in the same patch applies (lockstep with Figma)", () => {
+  const document = baseDocument();
+  const result = applyRaw(document, { op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 }));
+  assert.equal(nodeById(result, "fresh").properties.size.width, 9);
+});
+
+test("duplicate: single layer, subtree + same-patch set, ids override, default index after source", () => {
+  const document = normalize({
+    canvas: { width: 300, height: 200 },
+    nodes: [{ id: "list", type: "FRAME", w: 200, h: 100, children: [
+      { id: "card", type: "FRAME", w: 40, h: 40, children: [
+        { id: "title", type: "TEXT", w: 20, h: 10, text: "Hi" },
+        { id: "icon", type: "RECTANGLE", w: 8, h: 8 }
+      ] },
+      { id: "other", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  });
+  // Single-layer duplicate
+  const single = applyRaw(document, { op: "duplicate", id: "other", idSuffix: "-2" });
+  assert.deepEqual(childIds(single, "list"), ["card", "other", "other-2"]);
+  assert.equal(nodeById(single, "other-2").type, "RECTANGLE");
+
+  // Subtree + ids override + same-patch set on a child of the copy
+  const subtree = applyRaw(document,
+    { op: "duplicate", id: "card", idSuffix: "-copy", ids: { card: "card-featured", title: "title-featured" } },
+    setOp("title-featured", { text: "Featured" })
+  );
+  assert.deepEqual(childIds(subtree, "list"), ["card", "card-featured", "other"]);
+  assert.equal(nodeById(subtree, "title-featured").properties.text, "Featured");
+  assert.ok(findNode(subtree, "icon-copy"), "default suffix for non-overridden child");
+  assert.equal(nodeById(subtree, "title").properties.text, "Hi");
+});
+
+test("duplicate: top-level screen, parent/index defaults, keeps x/y", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 800, height: 600 },
+    nodes: [
+      { id: "screen-a", type: "FRAME", x: 10, y: 20, w: 100, h: 80, children: [{ id: "btn", type: "RECTANGLE", x: 5, y: 5, w: 20, h: 10 }] },
+      { id: "screen-b", type: "FRAME", x: 200, y: 20, w: 100, h: 80, children: [] }
+    ]
+  });
+  const result = applyRaw(document, { op: "duplicate", id: "screen-a", idSuffix: "-2" });
+  assert.deepEqual(childIds(result, "page"), ["screen-a", "screen-a-2", "screen-b"]);
+  assert.deepEqual(nodeById(result, "screen-a-2").properties.position, { x: 10, y: 20 });
+  assert.deepEqual(nodeById(result, "btn-2").properties.position, { x: 15, y: 25 }, "absolute coords preserved");
+  // Duplicating a canvas root itself inserts a sibling at document.nodes (page level).
+  const multi = normalize({
+    canvases: [
+      { id: "screen-a", width: 100, height: 80, nodes: [{ id: "btn", type: "RECTANGLE", w: 20, h: 10 }] },
+      { id: "screen-b", width: 100, height: 80, nodes: [] }
+    ]
+  });
+  const canvases = applyRaw(multi, { op: "duplicate", id: "screen-a", idSuffix: "-2" });
+  assert.deepEqual(canvases.nodes.map((n) => n.id), ["screen-a", "screen-a-2", "screen-b"]);
+});
+
+test("duplicate: collisions, COMPONENT/COMPONENT_SET, inside INSTANCE, bad ids override", () => {
+  const document = normalize({
+    canvas: { width: 200, height: 200 },
+    nodes: [
+      { id: "host", type: "FRAME", w: 100, h: 100, children: [
+        { id: "card", type: "FRAME", w: 40, h: 40, children: [{ id: "dot", type: "RECTANGLE", w: 4, h: 4 }] },
+        { id: "card-2", type: "RECTANGLE", w: 10, h: 10 }
+      ] },
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 20, h: 20 },
+      { id: "set", type: "COMPONENT_SET", w: 60, h: 40, variantAxes: { size: ["sm"] }, children: [
+        { id: "sm", type: "COMPONENT", w: 20, h: 20, variant: { size: "sm" } }
+      ] }
+    ]
+  });
+  rejects(document, /already exists/, { op: "duplicate", id: "card", idSuffix: "-2" });
+  rejects(document, /maps both/, { op: "duplicate", id: "card", idSuffix: "-x", ids: { card: "same", dot: "same" } });
+  rejects(document, /COMPONENT or COMPONENT_SET/, { op: "duplicate", id: "button", idSuffix: "-2" });
+  rejects(document, /COMPONENT or COMPONENT_SET/, { op: "duplicate", id: "set", idSuffix: "-2" });
+  // INSTANCE itself is not COMPONENT — but INSTANCE as source: brief says source that is or contains COMPONENT/COMPONENT_SET. INSTANCE is fine?
+  // "Source that is or contains COMPONENT/COMPONENT_SET -> error (v1). INSTANCEs inside are fine"
+  // So duplicating an INSTANCE root should be OK.
+  const withInstChild = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "wrap", type: "FRAME", w: 50, h: 50, children: [
+        { id: "inst", type: "INSTANCE", componentId: "button", w: 20, h: 20 }
+      ] }
+    ]
+  });
+  const dupInst = applyRaw(withInstChild, { op: "duplicate", id: "wrap", idSuffix: "-2" });
+  assert.equal(nodeById(dupInst, "inst-2").type, "INSTANCE");
+  assert.equal(nodeById(dupInst, "inst-2").properties.componentId, "button");
+
+  // Source inside INSTANCE
+  const inside = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 40, h: 40, children: [{ id: "inner", type: "RECTANGLE", w: 10, h: 10 }] },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40 }
+    ]
+  });
+  // Instance children aren't in the document tree as editable nodes in Compact — skip if not present.
+  // Parent is INSTANCE
+  rejects(document, /INSTANCE/, { op: "duplicate", id: "card", idSuffix: "-z", parent: "copy" });
+  // ids override key not in subtree
+  rejects(document, /not an id in the source subtree/, { op: "duplicate", id: "card", idSuffix: "-z", ids: { ghost: "ghost-2" } });
+});
+
+test("duplicate: prototype destinations inside subtree are re-pointed; outside stay", () => {
+  const document = normalize({
+    canvas: { width: 400, height: 200 },
+    nodes: [
+      { id: "screen", type: "FRAME", w: 200, h: 100, children: [
+        { id: "btn", type: "FRAME", w: 40, h: 20, prototype: [{ trigger: "ON_CLICK", actions: [{ type: "NAVIGATE", destination: "panel" }] }] },
+        { id: "panel", type: "FRAME", w: 40, h: 40 }
+      ] },
+      { id: "other-screen", type: "FRAME", w: 100, h: 100, prototype: [{ trigger: "ON_CLICK", actions: [{ type: "NAVIGATE", destination: "screen" }] }] }
+    ]
+  });
+  const result = applyRaw(document, { op: "duplicate", id: "screen", idSuffix: "-2" });
+  const btn2 = nodeById(result, "btn-2").properties.prototype as Array<{ actions: Array<{ destination: string }> }>;
+  assert.equal(btn2[0].actions[0].destination, "panel-2");
+  const other = nodeById(result, "other-screen").properties.prototype as Array<{ actions: Array<{ destination: string }> }>;
+  assert.equal(other[0].actions[0].destination, "screen", "outside destination unchanged");
+  const btn = nodeById(result, "btn").properties.prototype as Array<{ actions: Array<{ destination: string }> }>;
+  assert.equal(btn[0].actions[0].destination, "panel", "source unchanged");
+});
+
+test("duplicate: pre-existing issues on source are exempt on the copy; genuinely new issues still fail", () => {
+  const document = normalize({
+    canvas: { width: 200, height: 100 },
+    nodes: [{ id: "host", type: "FRAME", w: 100, h: 80, children: [
+      { id: "broken", type: "RECTANGLE", w: 10, h: 10, fill: "#FF0000", bindings: { fill: "missing-var" } },
+      { id: "ok", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  });
+  assert.equal(validateDocument(document).length, 1);
+  const ok = validatePatch(document, patchOf({ op: "duplicate", id: "broken", idSuffix: "-2" }));
+  assert.equal(ok.valid, true, ok.issues.map((i) => i.message).join("; "));
+  assert.equal(validateDocument(ok.document!).length, 2, "source + copy both still have the issue");
+
+  // Genuinely new issue on the copy (different missing var) fails
+  const bad = validatePatch(document, patchOf(
+    { op: "duplicate", id: "ok", idSuffix: "-2" },
+    setOp("ok-2", { bindings: { fill: "brand-new" } })
+  ));
+  assert.equal(bad.valid, false);
+  assert.match(bad.issues.map((i) => i.message).join("\n"), /ok-2.*brand-new/);
+});
+
+test("duplicate: IMAGE keeps imageHash (reuse, not re-upload)", () => {
+  const document = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [{ id: "photo", type: "RECTANGLE", w: 40, h: 40, fills: [{ type: "IMAGE", imageHash: "abc123", scaleMode: "FILL" }] }]
+  });
+  const result = applyRaw(document, { op: "duplicate", id: "photo", idSuffix: "-2" });
+  const fills = nodeById(result, "photo-2").properties.styles.fills as Array<{ imageHash?: string }>;
+  assert.equal(fills[0]?.imageHash, "abc123");
 });

@@ -1,4 +1,4 @@
-import { patchSetBindingFields, patchSetTargetIssues, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
+import { buildDuplicateIdMap, buildDuplicateIdMapFromIds, collectSubtreeIds, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
@@ -471,36 +471,168 @@ async function rollback(log: Undo[], holder: FrameNode | null): Promise<void> {
   if (holder && !holder.removed) holder.remove();
 }
 
-function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode>): void {
-  for (const [index, operation] of document.patch.operations.entries()) {
-    if (operation.op === "SET" || operation.op === "REMOVE" || operation.op === "MOVE") {
-      if (!resolveNode(nodes, operation.id!)) {
-        throw new Error(`patch.operations[${index}]: node '${operation.id}' was not found`);
-      }
+
+function registerSubtreeIds(nodes: Map<string, SceneNode>, node: SceneNode): void {
+  const id = node.getPluginData("compactDesignId");
+  if (id) nodes.set(id, node);
+  if ("children" in node) for (const child of node.children) registerSubtreeIds(nodes, child);
+}
+
+function sceneSubtreeHasComponent(node: SceneNode): boolean {
+  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") return true;
+  if ("children" in node) return node.children.some((child) => sceneSubtreeHasComponent(child));
+  return false;
+}
+
+/** Rewrite compactDesignId plugin data on a clone to match the duplicate id map (paired walk with source). */
+
+/** Remap Figma reaction destinationIds on a clone to the paired clone nodes (subtree-internal only). */
+function remapCloneReactions(source: SceneNode, copy: SceneNode): void {
+  const pairs: Array<[SceneNode, SceneNode]> = [];
+  const walk = (a: SceneNode, b: SceneNode): void => {
+    pairs.push([a, b]);
+    if ("children" in a && "children" in b) {
+      const n = Math.min(a.children.length, b.children.length);
+      for (let i = 0; i < n; i++) walk(a.children[i], b.children[i]);
     }
-    if (operation.op === "APPEND" || operation.op === "INSERT" || operation.op === "MOVE") {
-      const parent = resolveNode(nodes, operation.parent!);
-      if (!parent) throw new Error(`patch.operations[${index}]: parent '${operation.parent}' was not found or cannot contain children`);
-      assertStructuralParent(parent, index, operation.parent!);
-      if ((operation.op === "APPEND" || operation.op === "INSERT") && operation.node && nodes.has(operation.node.id)) {
-        throw new Error(`patch.operations[${index}]: appended ID '${operation.node.id}' already exists`);
-      }
-    }
-    if (operation.op === "MOVE") {
-      const node = resolveNode(nodes, operation.id!)!;
-      const parent = resolveNode(nodes, operation.parent!)!;
-      if (!node.parent || node.parent.type === "PAGE") {
-        throw new Error(`patch.operations[${index}]: cannot move the document root`);
-      }
-      if (isInsideInstance(node.parent)) {
-        throw new Error(`patch.operations[${index}]: node '${operation.id}' is inside an INSTANCE and cannot be moved`);
-      }
-      if (parent === node || isDescendantSceneNode(node, parent)) {
-        throw new Error(`patch.operations[${index}]: cannot move a node under itself or its descendants`);
-      }
+  };
+  walk(source, copy);
+  const byFigmaId = new Map(pairs.map(([a, b]) => [a.id, b]));
+  for (const [, node] of pairs) {
+    if (!("reactions" in node) || !Array.isArray((node as FrameNode).reactions)) continue;
+    const reactions = (node as FrameNode).reactions;
+    let changed = false;
+    const next = reactions.map((reaction) => {
+      const actions = (reaction.actions || (reaction.action ? [reaction.action] : [])).map((action) => {
+        if (!action || typeof action !== "object") return action;
+        const dest = (action as { destinationId?: string | null }).destinationId;
+        if (typeof dest === "string" && byFigmaId.has(dest)) {
+          changed = true;
+          return { ...action, destinationId: byFigmaId.get(dest)!.id };
+        }
+        return action;
+      });
+      return { ...reaction, actions };
+    });
+    if (changed && "setReactionsAsync" in node) {
+      // Prefer async setter when present; sync assign for mocks.
+      (node as FrameNode).reactions = next;
+    } else if (changed) {
+      (node as FrameNode).reactions = next;
     }
   }
 }
+
+function rewriteCloneCompactIds(source: SceneNode, copy: SceneNode, idMap: Map<string, string>): void {
+  const from = source.getPluginData("compactDesignId");
+  if (from && idMap.has(from)) copy.setPluginData("compactDesignId", idMap.get(from)!);
+  else if (from) copy.setPluginData("compactDesignId", "");
+  if ("children" in source && "children" in copy) {
+    const n = Math.min(source.children.length, copy.children.length);
+    for (let i = 0; i < n; i++) rewriteCloneCompactIds(source.children[i], copy.children[i], idMap);
+  }
+}
+
+function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode>): void {
+  // Track ids (and authored trees) that will exist after each op so later ops in the same patch can see them.
+  const known = new Map(nodes);
+  const knownIds = new Set<string>(known.keys());
+  const authoredById = new Map<string, InternalNode>();
+  const registerAuthored = (node: InternalNode): void => {
+    knownIds.add(node.id);
+    authoredById.set(node.id, node);
+    for (const child of node.children) registerAuthored(child);
+  };
+  for (const [index, operation] of document.patch.operations.entries()) {
+    if (operation.op === "SET" || operation.op === "REMOVE" || operation.op === "MOVE" || operation.op === "DUPLICATE") {
+      if (!knownIds.has(operation.id!)) {
+        throw new Error(`patch.operations[${index}]: node '${operation.id}' was not found`);
+      }
+    }
+    if (operation.op === "APPEND" || operation.op === "INSERT") {
+      const parentId = operation.parent!;
+      if (!knownIds.has(parentId)) {
+        throw new Error(`patch.operations[${index}]: parent '${parentId}' was not found or cannot contain children`);
+      }
+      const liveParent = known.get(parentId);
+      if (liveParent) assertStructuralParent(liveParent, index, parentId);
+      if (operation.node) {
+        for (const id of collectSubtreeIds(operation.node)) {
+          if (knownIds.has(id)) throw new Error(`patch.operations[${index}]: appended ID '${id}' already exists`);
+        }
+        registerAuthored(operation.node);
+      }
+    }
+    if (operation.op === "MOVE") {
+      const parentId = operation.parent!;
+      if (!knownIds.has(parentId)) {
+        throw new Error(`patch.operations[${index}]: parent '${parentId}' was not found or cannot contain children`);
+      }
+      const node = known.get(operation.id!);
+      const parent = known.get(parentId);
+      if (node && parent) {
+        if (!node.parent || node.parent.type === "PAGE") {
+          throw new Error(`patch.operations[${index}]: cannot move the document root`);
+        }
+        if (isInsideInstance(node.parent)) {
+          throw new Error(`patch.operations[${index}]: node '${operation.id}' is inside an INSTANCE and cannot be moved`);
+        }
+        assertStructuralParent(parent, index, parentId);
+        if (parent === node || isDescendantSceneNode(node, parent)) {
+          throw new Error(`patch.operations[${index}]: cannot move a node under itself or its descendants`);
+        }
+      }
+    }
+    if (operation.op === "DUPLICATE") {
+      const path = `patch.operations[${index}]`;
+      const live = known.get(operation.id!);
+      const authored = authoredById.get(operation.id!);
+      let sourceIds: string[];
+      if (live) {
+        if (isInsideInstance(live.parent)) {
+          throw new Error(`${path}: node '${operation.id}' is inside an INSTANCE and cannot be duplicated`);
+        }
+        if (sceneSubtreeHasComponent(live)) {
+          throw new Error(`${path}: cannot duplicate a COMPONENT or COMPONENT_SET (or a subtree that contains one)`);
+        }
+        const liveIds: string[] = [];
+        const walkIds = (node: SceneNode): void => {
+          const id = node.getPluginData("compactDesignId");
+          if (id) liveIds.push(id);
+          if ("children" in node) for (const child of node.children) walkIds(child);
+        };
+        walkIds(live);
+        sourceIds = liveIds;
+      } else if (authored) {
+        if (subtreeContainsComponent(authored)) {
+          throw new Error(`${path}: cannot duplicate a COMPONENT or COMPONENT_SET (or a subtree that contains one)`);
+        }
+        sourceIds = collectSubtreeIds(authored);
+      } else {
+        throw new Error(`${path}: node '${operation.id}' was not found`);
+      }
+      const { map, errors } = buildDuplicateIdMapFromIds(sourceIds, operation.idSuffix || "", operation.ids, path);
+      if (errors.length) throw new Error(errors[0]);
+      for (const newId of map.values()) {
+        if (knownIds.has(newId)) throw new Error(`${path}: new id '${newId}' already exists`);
+      }
+      if (operation.parent !== undefined) {
+        if (!knownIds.has(operation.parent)) {
+          throw new Error(`${path}: parent '${operation.parent}' was not found or cannot contain children`);
+        }
+        const liveParent = known.get(operation.parent);
+        if (liveParent) assertStructuralParent(liveParent, index, operation.parent);
+      }
+      for (const newId of map.values()) knownIds.add(newId);
+    }
+  }
+}
+
+function subtreeContainsComponent(node: InternalNode): boolean {
+  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") return true;
+  return node.children.some((child) => subtreeContainsComponent(child));
+}
+
 
 export async function applyPatch(document: InternalPatchDocument, context: ImportContext): Promise<{ affected: SceneNode[]; warnings: string[] }> {
   clearEffectWarnings();
@@ -549,8 +681,60 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         log.push({ kind: "create", node });
         // createNode appends; re-seat with insertChild so the final index matches core.
         if (operation.op === "INSERT") parent.insertChild(at, node);
-        nodes.set(operation.node!.id, node);
+        registerSubtreeIds(nodes, node);
         affected.push(node);
+      }
+
+      if (operation.op === "DUPLICATE") {
+        const source = resolveNode(nodes, operation.id!)!;
+        if (isInsideInstance(source.parent)) {
+          throw new Error(`patch.operations[${operationIndex}]: node '${operation.id}' is inside an INSTANCE and cannot be duplicated`);
+        }
+        if (sceneSubtreeHasComponent(source)) {
+          throw new Error(`patch.operations[${operationIndex}]: cannot duplicate a COMPONENT or COMPONENT_SET (or a subtree that contains one)`);
+        }
+        const liveIds: string[] = [];
+        const walkIds = (node: SceneNode) => {
+          const id = node.getPluginData("compactDesignId");
+          if (id) liveIds.push(id);
+          if ("children" in node) for (const child of node.children) walkIds(child);
+        };
+        walkIds(source);
+        const path = `patch.operations[${operationIndex}]`;
+        const { map, errors } = buildDuplicateIdMapFromIds(liveIds, operation.idSuffix || "", operation.ids, path);
+        if (errors.length) throw new Error(errors[0]);
+        for (const [, newId] of map) {
+          if (nodes.has(newId)) throw new Error(`${path}: new id '${newId}' already exists`);
+        }
+        let parent: BaseNode & ChildrenMixin;
+        if (operation.parent !== undefined) {
+          parent = resolveNode(nodes, operation.parent)! as SceneNode & ChildrenMixin;
+          assertStructuralParent(parent as SceneNode, operationIndex, operation.parent);
+        } else if (source.parent && source.parent.type !== "PAGE" && source.parent.type !== "DOCUMENT") {
+          parent = source.parent as BaseNode & ChildrenMixin;
+        } else {
+          parent = figma.currentPage;
+        }
+        const copy = source.clone();
+        rewriteCloneCompactIds(source, copy, map);
+        // Real Figma clone() remaps reactions whose destinationId is inside the cloned
+        // subtree; the mock does not, so pair-walk and rewrite destinationIds explicitly.
+        remapCloneReactions(source, copy);
+        const sourceParent = source.parent;
+        let at: number;
+        if (operation.index !== undefined) {
+          at = clampIndex(operation.index, parent.children.length);
+        } else if (parent === sourceParent) {
+          const sourceIndex = parent.children.indexOf(source);
+          at = clampIndex(sourceIndex + 1, parent.children.length);
+        } else {
+          at = parent.children.length;
+        }
+        parent.insertChild(at, copy);
+        // Keep x/y — clone already preserved them relative to old parent; if reparented, Figma keeps absolute-ish coords.
+        log.push({ kind: "create", node: copy });
+        registerSubtreeIds(nodes, copy);
+        affected.push(copy);
       }
       if (operation.op === "MOVE") {
         const node = resolveNode(nodes, operation.id!)!;
