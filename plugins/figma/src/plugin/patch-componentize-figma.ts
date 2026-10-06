@@ -113,6 +113,27 @@ function findInternalById(document: InternalDocument, id: string): InternalNode 
   return walk(document.nodes);
 }
 
+/** Style fields the exporter reads from TEXT; mixed values across runs are lossy. */
+const COMPONENTIZE_STYLED_TEXT_FIELDS = [
+  "fills",
+  "fontName",
+  "fontSize",
+  "fontWeight",
+  "letterSpacing",
+  "lineHeight",
+  "textDecoration",
+  "textCase",
+  "textStyleId",
+  "fillStyleId",
+  "listOptions",
+  "indentation",
+  "paragraphIndent",
+  "paragraphSpacing",
+  "listSpacing",
+  "hyperlink",
+  "openTypeFeatures"
+] as const;
+
 /**
  * Fields the exporter cannot round-trip for componentize diff. Carrying any of
  * these on the source or a copy makes componentize fail closed (difference
@@ -121,12 +142,13 @@ function findInternalById(document: InternalDocument, id: string): InternalNode 
 export function exportLossyComponentizeReason(node: SceneNode): string | null {
   const label = compactId(node) || node.name || node.type;
   if (node.type === "TEXT") {
-    const text = node as TextNode & { rangeFonts?: unknown[] };
-    if (text.fontName === figma.mixed) {
-      return `node '${label}' has mixed/rich-text font runs that export cannot round-trip for componentize`;
+    const text = node as TextNode;
+    if (typeof text.getStyledTextSegments !== "function") {
+      return `node '${label}' TEXT is missing getStyledTextSegments; cannot verify uniform text styling for componentize`;
     }
-    if (Array.isArray(text.rangeFonts) && text.rangeFonts.length > 0) {
-      return `node '${label}' has rich-text runs that export cannot round-trip for componentize`;
+    const segments = text.getStyledTextSegments([...COMPONENTIZE_STYLED_TEXT_FIELDS]);
+    if (segments.length > 1) {
+      return `node '${label}' has mixed text styling (${segments.length} styled segments across fills/font/size/spacing/decoration); export cannot round-trip per-range text for componentize`;
     }
   }
   if ("effectStyleId" in node && typeof (node as BlendMixin).effectStyleId === "string" && (node as BlendMixin).effectStyleId) {
@@ -164,35 +186,10 @@ export function exportLossyComponentizeReason(node: SceneNode): string | null {
 }
 
 /**
- * Root FRAME exported as a canvas drops most node props. Reject componentize
- * when a PAGE-level root carries anything beyond the canvas authoring surface.
- */
-function canvasLossyRootReason(node: SceneNode): string | null {
-  const label = compactId(node) || node.name || node.type;
-  if ("opacity" in node && node.opacity !== 1) {
-    return `top-level node '${label}' has opacity that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  if ("effects" in node && Array.isArray(node.effects) && node.effects.length) {
-    return `top-level node '${label}' has effects that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length) {
-    return `top-level node '${label}' has strokes that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  if ("rotation" in node && (node as LayoutMixin).rotation) {
-    return `top-level node '${label}' has rotation that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
-    return `top-level node '${label}' has Auto Layout that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  if ("boundVariables" in node && node.boundVariables && Object.keys(node.boundVariables as object).length) {
-    return `top-level node '${label}' has bindings that canvas export drops; nest it under a FRAME before componentize`;
-  }
-  return null;
-}
-
-/**
  * Export source + copy through the real exporter, normalize, and run core
  * structuralDiff so Figma cannot drift from core's fail-closed contract.
+ * Top-level roots use exportSelection(..., { asNodes: true }) so FRAME roots
+ * are never collapsed to canvases (which drop cornerRadius, fills, styleRefs, …).
  */
 export async function structuralDiffViaExport(
   source: SceneNode,
@@ -223,12 +220,13 @@ export async function structuralDiffViaExport(
     sourceNode = findInternalById(doc, compactId(source));
     copyNode = findInternalById(doc, compactId(copy));
   } else {
-    const rootLossy = canvasLossyRootReason(source) || canvasLossyRootReason(copy);
-    if (rootLossy) throw new Error(rootLossy);
-    const srcDoc = normalize((await exportSelection([source])).document);
-    const copyDoc = normalize((await exportSelection([copy])).document);
-    sourceNode = srcDoc.nodes[0] || null;
-    copyNode = copyDoc.nodes[0] || null;
+    // asNodes wraps each FRAME under a synthetic canvas; normalize promotes that
+    // canvas to nodes[0]. Resolve the real frame by compact id so exemptions
+    // and diffs apply to the componentize target, not the wrapper.
+    const srcDoc = normalize((await exportSelection([source], { asNodes: true })).document);
+    const copyDoc = normalize((await exportSelection([copy], { asNodes: true })).document);
+    sourceNode = findInternalById(srcDoc, compactId(source));
+    copyNode = findInternalById(copyDoc, compactId(copy));
   }
 
   if (!sourceNode || !copyNode) {

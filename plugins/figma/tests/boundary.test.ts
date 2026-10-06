@@ -797,7 +797,13 @@ function typeDefaults(type: string): Record<string, unknown> {
     characters: "", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 },
     textDecoration: "NONE", textCase: "ORIGINAL", paragraphSpacing: 0, paragraphIndent: 0, listSpacing: 0, hangingPunctuation: false, hangingList: false,
     textAlignHorizontal: "LEFT", textAlignVertical: "TOP", textAutoResize: "NONE", textTruncation: "DISABLED", maxLines: null, hyperlink: null, textStyleId: "",
+    fillStyleId: "", fontWeight: 400, fontStyle: "REGULAR", listOptions: { type: "NONE" }, indentation: 0, openTypeFeatures: {},
     rangeFonts: [] as Array<{ start: number; end: number; font: { family: string; style: string } }>,
+    rangeFills: [] as Array<{ start: number; end: number; fills: unknown[] }>,
+    rangeFontSizes: [] as Array<{ start: number; end: number; fontSize: number }>,
+    rangeLetterSpacings: [] as Array<{ start: number; end: number; letterSpacing: unknown }>,
+    rangeLineHeights: [] as Array<{ start: number; end: number; lineHeight: unknown }>,
+    rangeTextDecorations: [] as Array<{ start: number; end: number; textDecoration: string }>,
     getRangeAllFontNames(this: MockNode) {
       const fonts = this.fontName === MIXED ? (this.rangeFonts as Array<{ font: { family: string; style: string } }>).map((range) => range.font) : [this.fontName as { family: string; style: string }];
       return [...new Map(fonts.map((font) => [`${font.family}/${font.style}`, font])).values()];
@@ -810,11 +816,123 @@ function typeDefaults(type: string): Record<string, unknown> {
       this.rangeFonts = [...(current !== MIXED ? [{ start: 0, end: String(this.characters).length, font: current }] : this.rangeFonts as unknown[]), { start, end, font }];
       this.fontName = MIXED;
     },
-    setRangeFontSize(this: MockNode, start: number, end: number, size: number) { if (start === 0 && end >= String(this.characters).length) this.fontSize = size; else if (size !== this.fontSize) this.fontSize = MIXED; },
-    setRangeFills(this: MockNode, start: number, end: number, fills: unknown[]) { this.fills = start === 0 && end >= String(this.characters).length ? fills : MIXED; },
-    setRangeTextDecoration(this: MockNode, _start: number, _end: number, value: string) { if (value !== this.textDecoration) this.textDecoration = MIXED; },
-    setRangeLetterSpacing(this: MockNode) { this.letterSpacing = MIXED; },
-    setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; }
+    setRangeFontSize(this: MockNode, start: number, end: number, size: number) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.fontSize = size; this.rangeFontSizes = []; return; }
+      if (this.fontSize !== MIXED && this.fontSize === size) return;
+      const len = String(this.characters).length;
+      if (this.fontSize !== MIXED) this.rangeFontSizes = [{ start: 0, end: len, fontSize: this.fontSize as number }];
+      this.rangeFontSizes = [...(this.rangeFontSizes as unknown[]), { start, end, fontSize: size }];
+      this.fontSize = MIXED;
+    },
+    setRangeFills(this: MockNode, start: number, end: number, fills: unknown[]) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.fills = fills; this.rangeFills = []; return; }
+      const len = String(this.characters).length;
+      if (this.fills !== MIXED && Array.isArray(this.fills)) this.rangeFills = [{ start: 0, end: len, fills: this.fills as unknown[] }];
+      this.rangeFills = [...(this.rangeFills as unknown[]), { start, end, fills }];
+      this.fills = MIXED;
+    },
+    setRangeTextDecoration(this: MockNode, start: number, end: number, value: string) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.textDecoration = value; this.rangeTextDecorations = []; return; }
+      if (this.textDecoration !== MIXED && this.textDecoration === value) return;
+      const len = String(this.characters).length;
+      if (this.textDecoration !== MIXED) this.rangeTextDecorations = [{ start: 0, end: len, textDecoration: this.textDecoration as string }];
+      this.rangeTextDecorations = [...(this.rangeTextDecorations as unknown[]), { start, end, textDecoration: value }];
+      this.textDecoration = MIXED;
+    },
+    setRangeLetterSpacing(this: MockNode, start: number, end: number, value: unknown) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.letterSpacing = value; this.rangeLetterSpacings = []; return; }
+      const len = String(this.characters).length;
+      if (this.letterSpacing !== MIXED) this.rangeLetterSpacings = [{ start: 0, end: len, letterSpacing: this.letterSpacing }];
+      this.rangeLetterSpacings = [...(this.rangeLetterSpacings as unknown[]), { start, end, letterSpacing: value }];
+      this.letterSpacing = MIXED;
+    },
+    setRangeLineHeight(this: MockNode, start: number, end: number, value: unknown) {
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.lineHeight = value; this.rangeLineHeights = []; return; }
+      const len = String(this.characters).length;
+      if (this.lineHeight !== MIXED) this.rangeLineHeights = [{ start: 0, end: len, lineHeight: this.lineHeight }];
+      this.rangeLineHeights = [...(this.rangeLineHeights as unknown[]), { start, end, lineHeight: value }];
+      this.lineHeight = MIXED;
+    },
+    setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; },
+    getStyledTextSegments(this: MockNode, fields: string[], start?: number, end?: number) {
+      const text = String(this.characters);
+      const from = start ?? 0;
+      const to = end ?? text.length;
+      if (from >= to) return [];
+      const breaks = new Set<number>([from, to]);
+      const addBreaks = (ranges: Array<{ start: number; end: number }>) => {
+        for (const range of ranges) {
+          if (range.start > from && range.start < to) breaks.add(range.start);
+          if (range.end > from && range.end < to) breaks.add(range.end);
+        }
+      };
+      const fieldMixed: Record<string, { mixed: boolean; ranges: Array<{ start: number; end: number }> }> = {
+        fontName: { mixed: this.fontName === MIXED, ranges: this.rangeFonts as Array<{ start: number; end: number }> },
+        fills: { mixed: this.fills === MIXED, ranges: this.rangeFills as Array<{ start: number; end: number }> },
+        fontSize: { mixed: this.fontSize === MIXED, ranges: this.rangeFontSizes as Array<{ start: number; end: number }> },
+        letterSpacing: { mixed: this.letterSpacing === MIXED, ranges: this.rangeLetterSpacings as Array<{ start: number; end: number }> },
+        lineHeight: { mixed: this.lineHeight === MIXED, ranges: this.rangeLineHeights as Array<{ start: number; end: number }> },
+        textDecoration: { mixed: this.textDecoration === MIXED, ranges: this.rangeTextDecorations as Array<{ start: number; end: number }> }
+      };
+      for (const field of fields) {
+        const info = fieldMixed[field];
+        if (!info?.mixed) continue;
+        if (info.ranges.length) addBreaks(info.ranges);
+        else if (to - from >= 2) breaks.add(from + 1);
+      }
+      const points = [...breaks].sort((a, b) => a - b);
+      const resolveAt = (index: number) => {
+        const pick = <T,>(ranges: Array<{ start: number; end: number } & T>, fallback: T): T => {
+          for (let i = ranges.length - 1; i >= 0; i--) {
+            const range = ranges[i];
+            if (index >= range.start && index < range.end) return range;
+          }
+          return fallback;
+        };
+        const fontRange = pick(this.rangeFonts as Array<{ start: number; end: number; font: { family: string; style: string } }>, { start: 0, end: 0, font: this.fontName === MIXED ? { family: "Inter", style: "Regular" } : this.fontName as { family: string; style: string } });
+        const fillRange = pick(this.rangeFills as Array<{ start: number; end: number; fills: unknown[] }>, { start: 0, end: 0, fills: this.fills === MIXED ? [] : (this.fills as unknown[]) });
+        const sizeRange = pick(this.rangeFontSizes as Array<{ start: number; end: number; fontSize: number }>, { start: 0, end: 0, fontSize: typeof this.fontSize === "number" ? this.fontSize : 12 });
+        const spacingRange = pick(this.rangeLetterSpacings as Array<{ start: number; end: number; letterSpacing: unknown }>, { start: 0, end: 0, letterSpacing: this.letterSpacing === MIXED ? { unit: "PERCENT", value: 0 } : this.letterSpacing });
+        const heightRange = pick(this.rangeLineHeights as Array<{ start: number; end: number; lineHeight: unknown }>, { start: 0, end: 0, lineHeight: this.lineHeight === MIXED ? { unit: "AUTO" } : this.lineHeight });
+        const decoRange = pick(this.rangeTextDecorations as Array<{ start: number; end: number; textDecoration: string }>, { start: 0, end: 0, textDecoration: this.textDecoration === MIXED ? "NONE" : String(this.textDecoration) });
+        return {
+          fontName: fontRange.font,
+          fills: fillRange.fills,
+          fontSize: sizeRange.fontSize,
+          letterSpacing: spacingRange.letterSpacing,
+          lineHeight: heightRange.lineHeight,
+          textDecoration: decoRange.textDecoration,
+          textCase: this.textCase === MIXED ? "ORIGINAL" : this.textCase,
+          textStyleId: this.textStyleId || "",
+          fillStyleId: this.fillStyleId || "",
+          fontWeight: this.fontWeight || 400,
+          fontStyle: this.fontStyle || "REGULAR",
+          listOptions: this.listOptions || { type: "NONE" },
+          indentation: this.indentation || 0,
+          paragraphIndent: this.paragraphIndent || 0,
+          paragraphSpacing: this.paragraphSpacing || 0,
+          listSpacing: this.listSpacing || 0,
+          hyperlink: this.hyperlink === MIXED ? null : this.hyperlink,
+          openTypeFeatures: this.openTypeFeatures || {}
+        };
+      };
+      const segments: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (a >= b) continue;
+        const props = resolveAt(a);
+        const segment: Record<string, unknown> = { characters: text.slice(a, b), start: a, end: b };
+        for (const field of fields) if (field in props) segment[field] = props[field as keyof typeof props];
+        segments.push(segment);
+      }
+      return segments;
+    }
   });
   base.setBoundVariable = function (this: MockNode, field: string, variable: { id: string } | null) {
     const bound = this.boundVariables as Record<string, unknown>;
@@ -3939,7 +4057,7 @@ test("Figma componentize via export: per-corner radii / vectorPaths / boolean op
 });
 
 test("Figma componentize fail-closed: export-lossy rich-text / effectStyle / gridStyle / per-side strokes rejected", async () => {
-  // Rich-text / mixed font
+  // Rich-text / mixed font via getStyledTextSegments
   {
     const document = normalize({
       canvas: { id: "page", width: 400, height: 200 },
@@ -3954,14 +4072,35 @@ test("Figma componentize fail-closed: export-lossy rich-text / effectStyle / gri
     });
     const page = await importIntoMock(document);
     const leaf = mockById(page, "b-t");
-    leaf.fontName = MIXED;
-    leaf.rangeFonts = [
-      { start: 0, end: 1, font: { family: "Inter", style: "Regular" } },
-      { start: 1, end: 2, font: { family: "Roboto", style: "Bold" } }
-    ];
+    leaf.setRangeFontName(1, 2, { family: "Roboto", style: "Bold" });
+    assert.equal(leaf.fontName, MIXED);
+    assert.ok(leaf.getStyledTextSegments(["fontName"]).length > 1);
     await assert.rejects(
       () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
-      /rich-text|mixed/
+      /mixed text styling|styled segments/
+    );
+  }
+  // Mixed fill on one word only (fills export as [] when mixed — must fail closed)
+  {
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+          { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    const leaf = mockById(page, "b-t");
+    leaf.setRangeFills(0, 1, [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1, visible: true }]);
+    assert.equal(leaf.fills, MIXED);
+    assert.ok(leaf.getStyledTextSegments(["fills", "fontName", "fontSize"]).length > 1);
+    await assert.rejects(
+      () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+      /mixed text styling|styled segments/
     );
   }
   // effectStyleId
@@ -4024,4 +4163,60 @@ test("Figma componentize fail-closed: export-lossy rich-text / effectStyle / gri
       /per-side stroke/
     );
   }
+});
+
+/** Reparent compact roots onto the Figma PAGE so they are true page-level frames (no shared FRAME parent). */
+function reparentRootsToPage(page: MockNode, ids: string[]): void {
+  for (const id of ids) {
+    const node = mockById(page, id);
+    page.appendChild(node);
+  }
+  // Drop empty canvas frames left behind by importIntoMock.
+  for (const child of [...page.children]) {
+    if (child.type === "FRAME" && child.children.length === 0 && !child.getPluginData("compactDesignId")) child.remove();
+    if (child.type === "FRAME" && child.getPluginData("compactDesignId") === "page" && !ids.includes("page")) {
+      // canvas frame may still hold nothing useful
+      if (child.children.length === 0) child.remove();
+    }
+  }
+}
+
+test("Figma componentize top-level: cornerRadius-only difference rejected via asNodes export", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 4 },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 12 }
+    ]
+  });
+  const page = await importIntoMock(document);
+  reparentRootsToPage(page, ["a", "b"]);
+  assert.equal(mockById(page, "a").parent?.type, "PAGE");
+  assert.equal(mockById(page, "b").parent?.type, "PAGE");
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never),
+    /differs at cornerRadius/
+  );
+  assert.equal(mockById(page, "a").type, "FRAME");
+  assert.equal(mockById(page, "b").type, "FRAME");
+});
+
+test("Figma componentize top-level: identical cards still componentize", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 8, children: [
+        { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+      ] },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", cornerRadius: 8, children: [
+        { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fill: "#111111" }
+      ] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  reparentRootsToPage(page, ["a", "b"]);
+  assert.equal(mockById(page, "a").parent?.type, "PAGE");
+  await applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never);
+  assert.equal(mockById(page, "a").type, "COMPONENT");
+  assert.equal(mockById(page, "b").type, "INSTANCE");
 });
