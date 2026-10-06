@@ -112,7 +112,8 @@ Without \`componentPropertyReferences\`, instance overrides do not affect childr
 - A partial \`layout\` on a frame without Auto Layout needs \`direction\`. \`counterAxisAlignItems: "STRETCH"\` is not patchable.
 - \`text\` + \`runs\`: text is the content and runs style ranges. runs alone: every run needs \`text\`. Replacing the content of text with per-range styling is an ERROR, so remove + insert it instead. On mixed-font text, send \`font.family\` and \`font.style\` together (\`font.size\` alone is fine).
 - Patchable (shallow-merge; field \`null\` clears): bindings, styleRefs, variableModes, instanceProperties, componentPropertyReferences. Setting raw fill/font on a bound/styled node detaches with a WARNING.
-- Not patchable yet (ERROR): prototype, componentId, componentProperties, variantAxes, variant. \`svg\` can't be patched; remove + insert.
+- Patchable definitions: \`componentProperties\` (name-keyed upsert on COMPONENT; null deletes; type immutable), \`variantAxes\` (shallow-merge on COMPONENT_SET; axis rename via null+new key; 1:1 option rename; axis delete ERROR), \`variant\` (merge on COMPONENT in a set; rewrites names). Renames keep instance VARIANT overrides valid.
+- Not patchable yet (ERROR): prototype, componentId. \`svg\` can't be patched; remove + insert.
 A failed patch rolls back completely.
 
 ## Workflow

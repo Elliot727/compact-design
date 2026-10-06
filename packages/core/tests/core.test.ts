@@ -697,13 +697,17 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
   assert.deepEqual(Object.keys(PATCH_SET_APPLIES_TO).sort(), [...PATCH_SET_KEYS].sort());
   // Every patchSet property schema is the node property schema, except the partial
   // nested patches and descriptions documenting deferred/immutable keys.
-  const mergePatchKeys = new Set(["bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences"]);
+  const mergePatchKeys = new Set(["bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences", "componentProperties", "variantAxes", "variant"]);
   for (const key of expected) {
     const { description: _description, ...patchProperty } = specSchema.$defs.patchSet.properties[key];
     if (key === "layout") assert.deepEqual(patchProperty, { $ref: "#/$defs/layoutPatch" });
     else if (key === "constraints") assert.deepEqual(patchProperty, { $ref: "#/$defs/constraintsPatch" });
     else if (key === "font") assert.deepEqual(patchProperty, { $ref: "#/$defs/fontPatch" });
-    else if (mergePatchKeys.has(key)) {
+    else if (key === "componentProperties") {
+      assert.ok(Array.isArray(patchProperty.oneOf), "componentProperties allows null / name-keyed upsert");
+    } else if (key === "variantAxes" || key === "variant") {
+      assert.equal(patchProperty.type, "object", key);
+    } else if (mergePatchKeys.has(key)) {
       assert.ok(Array.isArray(patchProperty.oneOf), `${key} patch schema allows null clear via oneOf`);
       assert.ok(patchProperty.oneOf.some((entry: { type?: string }) => entry.type === "null"), `${key} allows null`);
     }
@@ -711,7 +715,7 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
   }
   assert.equal(specSchema.$defs.layoutPatch.required, undefined);
   assert.deepEqual(specSchema.$defs.patchOperation.oneOf[0].properties.set, { $ref: "#/$defs/patchSet" });
-  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "variantAxes", "variant", "prototype"]);
+  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "prototype"]);
 });
 
 test("a typo set key fails in the schema and in core", () => {
@@ -734,7 +738,7 @@ test("a typo set key fails in the schema and in core", () => {
 
 test("patch documents no longer short-circuit validation", () => {
   // Still rejected: deferred keys, immutable svg, and conflicting fill+fills.
-  for (const set of [{ variant: { State: "On" } }, { prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }, { componentId: "x" }, { componentProperties: [] }, { variantAxes: {} }]) {
+  for (const set of [{ prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }, { componentId: "x" }]) {
     const result = validate(patchOf(setOp("title", set)));
     assert.equal(result.valid, false, JSON.stringify(set));
   }
@@ -746,6 +750,9 @@ test("patch documents no longer short-circuit validation", () => {
   assert.equal(validate(patchOf(setOp("title", { bindings: { fill: "brand" } }))).valid, true);
   assert.equal(validate(patchOf(setOp("title", { styleRefs: { fill: "Brand" } }))).valid, true);
   assert.equal(validate(patchOf(setOp("title", { instanceProperties: { Label: "x" } }))).valid, true);
+  assert.equal(validate(patchOf(setOp("title", { componentProperties: { Label: { type: "TEXT", defaultValue: "Hi" } } }))).valid, true);
+  assert.equal(validate(patchOf(setOp("title", { variantAxes: { State: ["A"] } }))).valid, true);
+  assert.equal(validate(patchOf(setOp("title", { variant: { State: "A" } }))).valid, true);
 });
 
 test("set on TEXT adds no defaults: no fill injection and no Arial", () => {
@@ -936,6 +943,67 @@ test("patch instanceProperties and componentPropertyReferences merge with valida
   assert.deepEqual(nodeById(patched.document, "button-label").properties.componentPropertyReferences, { characters: "Label", visible: "ShowIcon" });
   rejects(document, /missing-icon|INSTANCE_SWAP|not defined|is a /, setOp("cta", { instanceProperties: { Icon: "missing-icon" } }));
   rejects(document, /Nope|not defined|unknown/, setOp("button-label", { componentPropertyReferences: { characters: "Nope" } }));
+});
+
+
+test("patch componentProperties name-keyed upsert, immutable type, delete + referenced fails", () => {
+  const document = normalize({
+    canvas: { width: 200, height: 100 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 8, h: 8, fill: "#000" },
+      {
+        id: "button", type: "COMPONENT", w: 80, h: 32, fill: "#00F",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Go" },
+          { name: "Show", type: "BOOLEAN", defaultValue: true }
+        ],
+        children: [
+          { id: "label", type: "TEXT", w: 40, h: 16, text: "Go", fill: "#FFF", componentPropertyReferences: { characters: "Label" } }
+        ]
+      }
+    ]
+  });
+  const added = applyPatch(document, normalizePatch(patchOf(setOp("button", {
+    componentProperties: {
+      Label: { defaultValue: "Continue" },
+      Icon: { type: "INSTANCE_SWAP", defaultValue: "icon" }
+    }
+  }))));
+  const props = nodeById(added.document, "button").properties.componentProperties!;
+  assert.deepEqual(props.find((p) => p.name === "Label")?.defaultValue, "Continue");
+  assert.ok(props.find((p) => p.name === "Icon" && p.type === "INSTANCE_SWAP"));
+  rejects(document, /type is immutable/, setOp("button", { componentProperties: { Label: { type: "BOOLEAN", defaultValue: false } } }));
+  rejects(document, /not defined on the owning COMPONENT|property 'Label'/, setOp("button", { componentProperties: { Label: null } }));
+  const dropped = applyPatch(document, normalizePatch(patchOf(setOp("button", { componentProperties: { Show: null } }))));
+  assert.equal(nodeById(dropped.document, "button").properties.componentProperties!.some((p) => p.name === "Show"), false);
+});
+
+test("patch variantAxes merge, rename, reject axis delete; variant merge rewrites names", () => {
+  const document = normalize({
+    canvas: { width: 400, height: 200 },
+    nodes: [{
+      id: "set", type: "COMPONENT_SET", w: 300, h: 100,
+      variantAxes: { State: ["Default", "Hover"], Size: ["S", "L"] },
+      children: [
+        { id: "d-s", type: "COMPONENT", w: 40, h: 20, variant: { State: "Default", Size: "S" }, fill: "#111" },
+        { id: "h-l", type: "COMPONENT", w: 40, h: 20, variant: { State: "Hover", Size: "L" }, fill: "#222" }
+      ]
+    },
+    { id: "use", type: "INSTANCE", componentId: "h-l", w: 40, h: 20 }
+    ]
+  });
+  assert.match(nodeById(document, "d-s").name, /State=Default/);
+  rejects(document, /deleting a variant axis is not supported/, setOp("set", { variantAxes: { Size: null } }));
+  const renamed = applyPatch(document, normalizePatch(patchOf(setOp("set", {
+    variantAxes: { State: null, Status: ["Default", "Pressed"], Size: ["S", "L"] }
+  }))));
+  assert.deepEqual(nodeById(renamed.document, "set").properties.variantAxes, { Status: ["Default", "Pressed"], Size: ["S", "L"] });
+  assert.deepEqual(nodeById(renamed.document, "h-l").properties.variant, { Status: "Pressed", Size: "L" });
+  assert.match(nodeById(renamed.document, "h-l").name, /Status=Pressed/);
+  const selected = applyPatch(document, normalizePatch(patchOf(setOp("d-s", { variant: { State: "Hover" } }))));
+  assert.deepEqual(nodeById(selected.document, "d-s").properties.variant, { State: "Hover", Size: "S" });
+  assert.match(nodeById(selected.document, "d-s").name, /State=Hover/);
+  rejects(document, /not declared/, setOp("d-s", { variant: { State: "Nope" } }));
 });
 
 test("validatePatch reports bad references in the patched document", () => {

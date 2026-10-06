@@ -2,6 +2,7 @@ import { patchSetBindingFields, patchSetTargetIssues, type InternalPatchDocument
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
+import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma } from "./patch-definitions";
 import { applyResourcePatch } from "./resources";
 import { clamp, finite } from "./value";
 
@@ -225,20 +226,20 @@ async function applyComponentPropertyReferencesSet(node: SceneNode, values: Patc
   if (!owner) throw new Error(`componentPropertyReferences must be on a descendant of a COMPONENT and must not cross a nested INSTANCE`);
   const { keys } = componentPropertyMaps(owner);
   const current = node.componentPropertyReferences || {};
-  const merged: { characters?: string | null; visible?: string | null; mainComponent?: string | null } = {
+  const refs = {
     characters: current.characters,
     visible: current.visible,
-    mainComponent: current["mainComponent"]
-  };
+    mainComponent: current.mainComponent
+  } as { characters?: string | null; visible?: string | null; mainComponent?: string | null };
   for (const [field, value] of Object.entries(values.componentPropertyReferences)) {
-    if (value === null) delete (merged as Record<string, unknown>)[field];
-    else (merged as Record<string, unknown>)[field] = value;
+    if (value === null) delete (refs as Record<string, unknown>)[field];
+    else (refs as Record<string, unknown>)[field] = value;
   }
-  const mapped = mapComponentPropertyReferences(merged, keys);
+  const mapped = mapComponentPropertyReferences(refs, keys);
   const result: { characters?: string; visible?: string; mainComponent?: string } = {};
-  if (merged.characters != null) result.characters = mapped.characters;
-  if (merged.visible != null) result.visible = mapped.visible;
-  if (merged["mainComponent"] != null) result["mainComponent"] = mapped["mainComponent"];
+  if (refs.characters != null) result.characters = mapped.characters;
+  if (refs.visible != null) result.visible = mapped.visible;
+  if (refs.mainComponent != null) result.mainComponent = mapped.mainComponent;
   node.componentPropertyReferences = result;
 }
 
@@ -306,7 +307,7 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   innerRadiusRatio: { phase: "shape", apply: (node, values, _ctx) => { const target = writable(node, "innerRadiusRatio", "arcData"); target.arcData = { ...(target.arcData as ArcData), innerRadius: clamp(values.innerRadiusRatio, 0, 1) }; } },
   svg: rejected,
   vectorPaths: scalar("vectorPaths", "vectorPaths", "shape", (values) => (values.vectorPaths || []).map((path) => ({ ...path, data: String(path.data || "").replace(/,/g, " ").replace(/\s+/g, " ").trim() }))),
-  componentId: rejected, componentProperties: rejected, instanceProperties: { phase: "component", apply: applyInstancePropertiesSet }, componentPropertyReferences: { phase: "component", apply: applyComponentPropertyReferencesSet }, variantAxes: rejected, variant: rejected,
+  componentId: rejected, componentProperties: { phase: "component", apply: applyComponentPropertiesFigma }, instanceProperties: { phase: "component", apply: applyInstancePropertiesSet }, componentPropertyReferences: { phase: "component", apply: applyComponentPropertyReferencesSet }, variantAxes: { phase: "component", apply: applyVariantAxesFigma }, variant: { phase: "component", apply: applyVariantFigma },
   operation: scalar("operation", "booleanOperation", "shape"),
   prototype: rejected,
   overflowDirection: scalar("overflowDirection", "overflowDirection", "layout"),
@@ -449,10 +450,12 @@ async function rollback(log: Undo[], holder: FrameNode | null): Promise<void> {
       const at = !original.removed && original.parent === parent ? parent.children.indexOf(original) : Math.min(entry.index, parent.children.length);
       const dependents: InstanceNode[] = [];
       if (original.type === "COMPONENT" && !original.removed) {
-        for (const candidate of figma.currentPage.findAll((node) => node.type === "INSTANCE")) {
-          const instance = candidate as InstanceNode;
-          const main = await instance.getMainComponentAsync();
-          if (main === original) dependents.push(instance);
+        // dynamic-page: unloaded pages are skipped unless loadAllPagesAsync runs first.
+        await figma.loadAllPagesAsync();
+        const candidates = figma.root.findAllWithCriteria({ types: ["INSTANCE"] });
+        for (const candidate of candidates) {
+          const main = await candidate.getMainComponentAsync();
+          if (main === original) dependents.push(candidate);
         }
       }
       if (!original.removed) original.remove();

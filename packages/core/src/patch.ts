@@ -1,6 +1,7 @@
 import { validationIssues, type RepairIssue } from "./lint";
 import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } from "./patch-keys";
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
+import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames } from "./patch-definitions";
 import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -186,7 +187,7 @@ function mergeSet(ref: NodeRef, values: PatchSetValues, set: JsonObject, warning
   mergeObjectMap(props.componentPropertyReferences as Record<string, unknown> | undefined, values.componentPropertyReferences as Record<string, unknown> | null | undefined, (next) => {
     if (next) props.componentPropertyReferences = next as DesignProperties["componentPropertyReferences"]; else delete props.componentPropertyReferences;
   });
-  const handled = new Set(["name", "position", "size", "styles", "layout", "constraints", "font", "runs", "text", "bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences"]);
+  const handled = new Set(["name", "position", "size", "styles", "layout", "constraints", "font", "runs", "text", "bindings", "styleRefs", "variableModes", "instanceProperties", "componentPropertyReferences", "componentProperties", "variantAxes", "variant"]);
   for (const [key, value] of Object.entries(values)) {
     if (handled.has(key)) continue;
     Object.assign(props, { [key]: cloneValue(value) });
@@ -237,7 +238,7 @@ function patchIssue(code: string, path: string, message: string, suggestion: str
   return { severity: "ERROR", code, path, message, suggestion };
 }
 
-function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[], warnings: string[]): void {
+function applyOperation(operation: PatchOperation, operationIndex: number, index: Map<string, NodeRef>, visit: (nodes: InternalNode[], parent: InternalNode | null) => void, affectedIds: string[], warnings: string[], roots: InternalNode[]): void {
   if (operation.op === "APPEND" || operation.op === "INSERT") {
     const target = operation.parent ? index.get(operation.parent) : undefined;
     if (!target || !operation.node) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
@@ -300,6 +301,38 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     }));
   }
   mergeSet(target, values, set, warnings);
+  const defErrors: string[] = [];
+  if (values.componentProperties !== undefined) {
+    defErrors.push(...applyComponentPropertiesPatch(target.node.properties, values.componentProperties, `patch.operations[${operationIndex}].set`));
+  }
+  if (values.variant !== undefined && values.variant !== null) {
+    defErrors.push(...applyVariantPatchOnComponent(target.node, target.parent, values.variant, `patch.operations[${operationIndex}].set`));
+  } else if (values.variant === null) {
+    delete target.node.properties.variant;
+  }
+  if (values.variantAxes !== undefined) {
+    if (target.node.type !== "COMPONENT_SET") {
+      defErrors.push(`patch.operations[${operationIndex}].set.variantAxes: only applies to COMPONENT_SET`);
+    } else if (values.variantAxes === null) {
+      defErrors.push(`patch.operations[${operationIndex}].set.variantAxes: clearing all axes is not supported (Figma cannot delete VARIANT properties)`);
+    } else {
+      const current = target.node.properties.variantAxes || {};
+      const detected = detectVariantRenames(current, values.variantAxes);
+      defErrors.push(...detected.errors.map((message) => `patch.operations[${operationIndex}].set.${message}`));
+      if (!detected.errors.length) {
+        target.node.properties.variantAxes = detected.axes;
+        // roots: walk from all indexed top-level nodes — use visit via collecting from index parents
+        applyVariantRenamesInForest(roots, target.node.id, detected.axisRenames, detected.optionRenames, detected.axes);
+        rewriteVariantChildNames(target.node);
+      }
+    }
+  }
+  if (defErrors.length) {
+    throw new PatchError(defErrors.map((message) => {
+      const split = message.indexOf(": ");
+      return patchIssue("PATCH_SET_INVALID", split > 0 ? message.slice(0, split) : `patch.operations[${operationIndex}].set`, split > 0 ? message.slice(split + 2) : message, "See component/variant patch rules in DESIGN-LANGUAGE.md.");
+    }));
+  }
   affectedIds.push(target.node.id);
 }
 
@@ -317,7 +350,7 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
   visit(result.nodes, null);
   for (const [operationIndex, operation] of patch.patch.operations.entries()) {
     try {
-      applyOperation(operation, operationIndex, index, visit, affectedIds, warnings);
+      applyOperation(operation, operationIndex, index, visit, affectedIds, warnings, result.nodes);
     } catch (error) {
       if (error instanceof PatchError) throw error;
       const message = error instanceof Error ? error.message : String(error);

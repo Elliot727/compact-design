@@ -121,7 +121,13 @@ export type ImportMode = "CREATE" | "REPLACE" | "UPDATE";
  * keys present in the authored set appear here: no defaults are added.
  * Coordinates are parent-relative (the authoring convention).
  */
-export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences"> {
+export interface ComponentPropertyPatchEntry {
+  type?: ComponentPropertyType;
+  defaultValue?: string | boolean;
+  options?: ComponentPropertyOptions;
+}
+
+export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout" | "bindings" | "styleRefs" | "variableModes" | "instanceProperties" | "componentPropertyReferences" | "componentProperties" | "variantAxes" | "variant"> {
   name?: string;
   position?: { x?: number; y?: number };
   size?: { width?: number; height?: number };
@@ -135,6 +141,12 @@ export interface PatchSetValues extends Omit<Partial<DesignProperties>, "positio
   variableModes?: Record<string, string | null> | null;
   instanceProperties?: Record<string, string | boolean | VariableAlias | null> | null;
   componentPropertyReferences?: { characters?: string | null; visible?: string | null; mainComponent?: string | null } | null;
+  /** Name-keyed upsert of COMPONENT property definitions; `null` deletes a TEXT/BOOLEAN/INSTANCE_SWAP def. */
+  componentProperties?: Record<string, ComponentPropertyPatchEntry | null> | null;
+  /** Shallow-merge axes→options; cannot delete an axis (null / omitting to empty). */
+  variantAxes?: Record<string, string[] | null> | null;
+  /** Merge variant selection on a COMPONENT inside a set. */
+  variant?: Record<string, string | null> | null;
 }
 
 export interface PatchOperation {

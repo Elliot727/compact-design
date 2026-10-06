@@ -276,10 +276,10 @@ function compactComponentPropertyReferences(node: SceneNode): CompactValue | und
   const refs = "componentPropertyReferences" in node ? node.componentPropertyReferences : null;
   if (!refs) return undefined;
   const result: CompactValue = {};
-  // Use bracket access for the mainComponent ref key so static checks that ban the sync InstanceNode field stay clean.
-  if (typeof refs["characters"] === "string") result.characters = authoredComponentPropertyName(refs["characters"]);
-  if (typeof refs["visible"] === "string") result.visible = authoredComponentPropertyName(refs["visible"]);
-  if (typeof refs["mainComponent"] === "string") result["mainComponent"] = authoredComponentPropertyName(refs["mainComponent"]);
+  // `refs` is a plain componentPropertyReferences data object (not an InstanceNode).
+  if (typeof refs.characters === "string") result.characters = authoredComponentPropertyName(refs.characters);
+  if (typeof refs.visible === "string") result.visible = authoredComponentPropertyName(refs.visible);
+  if (typeof refs.mainComponent === "string") result.mainComponent = authoredComponentPropertyName(refs.mainComponent);
   return Object.keys(result).length ? result : undefined;
 }
 

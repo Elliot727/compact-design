@@ -190,7 +190,7 @@ export function mapComponentPropertyReferences(
   const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
   if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
   if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-  if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
+  if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
   return mapped;
 }
 
@@ -205,7 +205,7 @@ export function applyComponentPropertyReferencesTree(data: InternalNode, scene: 
     const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
     if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
     if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
-    if (typeof refs["mainComponent"] === "string") mapped["mainComponent"] = propertyKeys.get(refs["mainComponent"]) || refs["mainComponent"];
+    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
     if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
   }
   if (data.type === "COMPONENT" || data.type === "INSTANCE") return;
