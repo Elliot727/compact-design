@@ -82,9 +82,12 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
   "patch": { "operations": [
     { "op": "set", "id": "title", "set": { "text": "Updated" } },
     { "op": "remove", "id": "old-badge" },
-    { "op": "append", "parent": "list", "node": { "type": "FRAME", "w": 100, "h": 40 } }
+    { "op": "append", "parent": "list", "node": { "type": "FRAME", "w": 100, "h": 40 } },
+    { "op": "insert", "parent": "list", "index": 0, "node": { "id": "pin", "type": "FRAME", "w": 100, "h": 40 } },
+    { "op": "move", "id": "pin", "parent": "list", "index": 2 }
   ] }
 }
+\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end. Rejects missing id/parent, non-container or INSTANCE parents, moving the root, and cycles.
 
 ## Workflow
 1. Author Compact Design JSON for the request.

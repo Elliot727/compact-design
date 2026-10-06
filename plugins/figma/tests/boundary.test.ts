@@ -24,7 +24,8 @@ import {
   uniqueVariableExportIds
 } from "../src/plugin/export-variables";
 import { planExport, type ExportCandidate } from "../src/plugin/export-plan";
-import { validate } from "@compact-design/core";
+import { applyPatch as applyCorePatch, normalize, normalizePatch, validate } from "@compact-design/core";
+import { applyPatch as applyFigmaPatch } from "../src/plugin/patch";
 
 test("Figma adapter consumes core and does not duplicate language modules", () => {
   const files: string[] = [];
@@ -583,4 +584,288 @@ test("effectsFromData skips SHADER effects that fail to import and records a war
   assert.match(warnings[1], /Hero: skipped a SHADER effect without an id/);
   clearEffectWarnings();
   assert.equal(effectWarnings.size, 0);
+});
+
+
+// --- Patch insert/move: mocked Figma API parity with core -----------------
+
+type MockNode = {
+  id: string;
+  name: string;
+  type: string;
+  parent: MockNode | null;
+  children: MockNode[];
+  removed: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  fills: unknown[];
+  strokes: unknown[];
+  effects: unknown[];
+  pluginData: Record<string, string>;
+  resize: (w: number, h: number) => void;
+  appendChild: (child: MockNode) => void;
+  insertChild: (index: number, child: MockNode) => void;
+  remove: () => void;
+  clone: () => MockNode;
+  getPluginData: (key: string) => string;
+  setPluginData: (key: string, value: string) => void;
+};
+
+function createMockNode(type: string, name = type): MockNode {
+  const node: MockNode = {
+    id: `figma:${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    type,
+    parent: null,
+    children: [],
+    removed: false,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    rotation: 0,
+    fills: [],
+    strokes: [],
+    effects: [],
+    pluginData: {},
+    resize(w: number, h: number) { this.width = w; this.height = h; },
+    appendChild(child: MockNode) { this.insertChild(this.children.length, child); },
+    insertChild(index: number, child: MockNode) {
+      if (child.parent) {
+        const from = child.parent.children.indexOf(child);
+        if (from >= 0) child.parent.children.splice(from, 1);
+      }
+      child.parent = this;
+      const at = Math.max(0, Math.min(index, this.children.length));
+      this.children.splice(at, 0, child);
+    },
+    remove() {
+      if (this.parent) {
+        const from = this.parent.children.indexOf(this);
+        if (from >= 0) this.parent.children.splice(from, 1);
+      }
+      this.parent = null;
+      this.removed = true;
+    },
+    clone() {
+      const copy = createMockNode(this.type, `${this.name} (backup)`);
+      copy.pluginData = { ...this.pluginData };
+      return copy;
+    },
+    getPluginData(key: string) { return this.pluginData[key] || ""; },
+    setPluginData(key: string, value: string) { this.pluginData[key] = value; }
+  };
+  return node;
+}
+
+function emptyPatchContext() {
+  return {
+    sourceNodes: new Map(),
+    componentPropertyKeys: new Map(),
+    resources: {
+      paintStyles: new Map(),
+      textStyles: new Map(),
+      variables: new Map(),
+      variableCollections: new Map(),
+      createdStyles: [],
+      createdCollections: [],
+      warnings: [],
+      unavailableVariableModes: new Map()
+    },
+    createdNodes: [] as MockNode[]
+  };
+}
+
+function installFigmaMock(pageChildren: MockNode[]) {
+  const page = createMockNode("PAGE", "Page 1");
+  page.children = pageChildren;
+  for (const child of pageChildren) child.parent = page;
+
+  const findAll = (): MockNode[] => {
+    const out: MockNode[] = [];
+    const walk = (nodes: MockNode[]) => {
+      for (const node of nodes) {
+        if (node.removed) continue;
+        out.push(node);
+        walk(node.children);
+      }
+    };
+    walk(page.children);
+    return out;
+  };
+
+  const figmaMock = {
+    mixed: Symbol("mixed"),
+    currentPage: {
+      findAll,
+      selection: [] as MockNode[],
+      children: page.children
+    },
+    getNodeByIdAsync: async (id: string) => findAll().find((node) => node.id === id) || null,
+    createFrame: () => createMockNode("FRAME"),
+    createRectangle: () => createMockNode("RECTANGLE"),
+    createEllipse: () => createMockNode("ELLIPSE"),
+    createLine: () => createMockNode("LINE"),
+    createPolygon: () => createMockNode("POLYGON"),
+    createStar: () => createMockNode("STAR"),
+    createSection: () => createMockNode("SECTION"),
+    createSlice: () => createMockNode("SLICE"),
+    createVector: () => createMockNode("VECTOR"),
+    createText: () => createMockNode("TEXT"),
+    createComponent: () => createMockNode("COMPONENT"),
+    loadFontAsync: async () => undefined,
+    createImage: () => ({ hash: "img" }),
+    createImageAsync: async () => ({ hash: "img" })
+  };
+  (globalThis as { figma?: unknown }).figma = figmaMock;
+  return { page, figmaMock };
+}
+
+function compactIds(parent: MockNode): string[] {
+  return parent.children.map((child) => child.getPluginData("compactDesignId"));
+}
+
+test("Figma patch insert clamps and seats at the requested index", async () => {
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  for (const id of ["a", "b", "c"]) {
+    const child = createMockNode("RECTANGLE", id);
+    child.setPluginData("compactDesignId", id);
+    list.appendChild(child);
+  }
+  installFigmaMock([list]);
+  const context = emptyPatchContext();
+  await applyFigmaPatch(normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 1, node: { id: "mid", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }), context as never);
+  assert.deepEqual(compactIds(list), ["a", "mid", "b", "c"]);
+
+  await applyFigmaPatch(normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 99, node: { id: "tail", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }), context as never);
+  assert.deepEqual(compactIds(list), ["a", "mid", "b", "c", "tail"]);
+});
+
+test("Figma patch move uses after-removal index and rejects cycles, roots, instances, and missing ids", async () => {
+  const canvas = createMockNode("FRAME", "canvas");
+  canvas.setPluginData("compactDesignId", "canvas");
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  canvas.appendChild(list);
+  for (const id of ["a", "b", "c", "d"]) {
+    const child = createMockNode("RECTANGLE", id);
+    child.setPluginData("compactDesignId", id);
+    list.appendChild(child);
+  }
+  const nest = createMockNode("FRAME", "nest");
+  nest.setPluginData("compactDesignId", "nest");
+  list.appendChild(nest);
+  const instance = createMockNode("INSTANCE", "copy");
+  instance.setPluginData("compactDesignId", "copy");
+  canvas.appendChild(instance);
+  installFigmaMock([canvas]);
+
+  const context = emptyPatchContext();
+
+  await applyFigmaPatch(normalizePatch({
+    patch: { operations: [{ op: "move", id: "b", parent: "list", index: 2 }] }
+  }), context as never);
+  assert.deepEqual(compactIds(list), ["a", "c", "b", "d", "nest"]);
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "a", parent: "list-missing", index: 0 }] } }), context as never),
+    /was not found/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "ghost", parent: "list", index: 0 }] } }), context as never),
+    /was not found/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "canvas", parent: "list", index: 0 }] } }), context as never),
+    /document root/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "insert", parent: "copy", index: 0, node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } }] } }), context as never),
+    /INSTANCE/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "list", parent: "a", index: 0 }] } }), context as never),
+    /cannot contain children/
+  );
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({ patch: { operations: [{ op: "move", id: "list", parent: "nest", index: 0 }] } }), context as never),
+    /itself or its descendants/
+  );
+});
+
+test("core and Figma applicator agree on insert/move/reparent/append child order", async () => {
+  const source = {
+    canvas: { id: "screen", width: 300, height: 200 },
+    nodes: [{
+      id: "list",
+      type: "FRAME",
+      w: 200,
+      h: 100,
+      children: [
+        { id: "a", type: "RECTANGLE", w: 10, h: 10 },
+        { id: "b", type: "RECTANGLE", w: 10, h: 10 },
+        { id: "c", type: "RECTANGLE", w: 10, h: 10 }
+      ]
+    }, {
+      id: "other",
+      type: "FRAME",
+      w: 100,
+      h: 100,
+      children: [{ id: "z", type: "RECTANGLE", w: 10, h: 10 }]
+    }]
+  };
+  const operations = [
+    { op: "insert", parent: "list", index: 1, node: { id: "mid", type: "RECTANGLE", w: 10, h: 10 } },
+    { op: "move", id: "c", parent: "list", index: 0 },
+    { op: "move", id: "a", parent: "other", index: 0 },
+    { op: "append", parent: "list", node: { id: "tail", type: "RECTANGLE", w: 10, h: 10 } }
+  ];
+  const coreDoc = normalize(source);
+  const coreResult = applyCorePatch(coreDoc, normalizePatch({ patch: { operations } }));
+  const idsUnder = (root: typeof coreDoc, id: string): string[] => {
+    const visit = (nodes: typeof root.nodes): string[] | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node.children.map((child) => child.id);
+        const nested = visit(node.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return visit(root.nodes) || [];
+  };
+  const coreList = idsUnder(coreResult.document, "list");
+  const coreOther = idsUnder(coreResult.document, "other");
+
+  const screen = createMockNode("FRAME", "screen");
+  screen.setPluginData("compactDesignId", "screen");
+  const list = createMockNode("FRAME", "list");
+  list.setPluginData("compactDesignId", "list");
+  const other = createMockNode("FRAME", "other");
+  other.setPluginData("compactDesignId", "other");
+  screen.appendChild(list);
+  screen.appendChild(other);
+  for (const id of ["a", "b", "c"]) {
+    const child = createMockNode("RECTANGLE", id);
+    child.setPluginData("compactDesignId", id);
+    list.appendChild(child);
+  }
+  const z = createMockNode("RECTANGLE", "z");
+  z.setPluginData("compactDesignId", "z");
+  other.appendChild(z);
+  installFigmaMock([screen]);
+
+  await applyFigmaPatch(normalizePatch({ patch: { operations } }), emptyPatchContext() as never);
+
+  assert.deepEqual(compactIds(list), coreList);
+  assert.deepEqual(compactIds(other), coreOther);
+  assert.deepEqual(coreList, ["c", "mid", "b", "tail"]);
+  assert.deepEqual(coreOther, ["a", "z"]);
 });

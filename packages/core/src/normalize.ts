@@ -316,11 +316,22 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   if (!Array.isArray(source.patch?.operations) || !source.patch.operations.length) throw new Error("patch.operations must be a non-empty array.");
   const operations: PatchOperation[] = source.patch.operations.map((operation, index) => {
     const op = String(operation.op || "").toUpperCase();
-    if (!['SET', 'REMOVE', 'APPEND'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, or append.`);
-    if ((op === 'SET' || op === 'REMOVE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
+    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, or move.`);
+    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
     if (op === 'SET' && (!operation.set || typeof operation.set !== 'object' || Array.isArray(operation.set))) throw new Error(`patch.operations[${index}].set is required.`);
     if (op === 'APPEND' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
-    const result: PatchOperation = { op: op as PatchOperation['op'], id: typeof operation.id === "string" ? operation.id : undefined, parent: typeof operation.parent === "string" ? operation.parent : undefined, set: operation.set as JsonObject | undefined };
+    if (op === 'INSERT' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
+    if (op === 'MOVE' && typeof operation.parent !== 'string') throw new Error(`patch.operations[${index}].parent is required.`);
+    if ((op === 'INSERT' || op === 'MOVE') && (typeof operation.index !== 'number' || !Number.isInteger(operation.index) || operation.index < 0)) {
+      throw new Error(`patch.operations[${index}].index must be a non-negative integer.`);
+    }
+    const result: PatchOperation = {
+      op: op as PatchOperation['op'],
+      id: typeof operation.id === "string" ? operation.id : undefined,
+      parent: typeof operation.parent === "string" ? operation.parent : undefined,
+      index: typeof operation.index === "number" ? operation.index : undefined,
+      set: operation.set as JsonObject | undefined
+    };
     if (op === 'SET') {
       const textKeys = ['text', 'font', 'lineHeight', 'letterSpacing', 'align', 'runs', 'textDecoration', 'paragraphSpacing', 'textAutoResize'];
       const set = operation.set as JsonObject;
@@ -328,6 +339,7 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
       result.normalized = normalizeNode({ ...set, type: syntheticType, w: typeof set.w === "number" ? set.w : 1, h: typeof set.h === "number" ? set.h : 1 } as CompactNode, { x: 0, y: 0 }, `patch-${index}`).properties;
     }
     if (op === 'APPEND') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-append`);
+    if (op === 'INSERT') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-insert`);
     return result;
   });
   return { patch: { operations } };
