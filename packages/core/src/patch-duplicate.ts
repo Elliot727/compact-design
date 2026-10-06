@@ -72,8 +72,6 @@ export function buildDuplicateIdMapFromIds(
   return { map, errors };
 }
 
-
-
 /** Deep-clone a node tree applying an id map (and re-pointing internal prototype destinations). */
 export function cloneSubtreeWithIds(node: InternalNode, idMap: Map<string, string>): InternalNode {
   const mappedId = idMap.get(node.id) || node.id;
@@ -114,8 +112,26 @@ export function rewritePrototypeDestinations(properties: JsonObject, idMap: Map<
 }
 
 /**
+ * Replace only delimited whole ids in text (quoted `'id'` / `"id"`, or path
+ * segments bounded by non-id characters). Longest source ids first so
+ * `card-title` is not corrupted by a shorter `card` mapping.
+ */
+export function remapDelimitedIds(text: string, idMap: Map<string, string>): string {
+  if (!text || idMap.size === 0) return text;
+  const entries = [...idMap.entries()].sort((a, b) => b[0].length - a[0].length);
+  let result = text;
+  for (const [from, to] of entries) {
+    // Quoted forms used in validation messages: 'id' or "id"
+    result = result.split(`'${from}'`).join(`'${to}'`);
+    result = result.split(`"${from}"`).join(`"${to}"`);
+  }
+  return result;
+}
+
+/**
  * Remap issue identity keys through a source→copy id map so duplicated
  * pre-existing issues on the copy are exempt (with multiplicity).
+ * Owner is remapped exactly (`node:${id}`); path/message only via delimited ids.
  */
 export function remapIssueKeyThroughDuplicate(key: string, idMap: Map<string, string>): string | null {
   // key format: `${code}|${owner}|${rest}|${message}`
@@ -125,8 +141,6 @@ export function remapIssueKeyThroughDuplicate(key: string, idMap: Map<string, st
   const [code, owner, rest, ...messageParts] = parts;
   const message = messageParts.join("|");
   let nextOwner = owner;
-  let nextRest = rest;
-  let nextMessage = message;
   let changed = false;
 
   if (owner.startsWith("node:")) {
@@ -138,16 +152,9 @@ export function remapIssueKeyThroughDuplicate(key: string, idMap: Map<string, st
     }
   }
 
-  for (const [from, to] of idMap) {
-    if (nextRest.includes(from)) {
-      nextRest = nextRest.split(from).join(to);
-      changed = true;
-    }
-    if (nextMessage.includes(`'${from}'`) || nextMessage.includes(`"${from}"`) || nextMessage.includes(from)) {
-      nextMessage = nextMessage.split(from).join(to);
-      changed = true;
-    }
-  }
+  const nextRest = remapDelimitedIds(rest, idMap);
+  const nextMessage = remapDelimitedIds(message, idMap);
+  if (nextRest !== rest || nextMessage !== message) changed = true;
 
   return changed ? `${code}|${nextOwner}|${nextRest}|${nextMessage}` : null;
 }

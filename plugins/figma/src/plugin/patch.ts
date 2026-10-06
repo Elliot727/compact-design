@@ -1,4 +1,4 @@
-import { buildDuplicateIdMap, buildDuplicateIdMapFromIds, collectSubtreeIds, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
+import { buildDuplicateIdMapFromIds, collectSubtreeIds, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
@@ -471,7 +471,6 @@ async function rollback(log: Undo[], holder: FrameNode | null): Promise<void> {
   if (holder && !holder.removed) holder.remove();
 }
 
-
 function registerSubtreeIds(nodes: Map<string, SceneNode>, node: SceneNode): void {
   const id = node.getPluginData("compactDesignId");
   if (id) nodes.set(id, node);
@@ -484,10 +483,12 @@ function sceneSubtreeHasComponent(node: SceneNode): boolean {
   return false;
 }
 
-/** Rewrite compactDesignId plugin data on a clone to match the duplicate id map (paired walk with source). */
-
-/** Remap Figma reaction destinationIds on a clone to the paired clone nodes (subtree-internal only). */
-function remapCloneReactions(source: SceneNode, copy: SceneNode): void {
+/**
+ * Real Figma `clone()` already remaps reaction destinationIds that land inside
+ * the cloned subtree, so this is a no-op there. The unit mock copies destinationIds
+ * verbatim; rewrite them via setReactionsAsync (dynamic-page forbids the sync setter).
+ */
+async function remapCloneReactions(source: SceneNode, copy: SceneNode): Promise<void> {
   const pairs: Array<[SceneNode, SceneNode]> = [];
   const walk = (a: SceneNode, b: SceneNode): void => {
     pairs.push([a, b]);
@@ -514,12 +515,11 @@ function remapCloneReactions(source: SceneNode, copy: SceneNode): void {
       });
       return { ...reaction, actions };
     });
-    if (changed && "setReactionsAsync" in node) {
-      // Prefer async setter when present; sync assign for mocks.
-      (node as FrameNode).reactions = next;
-    } else if (changed) {
-      (node as FrameNode).reactions = next;
+    if (!changed) continue;
+    if (!("setReactionsAsync" in node) || typeof (node as FrameNode).setReactionsAsync !== "function") {
+      throw new Error("setReactionsAsync is required to rewrite prototype reactions under dynamic-page");
     }
+    await (node as FrameNode).setReactionsAsync(next);
   }
 }
 
@@ -604,7 +604,7 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
         walkIds(live);
         sourceIds = liveIds;
       } else if (authored) {
-        if (subtreeContainsComponent(authored)) {
+        if (subtreeContainsType(authored, new Set(["COMPONENT", "COMPONENT_SET"]))) {
           throw new Error(`${path}: cannot duplicate a COMPONENT or COMPONENT_SET (or a subtree that contains one)`);
         }
         sourceIds = collectSubtreeIds(authored);
@@ -627,12 +627,6 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
     }
   }
 }
-
-function subtreeContainsComponent(node: InternalNode): boolean {
-  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") return true;
-  return node.children.some((child) => subtreeContainsComponent(child));
-}
-
 
 export async function applyPatch(document: InternalPatchDocument, context: ImportContext): Promise<{ affected: SceneNode[]; warnings: string[] }> {
   clearEffectWarnings();
@@ -717,9 +711,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         }
         const copy = source.clone();
         rewriteCloneCompactIds(source, copy, map);
-        // Real Figma clone() remaps reactions whose destinationId is inside the cloned
-        // subtree; the mock does not, so pair-walk and rewrite destinationIds explicitly.
-        remapCloneReactions(source, copy);
+        await remapCloneReactions(source, copy);
         const sourceParent = source.parent;
         let at: number;
         if (operation.index !== undefined) {
@@ -731,7 +723,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
           at = parent.children.length;
         }
         parent.insertChild(at, copy);
-        // Keep x/y — clone already preserved them relative to old parent; if reparented, Figma keeps absolute-ish coords.
+        // clone() keeps parent-relative x/y; insertChild into a new parent preserves that relative offset (core translates absolute coords to match).
         log.push({ kind: "create", node: copy });
         registerSubtreeIds(nodes, copy);
         affected.push(copy);

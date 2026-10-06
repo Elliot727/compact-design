@@ -6,7 +6,7 @@ import { parseDocument } from "../src/parser";
 import { isPatchDocument, normalizeDocument, normalizePatchDocument } from "../src/normalize";
 import { validateDocument } from "../src/validate";
 import { lintDocument, validationIssues } from "../src/lint";
-import { applyPatch, lint, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, schema, validate, validatePatch } from "../src/index";
+import { applyPatch, lint, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, remapDelimitedIds, remapIssueKeyThroughDuplicate, schema, validate, validatePatch } from "../src/index";
 import type { InternalDocument, InternalNode } from "../src/types";
 import { indexDocument } from "../src/references";
 
@@ -1550,3 +1550,62 @@ test("duplicate: IMAGE keeps imageHash (reuse, not re-upload)", () => {
   const fills = nodeById(result, "photo-2").properties.styles.fills as Array<{ imageHash?: string }>;
   assert.equal(fills[0]?.imageHash, "abc123");
 });
+
+
+test("duplicate into a different parent keeps parent-relative x/y (Gate #41 repro)", () => {
+  const document = normalize({
+    canvas: { id: "page", width: 800, height: 400 },
+    nodes: [
+      { id: "A", type: "FRAME", x: 0, y: 0, w: 100, h: 100, children: [
+        { id: "box", type: "RECTANGLE", x: 10, y: 10, w: 20, h: 20 }
+      ] },
+      { id: "B", type: "FRAME", x: 300, y: 100, w: 100, h: 100, children: [] }
+    ]
+  });
+  const result = applyRaw(document, { op: "duplicate", id: "box", idSuffix: "-2", parent: "B" });
+  assert.deepEqual(childIds(result, "B"), ["box-2"]);
+  // Absolute = B origin + source-relative (10,10)
+  assert.deepEqual(nodeById(result, "box-2").properties.position, { x: 310, y: 110 });
+  // Same-parent duplicate does not shift
+  const same = applyRaw(document, { op: "duplicate", id: "box", idSuffix: "-s" });
+  assert.deepEqual(nodeById(same, "box-s").properties.position, { x: 10, y: 10 });
+});
+
+test("remapIssueKeyThroughDuplicate uses exact owner and delimited ids (no substring corruption)", () => {
+  const map = new Map([["card", "card-2"], ["card-title", "card-title-2"], ["a", "a-2"]]);
+  // Owner remaps exactly
+  assert.equal(
+    remapIssueKeyThroughDuplicate("MISSING|node:card|.bindings.fill|variable 'x' is not defined", map),
+    "MISSING|node:card-2|.bindings.fill|variable 'x' is not defined"
+  );
+  // Prefix-sharing: card-title must not become card-2-title
+  assert.equal(
+    remapIssueKeyThroughDuplicate("MISSING|node:card-title|.bindings.fill|node 'card-title' is broken", map),
+    "MISSING|node:card-title-2|.bindings.fill|node 'card-title-2' is broken"
+  );
+  // One-letter id must not corrupt prose
+  assert.equal(
+    remapIssueKeyThroughDuplicate("BAD|node:a|.text|layer has a bad value", map),
+    "BAD|node:a-2|.text|layer has a bad value"
+  );
+  assert.equal(remapDelimitedIds("layer has a bad value", map), "layer has a bad value");
+  assert.equal(remapDelimitedIds("node 'a' and 'card-title' and 'card'", map), "node 'a-2' and 'card-title-2' and 'card-2'");
+
+  // End-to-end: duplicate a node named like a prefix of another without corrupting exemption
+  const document = normalize({
+    canvas: { id: "page", width: 200, height: 100 },
+    nodes: [{ id: "host", type: "FRAME", w: 100, h: 80, children: [
+      { id: "card", type: "RECTANGLE", w: 10, h: 10, fill: "#FF0000", bindings: { fill: "missing-var" } },
+      { id: "card-title", type: "RECTANGLE", w: 10, h: 10, fill: "#00FF00", bindings: { fill: "missing-var" } },
+      { id: "a", type: "RECTANGLE", w: 10, h: 10, fill: "#0000FF", bindings: { fill: "missing-var" } }
+    ] }]
+  });
+  assert.equal(validateDocument(document).length, 3);
+  const ok = validatePatch(document, patchOf(
+    { op: "duplicate", id: "card", idSuffix: "-2" },
+    { op: "duplicate", id: "a", idSuffix: "-2" }
+  ));
+  assert.equal(ok.valid, true, ok.issues.map((i) => i.message).join("; "));
+  assert.equal(validateDocument(ok.document!).length, 5);
+});
+

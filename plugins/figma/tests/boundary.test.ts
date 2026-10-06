@@ -305,7 +305,7 @@ test("selection export still requires a selection", () => {
   assert.throws(() => planExport([], { scope: "selection", selectionIds: [] }), /Select at least one/);
 });
 
-test("export and patch paths read instance main components asynchronously under dynamic-page", () => {
+test("export and patch paths use async APIs under dynamic-page (no sync mainComponent / reactions setter)", () => {
   const exporter = readFileSync("src/plugin/exporter.ts", "utf8");
   const patch = readFileSync("src/plugin/patch.ts", "utf8");
   const nodes = readFileSync("src/plugin/nodes.ts", "utf8");
@@ -319,10 +319,12 @@ test("export and patch paths read instance main components asynchronously under 
     assert.doesNotMatch(cleaned, /\.mainComponent\b/, `${name} must not sync-read InstanceNode.mainComponent`);
     assert.doesNotMatch(cleaned, /\["mainComponent"\]|\['mainComponent'\]/, `${name} must not bracket-access mainComponent on a Figma node`);
     assert.doesNotMatch(cleaned, /(?<!get)getMainComponent\s*\(/, `${name} must not call sync getMainComponent()`);
+    assert.doesNotMatch(cleaned, /\.reactions\s*=/, `${name} must not sync-assign node.reactions (use setReactionsAsync)`);
   }
   assert.match(exporter, /getMainComponentAsync\s*\(/);
   assert.match(patch, /getMainComponentAsync\s*\(/);
   assert.match(patch, /loadAllPagesAsync\s*\(/);
+  assert.match(patch, /setReactionsAsync\s*\(/);
   assert.match(main, /await collectExportCandidates\(/);
   assert.match(readFileSync("manifest.json", "utf8"), /"documentAccess"\s*:\s*"dynamic-page"/);
 });
@@ -953,8 +955,10 @@ function createMockNode(type: string, name = type): MockNode {
       for (const child of this.children) copy.appendChild(child.clone());
       return copy;
     },
+    reactions: [] as Array<Record<string, unknown>>,
     getPluginData(key: string) { return this.pluginData[key] || ""; },
-    setPluginData(key: string, value: string) { this.pluginData[key] = value; }
+    setPluginData(key: string, value: string) { this.pluginData[key] = value; },
+    async setReactionsAsync(reactions: Array<Record<string, unknown>>) { this.reactions = reactions; }
   };
   installFigmaCopyGetters(node);
   return node;
@@ -2421,3 +2425,27 @@ test("Figma duplicate reuses imageHash on cloned IMAGE fills (no re-upload)", as
   const copyFills = (mockById((globalThis as { figma: { currentPage: MockNode } }).figma.currentPage, "photo-2").fills as Array<{ imageHash?: string }>);
   assert.equal(copyFills[0]?.imageHash, "hash-xyz");
 });
+
+
+test("lockstep: duplicate into a different parent keeps parent-relative x/y", async () => {
+  // Gate repro: A at (0,0) with box at (10,10); B at (300,100). Duplicate box into B → relative (10,10) inside B.
+  const document = normalize({
+    canvas: { id: "page", width: 800, height: 400 },
+    nodes: [
+      { id: "A", type: "FRAME", x: 0, y: 0, w: 100, h: 100, children: [
+        { id: "box", type: "RECTANGLE", x: 10, y: 10, w: 20, h: 20 }
+      ] },
+      { id: "B", type: "FRAME", x: 300, y: 100, w: 100, h: 100, children: [] }
+    ]
+  });
+  const final = await assertParity(document, [[{ op: "duplicate", id: "box", idSuffix: "-2", parent: "B" }]]);
+  const box2 = nodeById(final, "box-2");
+  // Core stores absolute: B(300,100) + relative(10,10) = (310,110)
+  assert.deepEqual(box2.properties.position, { x: 310, y: 110 });
+  const page = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch({ op: "duplicate", id: "box", idSuffix: "-2", parent: "B" }), emptyPatchContext() as never);
+  const figmaCopy = mockById(page, "box-2");
+  assert.equal(figmaCopy.parent && (figmaCopy.parent as MockNode).getPluginData("compactDesignId"), "B");
+  assert.deepEqual({ x: figmaCopy.x, y: figmaCopy.y }, { x: 10, y: 10 }, "Figma keeps parent-relative x/y after reparent");
+});
+

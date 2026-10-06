@@ -302,7 +302,11 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     }
     if (destParent) assertContainerParent(destParent, operationIndex, destParent.id, index);
     const copy = cloneSubtreeWithIds(sourceRef.node, map);
-    // Keep absolute x/y (same as source) — already absolute in core storage.
+    // Keep parent-relative x/y (same as move / Figma clone+insertChild): core stores
+    // absolute coords, so translate by the origin delta when the parent changes.
+    const fromOrigin = origin(sourceRef.parent);
+    const toOrigin = origin(destParent);
+    translate(copy, toOrigin.x - fromOrigin.x, toOrigin.y - fromOrigin.y);
     let at: number;
     if (operation.index !== undefined) {
       at = clampIndex(operation.index, destSiblings.length);
