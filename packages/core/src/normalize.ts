@@ -1,4 +1,5 @@
-import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, JsonValue, LetterSpacing, LineHeight, PatchOperation, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
+import { PATCH_SET_KEYS, patchSetShapeIssues } from "./patch-keys";
+import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, JsonValue, LetterSpacing, LineHeight, PatchOperation, PatchSetValues, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
 
 interface RawPaint extends JsonObject { type?: string; image?: string; fit?: string; opacity?: number; transform?: Transform; gradient?: string; angle?: number; stops?: Array<{ at: number; color: string | DesignColor }>; }
 interface RawEffect extends JsonObject {
@@ -136,6 +137,20 @@ function effect(value: RawEffect): DesignEffect {
   };
 }
 
+const OVERFLOW_DIRECTIONS: Record<string, DesignProperties["overflowDirection"]> = {
+  NONE: "NONE",
+  HORIZONTAL: "HORIZONTAL",
+  VERTICAL: "VERTICAL",
+  BOTH: "BOTH",
+  HORIZONTAL_SCROLLING: "HORIZONTAL",
+  VERTICAL_SCROLLING: "VERTICAL",
+  HORIZONTAL_AND_VERTICAL_SCROLLING: "BOTH"
+};
+
+function lineHeightValue(value: number | LineHeight): LineHeight {
+  return typeof value === "number" ? { unit: "PERCENT", value: value <= 3 ? value * 100 : value } : value;
+}
+
 const passthrough = [
   "cornerRadius", "cornerRadii", "opacity", "blendMode", "visible", "locked", "isMask", "clipsContent",
   "strokeWeight", "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeAlign",
@@ -167,25 +182,12 @@ function normalizeNode(node: CompactNode, parent: { x: number; y: number }, path
   if (type === "TEXT" && raw.alignment !== undefined) throw new Error(`${path}.alignment is not part of the current text API; use align.`);
   if (type === "TEXT" && raw.fontSize !== undefined) throw new Error(`${path}.fontSize is not part of the current text API; use font.size.`);
   Object.assign(props, Object.fromEntries(passthrough.filter((key) => raw[key] !== undefined).map((key) => [key, raw[key]])));
-  if (typeof raw.overflowDirection === "string") {
-    const overflowDirections: Record<string, DesignProperties["overflowDirection"]> = {
-      NONE: "NONE",
-      HORIZONTAL: "HORIZONTAL",
-      VERTICAL: "VERTICAL",
-      BOTH: "BOTH",
-      HORIZONTAL_SCROLLING: "HORIZONTAL",
-      VERTICAL_SCROLLING: "VERTICAL",
-      HORIZONTAL_AND_VERTICAL_SCROLLING: "BOTH"
-    };
-    props.overflowDirection = overflowDirections[raw.overflowDirection];
-  }
+  if (typeof raw.overflowDirection === "string") props.overflowDirection = OVERFLOW_DIRECTIONS[raw.overflowDirection];
   if (type === "TEXT") {
     const font = raw.font || {};
     props.text = raw.text !== undefined ? raw.text : (raw.runs || []).map((run) => run.text || "").join("");
     props.font = { family: font.family || "Arial", style: font.style || "Regular", size: font.size || 16 };
-    props.lineHeight = typeof raw.lineHeight === "number"
-      ? { unit: "PERCENT", value: raw.lineHeight <= 3 ? raw.lineHeight * 100 : raw.lineHeight }
-      : (raw.lineHeight || { unit: "AUTO" });
+    props.lineHeight = raw.lineHeight !== undefined ? lineHeightValue(raw.lineHeight) : { unit: "AUTO" };
     props.alignment = raw.align || "LEFT";
     for (const key of ["letterSpacing", "textDecoration", "paragraphSpacing", "paragraphIndent", "listSpacing", "hangingPunctuation", "hangingList", "textCase", "verticalAlignment", "textAutoResize", "textTruncation", "maxLines", "runs"]) {
       if (raw[key] !== undefined) Object.assign(props, { [key]: raw[key] });
@@ -308,6 +310,44 @@ export function normalizeDocument(value: unknown): InternalDocument {
   return result;
 }
 
+const SET_VALUE_RENAMES: Record<string, string> = { align: "alignment" };
+const SET_STRUCTURED_KEYS = new Set(["name", "x", "y", "w", "h", "fill", "fills", "stroke", "strokes", "effects", "shadow", "elevation", "lineHeight", "overflowDirection", "font", "constraints", "layout"]);
+
+/**
+ * Normalize a patch `set` without knowing the target. Only authored keys are
+ * produced; nothing is defaulted (no Arial, no TEXT fill). Unknown, deferred
+ * and immutable keys throw. Coordinates stay parent-relative.
+ */
+export function normalizePatchSet(set: JsonObject, path = "set"): PatchSetValues {
+  const issues = patchSetShapeIssues(set);
+  if (issues.length) throw new Error(`${path}.${issues[0]}`);
+  const raw = set as RawNode & JsonObject;
+  const values: PatchSetValues = {};
+  if (typeof raw.name === "string") values.name = raw.name;
+  if ("x" in raw || "y" in raw) values.position = { ...("x" in raw ? { x: raw.x } : {}), ...("y" in raw ? { y: raw.y } : {}) };
+  if ("w" in raw || "h" in raw) values.size = { ...("w" in raw ? { width: raw.w } : {}), ...("h" in raw ? { height: raw.h } : {}) };
+  const styles: NonNullable<PatchSetValues["styles"]> = {};
+  if (raw.fills !== undefined) styles.fills = raw.fills.map(paint);
+  else if (raw.fill !== undefined) styles.fills = [paint(raw.fill)];
+  if (raw.strokes !== undefined) styles.strokes = raw.strokes.map(paint);
+  else if (raw.stroke !== undefined) styles.strokes = [paint(raw.stroke)];
+  if (raw.effects !== undefined || raw.shadow !== undefined || raw.elevation !== undefined) styles.effects = effects(raw);
+  if (Object.keys(styles).length) values.styles = styles;
+  if (raw.lineHeight !== undefined) values.lineHeight = lineHeightValue(raw.lineHeight);
+  if (typeof raw.overflowDirection === "string") values.overflowDirection = OVERFLOW_DIRECTIONS[raw.overflowDirection];
+  if (raw.font !== undefined) values.font = { ...raw.font };
+  if (raw.constraints !== undefined) values.constraints = { ...(raw.constraints as JsonObject) } as PatchSetValues["constraints"];
+  if (raw.layout !== undefined) {
+    const layout = raw.layout as JsonObject;
+    values.layout = { ...layout, ...(layout.padding && typeof layout.padding === "object" ? { padding: { ...(layout.padding as JsonObject) } } : {}) } as PatchSetValues["layout"];
+  }
+  for (const key of PATCH_SET_KEYS) {
+    if (SET_STRUCTURED_KEYS.has(key) || raw[key] === undefined) continue;
+    Object.assign(values, { [SET_VALUE_RENAMES[key] || key]: raw[key] });
+  }
+  return values;
+}
+
 export function isPatchDocument(value: unknown): boolean { return Boolean(value && typeof value === "object" && !Array.isArray(value) && "patch" in value); }
 
 export function normalizePatchDocument(value: unknown): InternalPatchDocument {
@@ -333,10 +373,9 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
       set: operation.set as JsonObject | undefined
     };
     if (op === 'SET') {
-      const textKeys = ['text', 'font', 'lineHeight', 'letterSpacing', 'align', 'runs', 'textDecoration', 'paragraphSpacing', 'textAutoResize'];
       const set = operation.set as JsonObject;
-      const syntheticType = textKeys.some((key) => key in set) ? 'TEXT' : 'FRAME';
-      result.normalized = normalizeNode({ ...set, type: syntheticType, w: typeof set.w === "number" ? set.w : 1, h: typeof set.h === "number" ? set.h : 1 } as CompactNode, { x: 0, y: 0 }, `patch-${index}`).properties;
+      if (!Object.keys(set).length) throw new Error(`patch.operations[${index}].set must contain at least one key.`);
+      result.normalized = normalizePatchSet(set, `patch.operations[${index}].set`);
     }
     if (op === 'APPEND') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-append`);
     if (op === 'INSERT') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-insert`);

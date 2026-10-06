@@ -211,3 +211,26 @@ test("get_language covers insert and move patch operations", async () => {
   assert.match(patchTool!.description, /insert/);
   assert.match(patchTool!.description, /move/);
 });
+
+test("patch set semantics: guide and tool describe merge/replace/errors, and validate/figma_patch reject typo keys before Figma", async () => {
+  const guide = toolText(await rpc("tools/call", { name: "get_language", arguments: {} }));
+  assert.match(guide, /Unknown keys are ERRORs/);
+  assert.match(guide, /keeps direction and padding/);
+  assert.match(guide, /parent-relative/);
+  assert.match(guide, /Not patchable yet/);
+  assert.doesNotMatch(guide, /preserves all properties/);
+  const patchTool = TOOLS.find((tool) => tool.name === "figma_patch")!;
+  assert.match(patchTool.description, /deep-merge/);
+  assert.match(patchTool.description, /errors, never ignored/);
+  const typo = { patch: { operations: [{ op: "set", id: "title", set: { txet: "Hi" } }] } };
+  const validated = await rpc("tools/call", { name: "validate", arguments: { document: typo } });
+  assert.equal((validated?.result as { isError?: boolean }).isError, true);
+  assert.equal(JSON.parse(toolText(validated)).valid, false);
+  const patched = await rpc("tools/call", { name: "figma_patch", arguments: { document: typo } });
+  const payload = JSON.parse(toolText(patched)) as { patched: boolean; issues: Array<{ path: string }> };
+  assert.equal(payload.patched, false, "rejected before reaching the (absent) plugin");
+  assert.ok(payload.issues.some((issue) => /txet/.test(issue.path) || /txet/.test(JSON.stringify(issue))));
+  const deferred = { patch: { operations: [{ op: "set", id: "title", set: { prototype: [] } }] } };
+  const deferredResult = JSON.parse(toolText(await rpc("tools/call", { name: "figma_patch", arguments: { document: deferred } })));
+  assert.equal(deferredResult.patched, false);
+});

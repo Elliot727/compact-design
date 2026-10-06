@@ -3,6 +3,17 @@ import { completeMcpJob, startMcpPoll, type McpJob, type McpState } from "./brid
 import { prepareImages, requiredLocalAssets } from "./images";
 import type { ImportMode, InternalDocument, InternalNode, InternalPatchDocument } from "@compact-design/core";
 
+/** Paints carried by a patch (inserted nodes and normalized set fills/strokes) so images can be prepared. */
+function patchImageDocument(patch: InternalPatchDocument): InternalDocument {
+  const nodes: InternalNode[] = patch.patch.operations.flatMap((operation, index): InternalNode[] => {
+    if (operation.node) return [operation.node];
+    const styles = operation.normalized?.styles;
+    if (!styles?.fills && !styles?.strokes) return [];
+    return [{ id: `patch-image-${index}`, name: "Patch image", type: "FRAME", children: [], properties: { position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, rotation: 0, styles: { fills: styles.fills || [], strokes: styles.strokes || [], effects: [] } } }];
+  });
+  return { nodes, styles: [], variables: [] };
+}
+
 const input = document.querySelector<HTMLTextAreaElement>("#input")!;
 const button = document.querySelector<HTMLButtonElement>("#import")!;
 const status = document.querySelector<HTMLDivElement>("#status")!;
@@ -86,7 +97,9 @@ function updateSummary(): void {
   try {
     const parsed = parse(source);
     if (isPatchDocument(parsed)) {
-      currentPatch = normalizePatch(parsed); currentIssues = [];
+      const checked = validate(parsed);
+      if (!checked.valid || !checked.patch) { currentIssues = checked.issues; throw new Error(checked.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n") || "Invalid Compact Design patch"); }
+      currentPatch = checked.patch; currentIssues = [];
       summary.className = "summary valid"; summary.innerHTML = `<div class="summary-icon">✓</div><div class="summary-text"><div class="summary-title">Patch ready</div><div class="summary-detail">${currentPatch.patch.operations.length} validated operation${currentPatch.patch.operations.length === 1 ? "" : "s"}</div></div>`;
       renderPreview(null, currentPatch); previewStats.textContent = "Targets are checked in Figma before any patch operation is applied."; button.textContent = "Apply JSON patch"; button.disabled = false; return;
     }
@@ -154,7 +167,7 @@ button.onclick = async () => {
   try {
     if (currentPatch) {
       button.disabled = true; button.textContent = "Applying patch…";
-      const patchImages: InternalDocument = { nodes: currentPatch.patch.operations.flatMap((operation, index) => operation.node ? [operation.node] : operation.normalized ? [{ id: `patch-image-${index}`, name: "Patch image", type: "FRAME", properties: operation.normalized, children: [] }] : []), styles: [], variables: [] };
+      const patchImages = patchImageDocument(currentPatch);
       await prepareImages(patchImages, localAssets, (message) => setStatus(message));
       parent.postMessage({ pluginMessage: { type: "apply-patch", patch: currentPatch } }, "*"); return;
     }
@@ -209,7 +222,7 @@ startMcpPoll(async (job: McpJob) => {
     }
     if (job.type === "patch") {
       const patch = job.patch as InternalPatchDocument;
-      const patchImages: InternalDocument = { nodes: patch.patch.operations.flatMap((operation, index) => operation.node ? [operation.node] : operation.normalized ? [{ id: `patch-image-${index}`, name: "Patch image", type: "FRAME", properties: operation.normalized, children: [] }] : []), styles: [], variables: [] };
+      const patchImages = patchImageDocument(patch);
       await prepareImages(patchImages, localAssets, (message) => setStatus(message));
       parent.postMessage({ pluginMessage: { type: "apply-patch", patch } }, "*");
       await completeMcpJob(job.id, await waitForPlugin());

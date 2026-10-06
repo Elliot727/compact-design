@@ -6,7 +6,8 @@ import { parseDocument } from "../src/parser";
 import { isPatchDocument, normalizeDocument, normalizePatchDocument } from "../src/normalize";
 import { validateDocument } from "../src/validate";
 import { lintDocument, validationIssues } from "../src/lint";
-import { applyPatch, lint, normalize, normalizePatch, schema, validate } from "../src/index";
+import { applyPatch, lint, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, schema, validate, validatePatch } from "../src/index";
+import type { InternalDocument, InternalNode } from "../src/types";
 import { indexDocument } from "../src/references";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join("..", "..", "examples", name), "utf8"));
@@ -642,4 +643,379 @@ test("end-to-end insert+move+set patch validates the resulting multi-node docume
   // Original document is untouched (round-trip safety).
   assert.deepEqual(childIds(document, "card"), ["title", "body", "footer"]);
   assert.equal(findNode(document, "title")?.properties.text, "Before");
+});
+
+
+// --- Typed, merging patch set (PR1) -----------------------------------------
+
+const patchOf = (...operations: unknown[]) => ({ patch: { operations } });
+const setOp = (id: string, set: Record<string, unknown>) => ({ op: "set", id, set });
+const nodeById = (document: InternalDocument, id: string): InternalNode => {
+  const found = findNode(document, id);
+  assert.ok(found, `node ${id}`);
+  return found;
+};
+const applyRaw = (document: InternalDocument, ...operations: unknown[]) => {
+  const result = validatePatch(document, patchOf(...operations));
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+  return result.document!;
+};
+const rejects = (document: InternalDocument, pattern: RegExp, ...operations: unknown[]) => {
+  const result = validatePatch(document, patchOf(...operations));
+  assert.equal(result.valid, false, `expected rejection matching ${pattern}`);
+  assert.match(result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"), pattern);
+  return result.issues;
+};
+
+const baseDocument = () => normalize({
+  canvas: { id: "screen", width: 800, height: 600, fill: "#FFFFFF" },
+  nodes: [
+    { id: "outer", type: "FRAME", x: 100, y: 40, w: 500, h: 400, children: [
+      { id: "inner", type: "FRAME", x: 50, y: 30, w: 300, h: 200, children: [
+        { id: "leaf", type: "RECTANGLE", x: 10, y: 5, w: 20, h: 20, fill: "#FF0000" }
+      ] },
+      { id: "sibling", type: "FRAME", x: 200, y: 250, w: 100, h: 100, children: [] }
+    ] },
+    { id: "stack", type: "FRAME", x: 0, y: 460, w: 400, h: 100, layout: { direction: "HORIZONTAL", itemSpacing: 8, padding: { left: 16, top: 12, right: 16, bottom: 12 }, primaryAxisAlignItems: "CENTER" }, children: [
+      { id: "chip", type: "RECTANGLE", w: 40, h: 20, fill: "#00FF00" }
+    ] },
+    { id: "title", type: "TEXT", x: 20, y: 10, w: 300, h: 40, text: "Hello", font: { family: "Inter", style: "Bold", size: 24 }, fills: [] },
+    { id: "styled", type: "TEXT", x: 20, y: 60, w: 300, h: 40, text: "Hi there", font: { family: "Inter", style: "Regular", size: 16 }, fill: "#111111", runs: [{ start: 0, end: 2, font: { style: "Bold" } }] },
+    { id: "card", type: "RECTANGLE", x: 400, y: 10, w: 100, h: 100, effects: [{ type: "DROP_SHADOW", color: "#00000033", offset: { x: 0, y: 4 }, blur: 8 }, { type: "LAYER_BLUR", blur: 4 }] },
+    { id: "group", type: "GROUP", x: 600, y: 10, w: 50, h: 50, children: [{ id: "in-group", type: "RECTANGLE", w: 10, h: 10 }] }
+  ]
+});
+
+test("PATCH_SET_KEYS is the single source of truth and matches schema node props", () => {
+  const specSchema = JSON.parse(readFileSync("../../spec/compact-design.schema.json", "utf8"));
+  const nodeKeys = Object.keys(specSchema.$defs.node.properties);
+  const expected = nodeKeys.filter((key) => !(PATCH_SET_EXCLUDED_NODE_KEYS as readonly string[]).includes(key));
+  assert.deepEqual([...PATCH_SET_KEYS], expected);
+  assert.deepEqual(Object.keys(specSchema.$defs.patchSet.properties), expected);
+  assert.equal(specSchema.$defs.patchSet.additionalProperties, false);
+  assert.deepEqual(Object.keys(PATCH_SET_SEMANTICS).sort(), [...PATCH_SET_KEYS].sort());
+  assert.deepEqual(Object.keys(PATCH_SET_APPLIES_TO).sort(), [...PATCH_SET_KEYS].sort());
+  // Every patchSet property schema is the node property schema, except the partial
+  // nested patches and descriptions documenting deferred/immutable keys.
+  for (const key of expected) {
+    const { description: _description, ...patchProperty } = specSchema.$defs.patchSet.properties[key];
+    if (key === "layout") assert.deepEqual(patchProperty, { $ref: "#/$defs/layoutPatch" });
+    else if (key === "constraints") assert.deepEqual(patchProperty, { $ref: "#/$defs/constraintsPatch" });
+    else if (key === "font") assert.deepEqual(patchProperty, { $ref: "#/$defs/fontPatch" });
+    else assert.deepEqual(patchProperty, specSchema.$defs.node.properties[key], key);
+  }
+  assert.equal(specSchema.$defs.layoutPatch.required, undefined);
+  assert.deepEqual(specSchema.$defs.patchOperation.oneOf[0].properties.set, { $ref: "#/$defs/patchSet" });
+  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "instanceProperties", "variantAxes", "variant", "prototype", "styleRefs", "bindings", "variableModes"]);
+});
+
+test("a typo set key fails in the schema and in core", () => {
+  const typo = patchOf(setOp("title", { txet: "Oops" }));
+  const result = validate(typo);
+  assert.equal(result.valid, false);
+  assert.ok(result.issues.some((issue) => issue.code === "SCHEMA_ADDITIONALPROPERTIES" && issue.path.includes("/set")));
+  // The first issue names the offending key precisely, ahead of the oneOf noise.
+  assert.equal(result.issues[0].code, "PATCH_SET_UNSUPPORTED");
+  assert.equal(result.issues[0].path, "patch.operations[0].set.txet");
+  assert.match(result.issues[0].message, /unknown set key 'txet'/);
+  assert.throws(() => normalizePatch(typo), /unknown set key 'txet'/);
+  rejects(baseDocument(), /additional properties/, setOp("title", { txet: "Oops" }));
+  // Nested typos fail too.
+  assert.equal(validate(patchOf(setOp("stack", { layout: { itemSpaceing: 4 } }))).valid, false);
+  assert.equal(validate(patchOf(setOp("title", { font: { weight: 700 } }))).valid, false);
+  assert.equal(validate(patchOf(setOp("title", { font: {} }))).valid, false);
+  assert.throws(() => normalizePatch(patchOf(setOp("title", { font: {} }))), /non-empty object/);
+});
+
+test("patch documents no longer short-circuit validation", () => {
+  for (const set of [{ bindings: { fill: "brand" } }, { styleRefs: { fill: "Brand" } }, { variant: { State: "On" } }, { instanceProperties: { Label: "x" } }, { prototype: [] }, { svg: "<svg/>" }, { fill: "#000000", fills: ["#FFFFFF"] }]) {
+    const result = validate(patchOf(setOp("title", set)));
+    assert.equal(result.valid, false, JSON.stringify(set));
+  }
+  const deferred = validate(patchOf(setOp("title", { bindings: { fill: "brand" } })));
+  assert.equal(deferred.issues[0].code, "PATCH_SET_UNSUPPORTED");
+  assert.equal(deferred.issues[0].path, "patch.operations[0].set.bindings");
+  assert.match(deferred.issues[0].message, /cannot be patched yet/);
+});
+
+test("set on TEXT adds no defaults: no fill injection and no Arial", () => {
+  const document = baseDocument();
+  const normalized = normalizePatch(patchOf(setOp("title", { text: "Changed" }))).patch.operations[0].normalized!;
+  assert.deepEqual(normalized, { text: "Changed" });
+  const after = applyRaw(document, setOp("title", { text: "Changed" }));
+  assert.deepEqual(nodeById(after, "title").properties.styles.fills, []);
+  assert.deepEqual(nodeById(after, "title").properties.font, { family: "Inter", style: "Bold", size: 24 });
+  const shape = applyRaw(document, setOp("card", { cornerRadius: 4 }));
+  assert.deepEqual(nodeById(shape, "card").properties.styles.fills, [], "no fill default on other types either");
+});
+
+test("{font:{size:32}} keeps family and style; partial fonts merge", () => {
+  const document = baseDocument();
+  const sized = applyRaw(document, setOp("title", { font: { size: 32 } }));
+  assert.deepEqual(nodeById(sized, "title").properties.font, { family: "Inter", style: "Bold", size: 32 });
+  const restyled = applyRaw(document, setOp("title", { font: { style: "Regular" } }));
+  assert.deepEqual(nodeById(restyled, "title").properties.font, { family: "Inter", style: "Regular", size: 24 });
+});
+
+test("{layout:{itemSpacing:24}} keeps direction and padding; padding merges per side", () => {
+  const document = baseDocument();
+  const spaced = applyRaw(document, setOp("stack", { layout: { itemSpacing: 24 } }));
+  assert.deepEqual(nodeById(spaced, "stack").properties.layout, { direction: "HORIZONTAL", itemSpacing: 24, padding: { left: 16, top: 12, right: 16, bottom: 12 }, primaryAxisAlignItems: "CENTER" });
+  const padded = applyRaw(document, setOp("stack", { layout: { padding: { left: 40 } } }));
+  assert.deepEqual(nodeById(padded, "stack").properties.layout?.padding, { left: 40, top: 12, right: 16, bottom: 12 });
+  assert.equal(nodeById(padded, "stack").properties.layout?.itemSpacing, 8);
+});
+
+test("partial layout on a frame without Auto Layout errors unless direction is given", () => {
+  const document = baseDocument();
+  rejects(document, /set\.layout\.direction.*no Auto Layout yet/, setOp("outer", { layout: { itemSpacing: 12 } }));
+  const enabled = applyRaw(document, setOp("outer", { layout: { direction: "VERTICAL", itemSpacing: 12 } }));
+  assert.deepEqual(nodeById(enabled, "outer").properties.layout, { direction: "VERTICAL", itemSpacing: 12 });
+  rejects(document, /does not apply to RECTANGLE/, setOp("leaf", { layout: { direction: "VERTICAL" } }));
+  const stretch = patchOf(setOp("stack", { layout: { counterAxisAlignItems: "STRETCH" } }));
+  assert.equal(validate(stretch).valid, false, "schema layoutPatch excludes STRETCH");
+  assert.throws(() => normalizePatch(stretch), /STRETCH cannot be patched yet/);
+});
+
+test("constraints deep-merge over the Figma default", () => {
+  const document = baseDocument();
+  const once = applyRaw(document, setOp("leaf", { constraints: { horizontal: "CENTER" } }));
+  assert.deepEqual(nodeById(once, "leaf").properties.constraints, { horizontal: "CENTER", vertical: "MIN" });
+  const twice = applyRaw(once, setOp("leaf", { constraints: { vertical: "MAX" } }));
+  assert.deepEqual(nodeById(twice, "leaf").properties.constraints, { horizontal: "CENTER", vertical: "MAX" });
+});
+
+test("effects, shadow and elevation replace the whole effect list", () => {
+  const document = baseDocument();
+  assert.equal(nodeById(document, "card").properties.styles.effects.length, 2);
+  const shadowed = applyRaw(document, setOp("card", { shadow: { y: 2, blur: 6 } }));
+  assert.deepEqual(nodeById(shadowed, "card").properties.styles.effects.map((effect) => [effect.type, effect.radius, effect.offset?.y]), [["DROP_SHADOW", 6, 2]]);
+  const cleared = applyRaw(document, setOp("card", { effects: [] }));
+  assert.deepEqual(nodeById(cleared, "card").properties.styles.effects, []);
+  const elevated = applyRaw(document, setOp("card", { elevation: "FLOATING" }));
+  assert.equal(nodeById(elevated, "card").properties.styles.effects.length, 2);
+  const fills = applyRaw(document, setOp("leaf", { fills: ["#000000", "#FFFFFF"] }));
+  assert.equal(nodeById(fills, "leaf").properties.styles.fills.length, 2, "fills replace, not append");
+});
+
+test("runs vs text: text is content, runs style ranges; styled targets reject content changes", () => {
+  const document = baseDocument();
+  const both = applyRaw(document, setOp("title", { text: "Big deal", runs: [{ start: 0, end: 3, font: { size: 40 } }] }));
+  assert.equal(nodeById(both, "title").properties.text, "Big deal");
+  assert.deepEqual(nodeById(both, "title").properties.runs, [{ start: 0, end: 3, font: { size: 40 } }]);
+  const runsOnly = applyRaw(document, setOp("title", { runs: [{ text: "One " }, { text: "two", fill: "#FF0000" }] }));
+  assert.equal(nodeById(runsOnly, "title").properties.text, "One two");
+  rejects(document, /every run must carry its own text/, setOp("title", { runs: [{ start: 0, end: 2 }] }));
+  rejects(document, /per-range text styling/, setOp("styled", { text: "New" }));
+  // Node-level typography on a styled node applies to the whole text: run overrides of that attribute clear.
+  const restyled = applyRaw(document, setOp("styled", { font: { family: "Roboto", style: "Medium" } }));
+  assert.deepEqual(nodeById(restyled, "styled").properties.runs, [{ start: 0, end: 2 }]);
+  rejects(document, /set font.family and font.style together/, setOp("styled", { font: { family: "Roboto" } }));
+  const sized = applyRaw(document, setOp("styled", { font: { size: 20 } }));
+  assert.deepEqual(nodeById(sized, "styled").properties.runs, [{ start: 0, end: 2, font: { style: "Bold" } }]);
+});
+
+test("x/y are parent-relative at any depth and move the subtree", () => {
+  const document = baseDocument();
+  // screen(0,0) > outer(100,40) > inner(+50,+30) > leaf(+10,+5)
+  assert.deepEqual(nodeById(document, "leaf").properties.position, { x: 160, y: 75 });
+  const moved = applyRaw(document, setOp("leaf", { x: 20 }));
+  assert.deepEqual(nodeById(moved, "leaf").properties.position, { x: 170, y: 75 }, "x relative to inner; y untouched");
+  const innerMoved = applyRaw(document, setOp("inner", { x: 0, y: 0 }));
+  assert.deepEqual(nodeById(innerMoved, "inner").properties.position, { x: 100, y: 40 });
+  assert.deepEqual(nodeById(innerMoved, "leaf").properties.position, { x: 110, y: 45 }, "descendants keep their relative offset");
+  const inserted = applyRaw(document, { op: "insert", parent: "inner", index: 0, node: { id: "new", type: "RECTANGLE", x: 1, y: 2, w: 5, h: 5, children: [] } });
+  assert.deepEqual(nodeById(inserted, "new").properties.position, { x: 151, y: 72 }, "inserted nodes are parent-relative too");
+  rejects(document, /children of a GROUP cannot be positioned/, setOp("in-group", { x: 1 }));
+  rejects(document, /parent uses Auto Layout/, setOp("chip", { x: 5 }));
+  const absolute = applyRaw(document, setOp("chip", { layoutPositioning: "ABSOLUTE", x: 5, y: 6 }));
+  assert.deepEqual(nodeById(absolute, "chip").properties.position, { x: 5, y: 466 });
+});
+
+test("move keeps parent-relative x/y, then set x is relative to the new parent", () => {
+  const document = baseDocument();
+  const result = applyRaw(document, { op: "move", id: "leaf", parent: "sibling", index: 0 }, setOp("leaf", { x: 7 }));
+  // sibling at (100+200, 40+250) = (300, 290); leaf keeps y offset 5, x becomes 7.
+  assert.deepEqual(nodeById(result, "leaf").properties.position, { x: 307, y: 295 });
+});
+
+test("set on a node inserted earlier in the same patch applies in core (Figma preflight rejects it)", () => {
+  const document = baseDocument();
+  const result = applyRaw(document, { op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 }));
+  assert.equal(nodeById(result, "fresh").properties.size.width, 9);
+});
+
+test("set rejects keys that do not apply to the target type and bound or style-linked fields", () => {
+  const document = baseDocument();
+  rejects(document, /'text' does not apply to RECTANGLE/, setOp("leaf", { text: "x" }));
+  rejects(document, /'w' does not apply to GROUP/, setOp("group", { w: 80 }));
+  rejects(document, /FILL requires an Auto Layout parent/, setOp("leaf", { layoutSizingHorizontal: "FILL" }));
+  rejects(document, /only applies to children of an Auto Layout parent/, setOp("leaf", { layoutGrow: 1 }));
+  rejects(document, /node 'missing' was not found/, setOp("missing", { name: "x" }));
+  const bound = normalize({
+    canvas: { width: 100, height: 100 },
+    variables: [{ name: "Tokens", items: [{ id: "brand", name: "brand", type: "COLOR", value: { r: 1, g: 2, b: 3 } }, { id: "size", name: "size", type: "FLOAT", value: 10 }] }],
+    styles: [{ id: "body", name: "Body", type: "TEXT", font: { family: "Inter", style: "Regular", size: 14 } }],
+    nodes: [
+      { id: "box", type: "RECTANGLE", w: 10, h: 10, fill: "#010203", bindings: { fill: "brand", width: "size" } },
+      { id: "copy", type: "TEXT", w: 10, h: 10, text: "x", styleRefs: { text: "body" } }
+    ]
+  });
+  rejects(bound, /variable-bound field\(s\) width/, setOp("box", { w: 20 }));
+  rejects(bound, /linked to a text style/, setOp("copy", { font: { size: 20 } }));
+  const recoloured = applyRaw(bound, setOp("box", { fill: "#FFFFFF" }));
+  assert.deepEqual(nodeById(recoloured, "box").properties.bindings, { width: "size" }, "setting fill detaches the fill binding, as in Figma");
+});
+
+test("validatePatch reports bad references in the patched document", () => {
+  const document = baseDocument();
+  const issues = rejects(document, /component 'ghost' is not defined/, { op: "append", parent: "sibling", node: { id: "inst", type: "INSTANCE", componentId: "ghost", w: 5, h: 5 } });
+  assert.equal(issues[0].code, "PATCH_RESULT_INVALID");
+  rejects(document, /variable 'nope' is not defined/, { op: "append", parent: "sibling", node: { id: "b", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "nope" } } });
+  rejects(document, /style 'Nope' is not defined/, { op: "append", parent: "sibling", node: { id: "s", type: "RECTANGLE", w: 5, h: 5, styleRefs: { fill: "Nope" } } });
+  assert.throws(() => applyPatch(document, normalizePatch(patchOf({ op: "append", parent: "sibling", node: { id: "inst", type: "INSTANCE", componentId: "ghost", w: 5, h: 5 } }))), PatchError);
+});
+
+// A document that is already invalid before any patch: two missing variables,
+// plus valid components, an instance and two variant sets for indirect issues.
+const preInvalidDocument = () => normalize({
+  canvas: { id: "screen", width: 800, height: 600, fill: "#FFFFFF" },
+  variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "ink", name: "ink", type: "COLOR", values: { Light: { r: 17, g: 17, b: 17 } } }] }],
+  nodes: [
+    { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 10, h: 10, fill: "#FF0000", bindings: { fill: "missing-var" } },
+    { id: "b", type: "RECTANGLE", x: 20, y: 0, w: 10, h: 10, fill: "#00FF00" },
+    { id: "box", type: "FRAME", x: 0, y: 100, w: 300, h: 200, children: [
+      { id: "x", type: "RECTANGLE", x: 0, y: 0, w: 10, h: 10 },
+      { id: "y", type: "RECTANGLE", x: 20, y: 0, w: 10, h: 10, fill: "#0000FF", bindings: { fill: "missing-2" } }
+    ] },
+    { id: "other", type: "FRAME", x: 400, y: 100, w: 300, h: 200, children: [] },
+    { id: "comp", type: "COMPONENT", x: 0, y: 400, w: 40, h: 40 },
+    { id: "inst", type: "INSTANCE", x: 100, y: 400, w: 40, h: 40, componentId: "comp" },
+    { id: "set-sm", type: "COMPONENT_SET", x: 200, y: 400, w: 100, h: 50, variantAxes: { size: ["sm"] }, children: [
+      { id: "sm-1", type: "COMPONENT", w: 40, h: 40, variant: { size: "sm" } },
+      { id: "sm-2", type: "COMPONENT", x: 50, w: 40, h: 40, variant: { size: "sm" } }
+    ] },
+    { id: "set-lg", type: "COMPONENT_SET", x: 400, y: 400, w: 100, h: 50, variantAxes: { size: ["lg"] }, children: [
+      { id: "lg-1", type: "COMPONENT", w: 40, h: 40, variant: { size: "lg" } }
+    ] }
+  ]
+});
+const preExisting = /missing-var|missing-2/;
+
+test("post-patch validation ignores issues already in the input (Gate repro: missing variable on a, rename b)", () => {
+  const document = preInvalidDocument();
+  const before = validateDocument(document);
+  assert.equal(before.length, 2, before.join("; "));
+  assert.match(before.join("\n"), /variable 'missing-var' is not defined/);
+  const result = validatePatch(document, patchOf(setOp("b", { name: "renamed" })));
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(nodeById(result.document!, "b").name, "renamed");
+  assert.deepEqual(validateDocument(result.document!), before, "pre-existing issues are still there, untouched, and not reported");
+  assert.doesNotThrow(() => applyPatch(document, normalizePatch(patchOf(setOp("b", { name: "renamed" })))));
+});
+
+test("post-patch validation still fails on issues the patch introduces and names only those", () => {
+  const document = preInvalidDocument();
+  const patch = patchOf(setOp("b", { name: "renamed" }), { op: "append", parent: "other", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "brand-new" } } });
+  const result = validatePatch(document, patch);
+  assert.equal(result.valid, false);
+  assert.equal(result.issues.length, 1, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(result.issues[0].code, "PATCH_RESULT_INVALID");
+  assert.match(result.issues[0].message, /node 'fresh'.*variable 'brand-new' is not defined/);
+  assert.doesNotMatch(JSON.stringify(result.issues), preExisting);
+  assert.throws(() => applyPatch(document, normalizePatch(patch)), (error: unknown) => error instanceof PatchError && error.issues.length === 1 && /brand-new/.test(error.message) && !preExisting.test(error.message));
+  // A second copy of an existing problem is new, too: the comparison is a multiset per node.
+  const copy = validatePatch(document, patchOf({ op: "append", parent: "other", node: { id: "twin", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "missing-var" } } }));
+  assert.equal(copy.valid, false);
+  assert.equal(copy.issues.length, 1);
+  assert.match(copy.issues[0].message, /node 'twin'/);
+  // The diff is uncapped: with more than 30 pre-existing issues a new one is still found.
+  const noisy = normalize({ canvas: { id: "screen", width: 800, height: 600 }, nodes: [
+    ...Array.from({ length: 35 }, (_, index) => ({ id: `n${index}`, type: "RECTANGLE", w: 5, h: 5, bindings: { fill: `gone-${index}` } })),
+    { id: "host", type: "FRAME", w: 50, h: 50, children: [] }
+  ] });
+  const late = validatePatch(noisy, patchOf({ op: "append", parent: "host", node: { id: "late", type: "RECTANGLE", w: 5, h: 5, bindings: { fill: "gone-late" } } }));
+  assert.equal(late.valid, false);
+  assert.deepEqual(late.issues.map((issue) => /gone-late/.test(issue.message)), [true]);
+});
+
+test("touching a node that already has an issue does not count that issue as new", () => {
+  const document = preInvalidDocument();
+  const result = validatePatch(document, patchOf(setOp("a", { name: "still broken", x: 5, opacity: 0.5 }), setOp("y", { name: "also broken", w: 12 })));
+  assert.equal(result.valid, true, result.issues.map((issue) => issue.message).join("; "));
+  assert.equal(validateDocument(result.document!).length, 2);
+  // Fixing the issue (replacing the bound fill detaches the binding) is fine as well.
+  const fixed = validatePatch(document, patchOf(setOp("a", { fill: "#123456" })));
+  assert.equal(fixed.valid, true);
+  assert.equal(validateDocument(fixed.document!).length, 1);
+});
+
+test("issue identity is node id + property path, so index shifts from insert, move and remove don't make old issues new", () => {
+  const document = preInvalidDocument();
+  const ok = (label: string, ...operations: unknown[]) => {
+    const result = validatePatch(document, patchOf(...operations));
+    assert.equal(result.valid, true, `${label}: ${result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
+    assert.equal(validateDocument(result.document!).length, 2, `${label}: pre-existing issues remain`);
+    return result.document!;
+  };
+  // (a) insert a sibling before nodes that already have issues: y's and a's paths both shift.
+  ok("insert in box", { op: "insert", parent: "box", index: 0, node: { id: "new-1", type: "RECTANGLE", w: 5, h: 5 } });
+  ok("insert at root", { op: "insert", parent: "screen", index: 0, node: { id: "new-2", type: "FRAME", w: 5, h: 5, children: [] } });
+  // (b) move and remove that shift indexes, including moving the broken node itself.
+  ok("reorder", { op: "move", id: "x", parent: "box", index: 1 });
+  ok("move broken node", { op: "move", id: "y", parent: "other", index: 0 });
+  ok("move ahead of a", { op: "move", id: "other", parent: "screen", index: 0 });
+  ok("remove sibling", { op: "remove", id: "x" });
+  ok("remove before a", { op: "remove", id: "b" }, { op: "remove", id: "other" });
+  // Index-shifting remove plus insert plus move in one patch.
+  ok("combined", { op: "remove", id: "x" }, { op: "insert", parent: "screen", index: 0, node: { id: "new-3", type: "RECTANGLE", w: 5, h: 5 } }, { op: "move", id: "a", parent: "other", index: 0 });
+});
+
+test("issues the patch causes on nodes it only touched indirectly are still reported", () => {
+  const document = preInvalidDocument();
+  // Removing a component breaks the untouched instance that uses it.
+  const removed = validatePatch(document, patchOf({ op: "remove", id: "comp" }));
+  assert.equal(removed.valid, false);
+  assert.equal(removed.issues.length, 1);
+  assert.match(removed.issues[0].message, /node 'inst'.*component 'comp' is not defined/);
+  // Moving a variant into a set that doesn't declare its value creates a new conflict.
+  const moved = validatePatch(document, patchOf({ op: "move", id: "sm-2", parent: "set-lg", index: 1 }));
+  assert.equal(moved.valid, false);
+  assert.equal(moved.issues.length, 1, moved.issues.map((issue) => issue.message).join("; "));
+  assert.match(moved.issues[0].message, /node 'sm-2'.*value 'sm' is not declared in variantAxes/);
+  assert.doesNotMatch(JSON.stringify([...removed.issues, ...moved.issues]), preExisting);
+});
+
+test("e2e: the showcase document goes through a sequence of set patches, validates, and round-trips", () => {
+  const original = normalize(fixture("design-language-showcase.json"));
+  assert.deepEqual(validateDocument(original), []);
+  const chartBefore = nodeById(original, "revenue-chart");
+  const chartTextBefore = chartBefore.children[0].properties.position;
+  const steps: unknown[][] = [
+    [setOp("revenue-chart", { x: 60, cornerRadius: 12 })],
+    [setOp("topbar", { layout: { itemSpacing: 24 } }), setOp("metric-row", { layout: { padding: { left: 4 } } })],
+    [setOp("upgrade-card", { fill: "#101828", effects: [] }), setOp("sidebar", { w: 280 })],
+    [setOp("main", { name: "Main content", opacity: 0.95 })],
+    [{ op: "move", id: "revenue-chart", parent: "main", index: 0 }, setOp("revenue-chart", { y: 400 })]
+  ];
+  let current = original;
+  for (const operations of steps) current = applyRaw(current, ...operations);
+  assert.deepEqual(validateDocument(current), []);
+  const main = nodeById(current, "main");
+  const chart = nodeById(current, "revenue-chart");
+  assert.equal(main.name, "Main content");
+  assert.deepEqual(chart.properties.position, { x: main.properties.position.x + 60, y: main.properties.position.y + 400 });
+  const chartText = chart.children[0].properties.position;
+  assert.deepEqual({ x: chartText.x - chart.properties.position.x, y: chartText.y - chart.properties.position.y }, { x: chartTextBefore.x - chartBefore.properties.position.x, y: chartTextBefore.y - chartBefore.properties.position.y }, "children ride along");
+  const topbar = nodeById(current, "topbar").properties.layout!;
+  assert.equal(topbar.itemSpacing, 24);
+  assert.equal(topbar.direction, nodeById(original, "topbar").properties.layout?.direction);
+  assert.deepEqual(nodeById(current, "metric-row").properties.layout?.padding, { ...nodeById(original, "metric-row").properties.layout?.padding, left: 4 });
+  // Round trip: the original is untouched and replaying the same sequence is deterministic.
+  assert.deepEqual(nodeById(original, "revenue-chart").properties.position, chartBefore.properties.position);
+  let replay = original;
+  for (const operations of steps) replay = applyRaw(replay, ...operations);
+  assert.deepEqual(replay, current);
+  // A patched document is a valid input for further patches.
+  assert.equal(validatePatch(current, patchOf(setOp("main", { opacity: 1 }))).valid, true);
 });

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+**Breaking (pre-1.0): patch `set` now has a typed contract.**
+
+- Unknown `set` keys now fail. The schema's new `$defs.patchSet` (`additionalProperties: false`), `normalizePatch`, `validatePatch`, and the Figma plugin all reject them. Previously, typos validated and then did nothing. `validate()` no longer reports every patch document as valid.
+- **Existing patches that use absolute x/y will now land in a different place.** Patch `set` x/y are now parent-relative in core, as authoring and the Figma plugin already were. Before this change, core treated them as absolute canvas coordinates. `insert`/`append` node coordinates are parent-relative in core too, and `move` now keeps a node's parent-relative offset in core, as Figma does. Rewrite such patches with coordinates relative to the target's parent.
+- `layout`, `layout.padding`, `font`, and `constraints` deep-merge. Paint, effect, run, grid, path, dash, and corner-radii arrays replace. `{ "font": { "size": 32 } }` no longer resets the family to Arial, and a partial layout no longer wipes padding or alignment. A set adds no defaults (no TEXT fill injection).
+- Keys that cannot be applied are errors in both core and Figma: `bindings`, `styleRefs`, `variableModes`, `prototype`, `componentId`, `componentProperties`, `instanceProperties`, `variantAxes`, `variant`, `svg`, keys that do not apply to the target type, and Auto Layout or text-styling conflicts (see DESIGN-LANGUAGE.md). Previously, Figma silently ignored about half of the node keys.
+- New core exports: `PATCH_SET_KEYS`, `PATCH_SET_SEMANTICS`, `PATCH_SET_APPLIES_TO`, `patchSetTargetIssues`, `validatePatch(document, patch)`, `newDocumentIssues(before, after)`, and `PatchError`. `applyPatch` now validates the patched document and throws `PatchError`. `PatchOperation.normalized` is now a type-agnostic `PatchSetValues` with only the authored keys. Only issues the patch introduces fail it. Issues already in the input document, compared by node id and property path rather than array index, never block a patch.
+- Figma: patch rollback now replays an ordered undo log with backups kept in a hidden holder frame. This fixes stale backups when a `set` follows a `move` of the same node, or when an ancestor is set after its children. After updating, reload the Figma plugin from `plugins/figma/manifest.json`.
+
 ## 0.2.0 — 2026-10-06
 
 Published packages: `@compact-design/core`, `@compact-design/html`, `@compact-design/mcp` (Figma plugin is not on npm).

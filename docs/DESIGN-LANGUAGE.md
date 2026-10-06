@@ -14,7 +14,7 @@ Every imported canvas and layer stores its JSON `id` as private Figma plugin dat
 - **Update matching IDs** replaces matching imported canvases in their existing layer-stack position and creates unmatched canvases. Use patches for surgical child-layer edits.
 - **Replace matching canvases** explicitly replaces every matching canvas with the supplied definition.
 
-Full-document update is canvas-granular and rebuilds the contents of a matching canvas. A JSON patch is node-granular and preserves all properties it does not mention. Existing canvases are cloned temporarily so failures restore the previous design.
+Full-document update is canvas-granular and rebuilds the contents of a matching canvas. A JSON patch is node-granular: `set` changes only the keys it lists, with the merge rules in [Patch `set` semantics](#patch-set-semantics). Existing canvases are cloned temporarily so failures restore the previous design.
 
 Give every layer that may be updated or patched an explicit stable ID. Generated fallback IDs depend on tree position and should not be treated as long-term identifiers.
 
@@ -46,13 +46,44 @@ A patch is the second accepted top-level document form. It targets layers previo
 }
 ```
 
-- `set` changes only the listed geometry, appearance, text, layout, constraints, or grid fields.
+- `set` changes only the keys it lists (see [Patch `set` semantics](#patch-set-semantics)). Unknown keys are errors.
 - `remove` deletes the matching node.
 - `append` creates a native child under a matching container (equivalent to `insert` at `index = children.length`). It uses the same parent checks as `insert` (missing parent, non-container, INSTANCE or inside an INSTANCE).
 - `insert` creates a native child at `index` under a matching container. `index` is a non-negative integer; on apply it is clamped to `[0, children.length]` so oversized values append.
 - `move` reparents an existing node (or reorders within the same parent) to `index`. For same-parent moves, `index` is the **final** position after the node is removed. Moving a node under itself or a descendant, moving the document root, moving a node **out of** an INSTANCE, targeting a missing id/parent, or choosing a non-container / INSTANCE parent are errors.
 
-All targets, parents, and appended IDs are checked before the first operation against layers previously imported by this plugin (compact-design plugin data only — raw Figma ids are not accepted). Existing changed/removed nodes are cloned for rollback; inserts are removed and moves restored to their original parent/index if a later op fails. The Figma applicator preflights against the current page index, so a parent created earlier in the **same** patch is not yet visible there (use separate patches, or rely on core for abstract apply). Patch image fills use the same remote, local-file, embedded-image and downscaling pipeline as full documents.
+All targets, parents, and appended IDs are checked before the first operation against layers previously imported by this plugin (compact-design plugin data only — raw Figma ids are not accepted). The Figma applicator preflights against the current page index, so a node or parent created earlier in the **same** patch is not visible there: a `set`, `remove`, or `move` that targets it, or an `insert`/`append` under it, fails preflight and nothing changes. Put the properties on the inserted node instead, or use a second patch. Core's abstract `applyPatch` / `validatePatch` does accept such targets. This is the one known difference between the engines.
+
+Patches are atomic in Figma. Every `set` is checked against the rules below before its target is touched. Each changed or removed node is cloned into a hidden "Compact Design patch backup" frame before it is changed. Inserts are removed, and moves go back to their original parent, index, and x/y, if a later operation fails. The undo log is replayed in reverse, so a `set` after a `move` of the same node, or a `set` on an ancestor after edits to its children, also restores cleanly. The holder frame is deleted when the patch finishes. A layer restored after a failure is the clone, so it gets a new Figma node id. Patch image fills use the same remote, local-file, embedded-image and downscaling pipeline as full documents.
+
+### Patch `set` semantics
+
+`set` accepts exactly the keys in `$defs.patchSet` of the schema. That is every node property except `id`, `type`, `children`, and `coordinateMode`. Core exports the same list as `PATCH_SET_KEYS`, and the Figma plugin applies from that list. A typo such as `"txet"` fails schema validation, `normalizePatch`, `validatePatch`, and the Figma plugin. Set values are normalized without guessing the node type and **without defaults**: no Arial, no white TEXT fill, no `AUTO` line height. The rules that depend on the target (which keys apply to which type, Auto Layout, text styling) run at apply time against the real target, in core and in Figma, through the same `patchSetTargetIssues` function.
+
+| Keys | Semantics |
+| --- | --- |
+| `layout`, `layout.padding` | **Deep merge.** `{ "layout": { "itemSpacing": 24 } }` keeps direction, padding, and alignment. `{ "layout": { "padding": { "left": 8 } } }` keeps the other three sides. |
+| `font` | **Merge.** `{ "font": { "size": 32 } }` keeps family and style. |
+| `constraints` | **Merge.** A missing axis keeps its current value, or Figma's default `MIN` if the node had no constraints. |
+| `fill`/`fills`, `stroke`/`strokes` | **Replace** the whole paint list. Setting both forms at once is an error. Replacing fills detaches a `bindings.fill` variable and a `styleRefs.fill` style, just as assigning paints does in Figma. Strokes do the same with `stroke`. |
+| `effects`, `shadow`, `elevation` | **Replace** the whole effect list. When several of these are set together, they combine as in authoring: elevation preset, then shadows, then effects. `{ "effects": [] }` clears all effects. |
+| `runs`, `layoutGrids`, `vectorPaths`, `dashPattern`, `cornerRadii` | **Replace** the whole array. |
+| `x`, `y` | **Parent-relative**, the same as authoring and Figma. The node's whole subtree moves with it. |
+| every other key | **Scalar replace.** `align` maps to the canonical `alignment`. `lineHeight` numbers become percentages, as in authoring. |
+| `bindings`, `styleRefs`, `variableModes`, `prototype`, `componentId`, `componentProperties`, `instanceProperties`, `variantAxes`, `variant` | **Not patchable yet.** These are rejected with `PATCH_SET_UNSUPPORTED` (planned follow-up). Re-import the node, or remove and insert it. |
+| `svg` | **Never patchable in place.** Remove the node and insert a new SVG node. |
+
+Target rules. Each is an error in both engines, never a silent no-op:
+
+- A key must apply to the target type. For example, `text`, `font`, and `runs` apply only to TEXT. `layout`, `layoutGrids`, `overflowDirection`, and `numberOfFixedChildren` apply only to FRAME and COMPONENT. `w`/`h` are rejected on GROUP and BOOLEAN_OPERATION, whose bounds come from their children.
+- **Partial layout on a frame without Auto Layout:** this is an error unless `layout.direction` is given. With a direction, Auto Layout is enabled exactly as on import, and unmentioned fields take the import defaults (FIXED sizing, MIN alignment, 0 spacing and padding). `layout.counterAxisAlignItems: "STRETCH"` cannot be patched yet. Set `layoutAlign: "STRETCH"` on the children instead.
+- **x/y under Auto Layout:** this is an error unless the node also has, or is given, `layoutPositioning: "ABSOLUTE"`. **x/y on a child of a GROUP or BOOLEAN_OPERATION** is an error. Move the group itself, or move the node out first. `layoutAlign`, `layoutGrow`, `layoutPositioning`, and `layoutSizing*: "FILL"` need an Auto Layout parent. `layoutSizing*: "HUG"` needs a TEXT node or an Auto Layout frame. `min/max` sizes need Auto Layout on the node or its parent. `numberOfFixedChildren` cannot exceed the child count.
+- **Text content vs runs:** when both `text` and `runs` are set, `text` is the content and the runs style ranges of it, as in authoring. `runs` alone sets the content to the concatenated run texts, so every run must then have `text`. `text` alone clears the old runs. Replacing the content of a node that already has **per-range styling** is rejected for now. Remove and insert the node instead. In core, per-range styling means a run with font, fill, letterSpacing, textDecoration, or link. In Figma, it means any text property that is `figma.mixed`.
+- **Node-level typography applies to the whole text**, as in Figma. Setting `font` fields, `fill`, `letterSpacing`, or `textDecoration` on a TEXT node clears the matching overrides on its existing runs.
+- **Mixed fonts (`figma.mixed`):** Figma loads every range font before editing. `font.size` alone applies to all ranges. `font.family` without `font.style`, or the reverse, is an error on mixed-font text. A font that Figma cannot load is an error, and the whole patch rolls back. The patch never falls back to Arial.
+- **Linked text styles and variable bindings:** changing `font`, `lineHeight`, `letterSpacing`, paragraph or list spacing, `textCase`, `textDecoration`, or hanging punctuation on a node linked to a text style is rejected, because the change would detach the style. Overwriting a variable-bound field is also rejected, for example `w` when `bindings.width` exists. Unbinding by patch comes in a follow-up.
+
+`validate(patch)` no longer reports every patch document as valid. It checks the schema and core's key rules, which cover unknown, deferred, conflicting, and empty keys. `validatePatch(document, patch)` also runs the target rules and `validateDocument` on the patched result. This reports structured issues such as `PATCH_SET_INVALID`, `PATCH_OPERATION`, or `PATCH_RESULT_INVALID` (for example an undefined variable in an inserted node's `bindings`, an unknown `styleRefs` style, or a missing component). `applyPatch` throws `PatchError`, with the same issues, under the same conditions. Only issues the patch **introduces** are reported. Issues already in the input document never block a patch, even on nodes the patch touches. Issues the patch causes on nodes it only touched indirectly are still reported: for example, removing a component breaks an untouched instance, and moving a variant into a set that doesn't declare its value creates a conflict. Issues are compared by code, owning node id (or variable or collection name), the property path inside that node, and message. Array indexes are never part of the comparison, so an insert, move or remove that shifts indexes does not make an old issue look new. The comparison counts copies, so a second copy of an existing problem on a new node is new.
 
 ## Preview, repair output, and design lint
 
@@ -147,7 +178,7 @@ Canvas width and height are required positive numbers. Canvas `x` and `y` defaul
 
 ## Coordinates
 
-Coordinates are parent-relative. A child at `x: 24, y: 16` is placed 24 pixels from its parent’s left and 16 pixels from its top.
+Coordinates are parent-relative. A child at `x: 24, y: 16` is placed 24 pixels from its parent’s left and 16 pixels from its top. Patch `set` x/y, and the nodes passed to `insert`/`append`, use the same parent-relative convention. `move` keeps the node's parent-relative x/y, so a node moved under a new parent keeps its offset from that parent's origin.
 
 Use `coordinateMode: "ABSOLUTE"` only when a node already uses canvas coordinates. Width and height must be finite positive numbers. Numeric strings, CSS units, `NaN`, and `Infinity` are invalid.
 

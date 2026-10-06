@@ -179,7 +179,7 @@ export async function effectsFromData(values: DesignEffect[], label = "node", im
   return result;
 }
 
-function applyEffects(node: SceneNode & BlendMixin, effects: Effect[]): void {
+export function applyEffects(node: SceneNode & BlendMixin, effects: Effect[]): void {
   try {
     node.effects = effects;
   } catch (error) {

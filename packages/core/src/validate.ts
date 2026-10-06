@@ -1,11 +1,12 @@
 import { SUPPORTED_NODE_TYPES, SUPPORTED_PAINT_TYPES } from "./constants";
 import type { DesignPaint, InternalDocument, InternalNode, JsonObject } from "./types";
 
-export function validateDocument(document: InternalDocument): string[] {
+/** Validate a canonical document. Reports at most `limit` errors (default 30; pass Infinity for all). */
+export function validateDocument(document: InternalDocument, limit = 30): string[] {
   const errors: string[] = [];
   const ids = new Set<string>();
   const components = new Set<string>();
-  const add = (path: string, message: string) => { if (errors.length < 30) errors.push(`${path}: ${message}`); };
+  const add = (path: string, message: string) => { if (errors.length < limit) errors.push(`${path}: ${message}`); };
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
   const triggers = new Set(["ON_CLICK", "ON_HOVER", "ON_PRESS", "ON_DRAG", "AFTER_TIMEOUT", "MOUSE_UP", "MOUSE_DOWN", "MOUSE_ENTER", "MOUSE_LEAVE", "ON_KEY_DOWN", "ON_MEDIA_HIT", "ON_MEDIA_END"]);
   const actions = new Set(["NAVIGATE", "SWAP", "OVERLAY", "SCROLL_TO", "CHANGE_TO", "BACK", "CLOSE", "URL", "UPDATE_MEDIA_RUNTIME", "SET_VARIABLE", "SET_VARIABLE_MODE", "CONDITIONAL"]);
@@ -173,4 +174,39 @@ export function validateDocument(document: InternalDocument): string[] {
   }
   document.nodes.forEach((node, index) => tokenReferences(node, `nodes[${index}]`));
   return errors;
+}
+
+/**
+ * A stable identity for a validateDocument issue that survives index shifts.
+ * Node issues are keyed on the owning node's id plus the property path inside
+ * that node (e.g. `node:card .bindings.fill`); variable issues on collection
+ * and variable names; anything else on its path. Array indexes in node paths
+ * (nodes[i].children[j]) never appear in the key, so an insert, move or remove
+ * elsewhere does not make an old issue look new.
+ */
+export function documentIssueOwners(document: InternalDocument): (path: string) => { owner: string; nodeId?: string; rest: string } {
+  const nodePaths = new Map<string, string>();
+  const visit = (node: InternalNode, path: string): void => { nodePaths.set(path, node.id); node.children.forEach((child, index) => visit(child, `${path}.children[${index}]`)); };
+  document.nodes.forEach((node, index) => visit(node, `nodes[${index}]`));
+  const variablePaths = new Map<string, string>();
+  (document.variables || []).forEach((collection, collectionIndex) => {
+    const collectionKey = typeof collection.name === "string" && collection.name ? collection.name : `#${collectionIndex}`;
+    variablePaths.set(`variables[${collectionIndex}]`, `collection:${collectionKey}`);
+    (collection.items || []).forEach((variable, variableIndex) => {
+      const variableKey = typeof variable.id === "string" && variable.id ? variable.id : typeof variable.name === "string" && variable.name ? variable.name : `#${variableIndex}`;
+      variablePaths.set(`variables[${collectionIndex}].items[${variableIndex}]`, `variable:${collectionKey}/${variableKey}`);
+    });
+  });
+  const longest = (paths: Map<string, string>, path: string): [string, string] | undefined => {
+    let best: [string, string] | undefined;
+    for (const [prefix, owner] of paths) if ((path === prefix || path.startsWith(`${prefix}.`)) && (!best || prefix.length > best[0].length)) best = [prefix, owner];
+    return best;
+  };
+  return (path: string) => {
+    const node = longest(nodePaths, path);
+    if (node) return { owner: `node:${node[1]}`, nodeId: node[1], rest: path.slice(node[0].length) };
+    const variable = longest(variablePaths, path);
+    if (variable) return { owner: variable[1], rest: path.slice(variable[0].length) };
+    return { owner: "document", rest: path };
+  };
 }
