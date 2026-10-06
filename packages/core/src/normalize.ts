@@ -398,8 +398,8 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   }
   const operations: PatchOperation[] = source.patch.operations.map((operation, index) => {
     const op = String(operation.op || "").toUpperCase();
-    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, or duplicate.`);
-    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE' || op === 'DUPLICATE') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
+    if (!['SET', 'REMOVE', 'APPEND', 'INSERT', 'MOVE', 'DUPLICATE', 'WRAP', 'UNWRAP'].includes(op)) throw new Error(`patch.operations[${index}].op must be set, remove, append, insert, move, duplicate, wrap, or unwrap.`);
+    if ((op === 'SET' || op === 'REMOVE' || op === 'MOVE' || op === 'DUPLICATE' || op === 'UNWRAP') && typeof operation.id !== 'string') throw new Error(`patch.operations[${index}].id is required.`);
     if (op === 'SET' && (!operation.set || typeof operation.set !== 'object' || Array.isArray(operation.set))) throw new Error(`patch.operations[${index}].set is required.`);
     if (op === 'APPEND' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
     if (op === 'INSERT' && (typeof operation.parent !== 'string' || !operation.node)) throw new Error(`patch.operations[${index}] requires parent and node.`);
@@ -425,7 +425,30 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
         }
       }
     }
-    const result: PatchOperation = {
+    if (op === 'WRAP') {
+      if (!Array.isArray(operation.ids) || !operation.ids.length || operation.ids.some((id) => typeof id !== "string" || !id)) {
+        throw new Error(`patch.operations[${index}].ids must be a non-empty array of non-empty strings.`);
+      }
+      if (new Set(operation.ids as string[]).size !== (operation.ids as string[]).length) {
+        throw new Error(`patch.operations[${index}].ids must not contain duplicates.`);
+      }
+      if (!operation.node || typeof operation.node !== "object" || Array.isArray(operation.node)) {
+        throw new Error(`patch.operations[${index}].node is required.`);
+      }
+      const wrapType = String((operation.node as CompactNode).type || "FRAME").toUpperCase();
+      if (wrapType !== "FRAME") {
+        throw new Error(`patch.operations[${index}].node.type must be FRAME (wrap-as-GROUP is not supported in v1).`);
+      }
+      if (operation.index !== undefined && (typeof operation.index !== "number" || !Number.isInteger(operation.index) || operation.index < 0)) {
+        throw new Error(`patch.operations[${index}].index must be a non-negative integer.`);
+      }
+    }
+    if (op === 'UNWRAP') {
+      if (typeof operation.id !== "string" || !operation.id) {
+        throw new Error(`patch.operations[${index}].id is required.`);
+      }
+    }
+        const result: PatchOperation = {
       op: op as PatchOperation['op'],
       id: typeof operation.id === "string" ? operation.id : undefined,
       parent: typeof operation.parent === "string" ? operation.parent : undefined,
@@ -434,7 +457,8 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
       idSuffix: typeof operation.idSuffix === "string" ? operation.idSuffix : undefined,
       ids: operation.ids && typeof operation.ids === "object" && !Array.isArray(operation.ids)
         ? { ...(operation.ids as Record<string, string>) }
-        : undefined
+        : undefined,
+      wrapIds: op === 'WRAP' && Array.isArray(operation.ids) ? [...(operation.ids as string[])] : undefined
     };
     if (op === 'SET') {
       const set = operation.set as JsonObject;
@@ -443,6 +467,21 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
     }
     if (op === 'APPEND') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-append`);
     if (op === 'INSERT') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-insert`);
+    if (op === 'WRAP') {
+      const raw = operation.node as CompactNode;
+      // Seed omitted w/h with 1 so normalizeNode/validate don't fail; apply fills bbox later.
+      const seeded = {
+        ...raw,
+        type: "FRAME",
+        w: typeof raw.w === "number" && raw.w > 0 ? raw.w : 1,
+        h: typeof raw.h === "number" && raw.h > 0 ? raw.h : 1,
+        children: []
+      } as CompactNode;
+      result.node = normalizeNode(seeded, { x: 0, y: 0 }, `patch-${index}-wrap`);
+      // Remember whether size was authored (NaN marker via custom flag on size — use width/height <= 0 impossible; store via name tag? Better: keep authored flags on operation).
+      if (!(typeof raw.w === "number" && raw.w > 0)) result.node.properties.size.width = Number.NaN;
+      if (!(typeof raw.h === "number" && raw.h > 0)) result.node.properties.size.height = Number.NaN;
+    }
     return result;
   });
   const result: InternalPatchDocument = { patch: { operations } };

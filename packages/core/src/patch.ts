@@ -6,6 +6,8 @@ import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate
 import { assertPrototypePatchRules, canvasRootId, isTopLevelNodeId, prototypePatchStrictErrors } from "./patch-prototype";
 import { documentIssueOwners, validateDocument } from "./validate";
 import { applyResourceUpsert } from "./patch-resources";
+import { forEachPrototypeDestination } from "./patch-prototype";
+import { hasNonZeroRotation, nodesBoundingBox, unwrapLostVisuals } from "./patch-wrap";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
 
@@ -324,6 +326,144 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     affectedIds.push(copy.id);
     return;
   }
+  if (operation.op === "WRAP") {
+    const wrapIds = operation.wrapIds || [];
+    if (!wrapIds.length) throw new Error(`patch.operations[${operationIndex}].ids must be a non-empty array.`);
+    if (!operation.node) throw new Error(`patch.operations[${operationIndex}].node is required.`);
+    if (operation.node.type !== "FRAME") throw new Error(`patch.operations[${operationIndex}].node.type must be FRAME.`);
+    if (index.has(operation.node.id)) throw new Error(`patch.operations[${operationIndex}]: ID '${operation.node.id}' already exists.`);
+    if (wrapIds.includes(operation.node.id)) throw new Error(`patch.operations[${operationIndex}]: cannot wrap a node into itself.`);
+
+    const refs = wrapIds.map((id) => {
+      const ref = index.get(id);
+      if (!ref) throw new Error(`patch.operations[${operationIndex}]: node '${id}' was not found.`);
+      return ref;
+    });
+    const parent = refs[0].parent; // null when wrapping top-level canvases
+    for (const ref of refs) {
+      if (ref.parent !== parent) throw new Error(`patch.operations[${operationIndex}]: all ids must share the same parent.`);
+      if (ref.siblings !== refs[0].siblings) throw new Error(`patch.operations[${operationIndex}]: all ids must share the same parent.`);
+    }
+    if (parent) {
+      assertNotInsideInstance(parent, operationIndex, wrapIds[0], index);
+      assertContainerParent(parent, operationIndex, parent.id, index);
+    }
+
+    // Ancestors of the shared parent (inclusive) for rotation check
+    const ancestors: InternalNode[] = [];
+    let walk: InternalNode | null = parent;
+    while (walk) {
+      ancestors.push(walk);
+      const parentRef = index.get(walk.id);
+      walk = parentRef?.parent ?? null;
+      if (ancestors.length > 1000) break;
+    }
+    for (const ref of refs) {
+      if (hasNonZeroRotation(ref.node, ancestors)) {
+        throw new Error(`patch.operations[${operationIndex}]: wrap does not support rotated nodes or parents (node '${ref.node.id}' or an ancestor has non-zero rotation).`);
+      }
+    }
+
+    const ordered = refs.map((ref) => ref.node);
+    const bbox = nodesBoundingBox(ordered);
+    const wrapper = cloneNode(operation.node);
+    wrapper.children = [];
+    // Absolute position = bbox origin; size = authored or bbox
+    const authoredW = Number.isFinite(wrapper.properties.size.width) && wrapper.properties.size.width > 0;
+    const authoredH = Number.isFinite(wrapper.properties.size.height) && wrapper.properties.size.height > 0;
+    wrapper.properties.position = { x: bbox.x, y: bbox.y };
+    wrapper.properties.size = {
+      width: authoredW ? wrapper.properties.size.width : bbox.width,
+      height: authoredH ? wrapper.properties.size.height : bbox.height
+    };
+
+    // Sibling list is either the parent's children or the document roots.
+    const siblings = refs[0].siblings;
+    const firstIndex = siblings.indexOf(refs[0].node);
+    const removeSet = new Set(ordered);
+    const remaining = siblings.filter((child) => !removeSet.has(child));
+    // Mutate the live sibling array in place (parent.children or document.nodes).
+    siblings.length = 0;
+    siblings.push(...remaining);
+    const at = clampIndex(operation.index !== undefined ? operation.index : firstIndex, remaining.length);
+    siblings.splice(at, 0, wrapper);
+    if (parent) parent.children = siblings;
+
+    // Reparent: absolute-preserving (no translate). Children keep absolute coords.
+    for (const child of ordered) {
+      wrapper.children.push(child);
+    }
+    // Index wrapper against the real sibling list (document.nodes or parent.children),
+    // not a temporary array — visit([wrapper], …) would bind the wrong siblings ref.
+    index.set(wrapper.id, { node: wrapper, parent, siblings });
+    for (const child of ordered) {
+      index.set(child.id, { node: child, parent: wrapper, siblings: wrapper.children });
+      visit(child.children, child);
+    }
+    affectedIds.push(wrapper.id, ...wrapIds);
+    return;
+  }
+
+  if (operation.op === "UNWRAP") {
+    const target = operation.id ? index.get(operation.id) : undefined;
+    if (!target) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);
+    const wrapper = target.node;
+    if (wrapper.type === "COMPONENT" || wrapper.type === "COMPONENT_SET" || wrapper.type === "INSTANCE" || wrapper.type === "BOOLEAN_OPERATION") {
+      throw new Error(`patch.operations[${operationIndex}]: cannot unwrap ${wrapper.type}.`);
+    }
+    if (wrapper.type !== "FRAME" && wrapper.type !== "GROUP") {
+      throw new Error(`patch.operations[${operationIndex}]: unwrap only accepts FRAME or GROUP (received ${wrapper.type}).`);
+    }
+    // Top-level unwrap is allowed (promotes children to document roots) so end-of-patch
+    // SCROLL_TO canvas checks can fire when siblings become separate canvases.
+    if (target.parent) {
+      assertNotInsideInstance(target.parent, operationIndex, operation.id || "", index);
+    }
+
+    // Eager: fail if anything outside the wrapper still targets it via prototype
+    const wrapperId = wrapper.id;
+    const childIds = new Set<string>();
+    const collect = (node: InternalNode) => { childIds.add(node.id); node.children.forEach(collect); };
+    collect(wrapper);
+    for (const [id, ref] of index) {
+      if (id === wrapperId || childIds.has(id)) continue;
+      const proto = ref.node.properties.prototype;
+      if (!Array.isArray(proto)) continue;
+      forEachPrototypeDestination(proto, (_action, _type, destination, actionPath) => {
+        if (destination === wrapperId) {
+          throw new Error(`patch.operations[${operationIndex}]: cannot unwrap '${wrapperId}' while ${actionPath} still targets it`);
+        }
+      });
+    }
+
+    const lost = unwrapLostVisuals(wrapper.properties);
+    if (lost.length) {
+      warnings.push(`unwrap '${wrapperId}': dropped wrapper ${lost.join(", ")}`);
+    }
+
+    const grandparent = target.parent; // null when unwrapping a top-level frame
+    const siblings = target.siblings; // parent.children or document.nodes
+    const at = siblings.indexOf(wrapper);
+    const children = [...wrapper.children];
+    siblings.splice(at, 1);
+    index.delete(wrapperId);
+    // Promote children at wrapper's slot (absolute-preserving: no translate).
+    // If grandparent is Auto Layout, flow children become AL items at this slot;
+    // ABSOLUTE-positioned children keep their absolute canvas positions.
+    // Top-level unwrap: children become new document roots (separate canvases).
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      siblings.splice(at + i, 0, child);
+      index.set(child.id, { node: child, parent: grandparent, siblings });
+      visit(child.children, child);
+      affectedIds.push(child.id);
+    }
+    if (grandparent) grandparent.children = siblings;
+    wrapper.children = [];
+    affectedIds.push(wrapperId);
+    return;
+  }
+
   if (operation.op === "MOVE") {
     const moving = operation.id ? index.get(operation.id) : undefined;
     if (!moving) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);

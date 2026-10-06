@@ -2,12 +2,9 @@
 
 ## Unreleased
 
-### Breaking (pre-1.0)
-
-- **`{ patch, nodes }` rejected** — the patch schema branch now forbids top-level `nodes` next to `patch` (previously silently dropped, same class as `canvas` / `canvases`).
-
 ### Features
 
+- **feat(core,figma,mcp): patch `wrap` / `unwrap`** — compose siblings into a new FRAME or dissolve a FRAME/GROUP. Absolute-preserving (unlike `move`'s parent-relative keep): wrapper at bbox; omitted `w`/`h` derive from bbox. Auto Layout on the wrapper reflows in Figma; free wrap keeps positions. Unwrap into an AL parent promotes flow items at the wrapper's slot (`layoutPositioning: ABSOLUTE` keeps abs). Under an AL parent, wrap seats the wrapper at `ids[0]`'s slot. Unwrap of a wrapper with fills/strokes/effects/`clipsContent` emits a WARNING (identical in both engines). Top-level wrap/unwrap allowed so end-of-patch #42 checks fire (wrapping a NAVIGATE destination nests it; unwrapping a canvas that splits SCROLL_TO fails). Rotation rejected. Schema `wrapNode`; MCP guide/tools + DESIGN-LANGUAGE.
 - **feat(core,figma,mcp): upsert `variables` / `styles` in a patch document** — patch documents may carry top-level tokens; they are upserted before operations so later ops can bind. Shared `applyResourceUpsert` / `matchStyle` / `matchVariable` keep core and Figma in lockstep. Figma snapshots touched tokens (including `compactDesignId`) and restores them on failure. Empty `operations` is allowed when `variables`/`styles` are present (token-only patches). Name-match with a different id, and duplicate ids across collections, are `PATCH_RESOURCE_CONFLICT`. New variables missing a mode value fail in the shared plan (`PATCH_RESOURCE_INVALID`). Unknown mode keys in `values` are `PATCH_RESOURCE_INVALID`. Mode 0 is never renamed by a patch.
 
 ## 0.3.0 — 2026-10-06
