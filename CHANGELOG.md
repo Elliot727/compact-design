@@ -3,6 +3,8 @@
 ## Unreleased
 
 - feat(core,figma,mcp): enable patch `set` for `componentProperties`, `variantAxes`, and `variant` in lockstep. `componentProperties` is a name-keyed upsert on COMPONENT (null deletes; type immutable; Figma add/edit/delete only). `variantAxes` shallow-merges on COMPONENT_SET with **explicit** renames (`{ rename, options, renameOptions }`); plain option arrays never rename. Every declared option must be carried by a child (Figma derives options from child names). Renames rewrite instance VARIANT overrides only for instances of the patched set. `variant`/`variant: null` clearing is rejected. COMPONENT rollback loads all pages before `findAllWithCriteria`. Still deferred: `prototype`, `componentId`.
+- **Breaking:** `validateDocument` now rejects any authored document (not only patched ones) that declares a `variantAxes` option no child COMPONENT carries. Figma derives variant options from child names; Compact keeps the same rule so core and Figma stay in lockstep.
+
 
 - fix(figma): patch rollback re-links COMPONENT instances via `getMainComponentAsync` (no sync `mainComponent` under dynamic-page); per-key `instanceProperties: null` resets to the component defaultValue in lockstep with core; fill/stroke bindings require a SOLID first paint (clear error).
 
