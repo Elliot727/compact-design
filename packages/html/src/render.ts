@@ -745,7 +745,11 @@ function shapeMarkup(type: string, props: DesignProperties, ctx: RenderContext):
     const width = Math.max(1, finite(props.size.width, 1));
     const height = Math.max(1, finite(props.size.height, 1));
     const strokeAttrs = svgPaintStrokeAttrs(props, ctx);
-    const paths = props.vectorPaths.map((path) => `<path d="${escapeHtml(path.data)}" fill-rule="${path.windingRule === "EVENODD" ? "evenodd" : "nonzero"}" fill="${escapeHtml(fill)}"${strokeAttrs}/>`).join("");
+    const paths = props.vectorPaths.map((path) => {
+      const pathFill = path.windingRule === "NONE" ? "none" : fill;
+      const fillRule = path.windingRule === "EVENODD" ? "evenodd" : "nonzero";
+      return `<path d="${escapeHtml(path.data)}" fill-rule="${fillRule}" fill="${escapeHtml(pathFill)}"${strokeAttrs}/>`;
+    }).join("");
     return `<svg class="cd-shape" viewBox="0 0 ${width} ${height}" aria-hidden="true">${paths}</svg>`;
   }
   if (type === "LINE") {

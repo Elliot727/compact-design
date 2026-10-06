@@ -550,6 +550,59 @@ test("STAR and POLYGON emit SVG stroke color, width, dash, and join", () => {
   assert.doesNotMatch(result.css, /#n-hex \{[^}]*(border:|border-width)/);
 });
 
+test("VECTOR open paths with windingRule NONE emit fill none and keep stroke", () => {
+  const result = render({
+    canvas: { id: "vectors", width: 240, height: 120, fill: "#FFFFFF" },
+    nodes: [
+      {
+        id: "open",
+        type: "VECTOR",
+        x: 10,
+        y: 20,
+        w: 80,
+        h: 40,
+        vectorPaths: [{ windingRule: "NONE", data: "M 0 0 L 80 40" }],
+        fill: "#FFFFFF",
+        stroke: "#263047",
+        strokeWeight: 3,
+        strokeCap: "ROUND",
+        strokeJoin: "ROUND"
+      },
+      {
+        id: "filled",
+        type: "VECTOR",
+        x: 120,
+        y: 20,
+        w: 60,
+        h: 40,
+        vectorPaths: [{ windingRule: "NONZERO", data: "M 0 40 L 30 0 L 60 40 Z" }],
+        fill: "#6C5CFF",
+        stroke: "#DC241F",
+        strokeWeight: 2
+      },
+      {
+        id: "mixed",
+        type: "VECTOR",
+        x: 10,
+        y: 70,
+        w: 100,
+        h: 40,
+        vectorPaths: [
+          { windingRule: "NONE", data: "M 0 20 L 100 20" },
+          { windingRule: "EVENODD", data: "M 10 0 L 40 0 L 40 30 L 10 30 Z" }
+        ],
+        fill: "#F8F5EE",
+        stroke: "#7D5CFF",
+        strokeWeight: 2
+      }
+    ]
+  });
+  assert.match(result.html, /id="n-open"[^>]*>[\s\S]*?<path[^>]*fill="none"/);
+  assert.match(result.html, /id="n-open"[^>]*>[\s\S]*?<path[^>]*stroke="rgba\(38, 48, 71, 1\)"[^>]*stroke-width="3"[^>]*stroke-linecap="round"[^>]*stroke-linejoin="round"/);
+  assert.match(result.html, /id="n-filled"[^>]*>[\s\S]*?<path[^>]*fill-rule="nonzero"[^>]*fill="rgba\(108, 92, 255, 1\)"/);
+  assert.match(result.html, /id="n-mixed"[^>]*>[\s\S]*?<path d="M 0 20 L 100 20"[^>]*fill="none"/);
+  assert.match(result.html, /id="n-mixed"[^>]*>[\s\S]*?<path d="M 10 0 L 40 0 L 40 30 L 10 30 Z"[^>]*fill-rule="evenodd"[^>]*fill="rgba\(248, 245, 238, 1\)"/);
+});
 
 test("isMask hides mask paint and clips following siblings", () => {
   const result = render({
