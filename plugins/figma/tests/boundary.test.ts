@@ -1168,6 +1168,36 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
     loadAllPagesAsync: async () => { pagesLoaded = true; (figmaMock as { __loadAllPagesAsyncCalls?: number }).__loadAllPagesAsyncCalls = ((figmaMock as { __loadAllPagesAsyncCalls?: number }).__loadAllPagesAsyncCalls || 0) + 1; },
     getNodeByIdAsync: async (id: string) => walkPages(undefined, true).find((node) => node.id === id) || null,
     createFrame: () => createMockNode("FRAME"),
+    /**
+     * Real Figma: grouped children keep coordinates in the *parent's* space (not the group's).
+     * Moving the group later shifts every child by the same delta.
+     */
+    group: (nodes: MockNode[], parent: MockNode) => {
+      const g = createMockNode("GROUP", "Group");
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of nodes) {
+        minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + n.width); maxY = Math.max(maxY, n.y + n.height);
+      }
+      const bx = Number.isFinite(minX) ? minX : 0;
+      const by = Number.isFinite(minY) ? minY : 0;
+      let gx = bx, gy = by;
+      g.width = Math.max(1, (Number.isFinite(maxX) ? maxX : 1) - bx);
+      g.height = Math.max(1, (Number.isFinite(maxY) ? maxY : 1) - by);
+      parent.appendChild(g);
+      for (const n of nodes) g.appendChild(n); // keep x/y — already parent-space
+      Object.defineProperty(g, "x", {
+        configurable: true, enumerable: true,
+        get: () => gx,
+        set: (v: number) => { const dx = v - gx; gx = v; for (const child of g.children) child.x += dx; }
+      });
+      Object.defineProperty(g, "y", {
+        configurable: true, enumerable: true,
+        get: () => gy,
+        set: (v: number) => { const dy = v - gy; gy = v; for (const child of g.children) child.y += dy; }
+      });
+      return g;
+    },
     createRectangle: () => createMockNode("RECTANGLE"),
     createEllipse: () => createMockNode("ELLIPSE"),
     createLine: () => createMockNode("LINE"),
@@ -3429,3 +3459,61 @@ test("Figma wrap rollback: later failure restores children, no wrapper left", as
   );
   assert.deepEqual(await figmaState(page), before, "wrap rolled back");
 });
+
+test("lockstep unwrap GROUP at non-zero (40,60): children keep parent-space coords", async () => {
+  // Core stores absolute; Figma GROUP children live in the group's parent space.
+  // Group at (40,60) with authored-relative children (0,0) and (40,40) → abs (40,60)/(80,100).
+  // Unwrap must NOT add group.x/y again (that was the Figma bug).
+  // Note: assertParity's import check cannot compare GROUP children (core relative vs Figma parent-space),
+  // so we seed via importIntoMock, assert the mock precondition, then apply unwrap in both engines.
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [{
+      id: "holder", type: "FRAME", x: 0, y: 0, w: 400, h: 400,
+      children: [{
+        id: "g", type: "GROUP", x: 40, y: 60, w: 60, h: 60,
+        children: [
+          { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20, fill: "#FF0000" },
+          { id: "b", type: "RECTANGLE", x: 40, y: 40, w: 20, h: 20, fill: "#00FF00" }
+        ]
+      }]
+    }]
+  });
+  const page = await importIntoMock(document);
+  // Precondition: mock models GROUP children in parent space (same as real Figma).
+  assert.deepEqual([mockById(page, "g").x, mockById(page, "g").y], [40, 60]);
+  assert.deepEqual([mockById(page, "a").x, mockById(page, "a").y], [40, 60], "GROUP child a in holder space");
+  assert.deepEqual([mockById(page, "b").x, mockById(page, "b").y], [80, 100], "GROUP child b in holder space");
+
+  const patch = checkedPatch({ op: "unwrap", id: "g" });
+  const coreResult = applyCorePatch(document, patch);
+  await applyFigmaPatch(patch, emptyPatchContext() as never);
+
+  const holder = coreResult.document.nodes[0].children.find((n) => n.id === "holder")!;
+  assert.equal(holder.children.some((c) => c.id === "g"), false);
+  assert.deepEqual(holder.children.map((c) => c.id).sort(), ["a", "b"]);
+  assert.deepEqual(holder.children.find((c) => c.id === "a")!.properties.position, { x: 40, y: 60 });
+  assert.deepEqual(holder.children.find((c) => c.id === "b")!.properties.position, { x: 80, y: 100 });
+  assert.deepEqual([mockById(page, "a").x, mockById(page, "a").y], [40, 60]);
+  assert.deepEqual([mockById(page, "b").x, mockById(page, "b").y], [80, 100]);
+  // After unwrap under a FRAME, core parent-relative and Figma x/y agree.
+  assert.deepEqual(await figmaState(page), await coreState(coreResult.document));
+});
+
+test("lockstep unwrap rejects rotated wrapper (same rule as wrap)", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [{
+      id: "spin", type: "FRAME", x: 10, y: 10, w: 80, h: 80, rotation: 15,
+      children: [{ id: "leaf", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20, fill: "#FF0000" }]
+    }]
+  });
+  const page = await importIntoMock(document);
+  assert.equal(mockById(page, "spin").rotation, 15);
+  await assert.rejects(
+    () => applyFigmaPatch(checkedPatch({ op: "unwrap", id: "spin" }), emptyPatchContext() as never),
+    /unwrap does not support rotated/
+  );
+  assert.equal(validatePatch(document, { patch: { operations: [{ op: "unwrap", id: "spin" }] } }).valid, false);
+});
+

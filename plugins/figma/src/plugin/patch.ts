@@ -993,14 +993,9 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
             layout: src.properties.layout ? { ...src.properties.layout } : src.properties.layout
           }
         };
-        // createNode expects compact absolute when origin is parent origin; under a FRAME
-        // groupOffset is 0 so we pass parent-relative bbox as position with origin 0.
+        // origin = -groupOffset(parent) so createNode writes parent-space coords (FRAME: 0; GROUP: cancel the group origin).
         const offset = groupOffset(sharedParent);
         const origin = { x: -offset.x, y: -offset.y };
-        // Shift seed position into the compact-absolute space createNode expects:
-        // node.x = position.x - origin.x  => for FRAME origin 0, position = parent-relative.
-        // For GROUP, children already sit in grandparent space; bbox is in that space;
-        // createNode with origin=-groupOffset yields node.x = bbox.x + group.x which matches.
         const firstIndex = sharedParent.children.indexOf(children[0]);
         const wrapper = await createNode(seed, sharedParent, origin, context);
         log.push({ kind: "create", node: wrapper });
@@ -1038,6 +1033,9 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         }
         if (wrapper.type !== "FRAME" && wrapper.type !== "GROUP") {
           throw new Error(`patch.operations[${operationIndex}]: unwrap only accepts FRAME or GROUP (received ${wrapper.type}).`);
+        }
+        if (sceneHasNonZeroRotation(wrapper)) {
+          throw new Error(`patch.operations[${operationIndex}]: unwrap does not support rotated nodes or parents (node '${operation.id}' or an ancestor has non-zero rotation).`);
         }
         const wrapperId = operation.id!;
         // Eager: fail if anything outside the wrapper still targets it via prototype.
@@ -1078,9 +1076,12 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         pairSubtree(wrapper, backup, counterparts);
         for (let i = 0; i < kids.length; i++) {
           const child = kids[i];
-          // Absolute-preserving: canvas position = wrapper origin + child relative.
-          const absX = wrapper.x + child.x;
-          const absY = wrapper.y + child.y;
+          // Absolute-preserving in the grandparent's child coordinate space.
+          // FRAME children are wrapper-relative; GROUP/BOOLEAN children already sit in
+          // the group's parent space (groupOffset == wrapper origin), so do not add twice.
+          const off = groupOffset(wrapper);
+          const absX = child.x + wrapper.x - off.x;
+          const absY = child.y + wrapper.y - off.y;
           grandparent.insertChild(at + i, child);
           child.x = absX;
           child.y = absY;

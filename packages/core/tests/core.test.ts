@@ -2208,6 +2208,41 @@ test("wrap/unwrap errors: non-siblings, collision, GROUP type, COMPONENT unwrap,
   rejects(document, /was not found/, { op: "wrap", ids: ["ghost"], node: { id: "box", type: "FRAME" } });
 });
 
+test("unwrap GROUP at (40,60): children keep absolute (no group-origin shift)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 400, height: 400 },
+    nodes: [{
+      id: "holder", type: "FRAME", x: 0, y: 0, w: 400, h: 400,
+      children: [{
+        id: "g", type: "GROUP", x: 40, y: 60, w: 60, h: 60,
+        children: [
+          { id: "a", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20, fill: "#f00" },
+          { id: "b", type: "RECTANGLE", x: 40, y: 40, w: 20, h: 20, fill: "#0f0" }
+        ]
+      }]
+    }]
+  });
+  assert.deepEqual(nodeById(document, "a").properties.position, { x: 40, y: 60 });
+  assert.deepEqual(nodeById(document, "b").properties.position, { x: 80, y: 100 });
+  const result = applyRaw(document, { op: "unwrap", id: "g" });
+  assert.equal(findNode(result, "g"), null);
+  assert.deepEqual(nodeById(result, "a").properties.position, { x: 40, y: 60 });
+  assert.deepEqual(nodeById(result, "b").properties.position, { x: 80, y: 100 });
+  const holder = nodeById(result, "holder");
+  assert.deepEqual(holder.children.map((c) => c.id).sort(), ["a", "b"]);
+});
+
+test("unwrap rejects rotated wrapper (same rule as wrap)", () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 200 },
+    nodes: [{
+      id: "spin", type: "FRAME", x: 10, y: 10, w: 80, h: 80, rotation: 15,
+      children: [{ id: "leaf", type: "RECTANGLE", x: 0, y: 0, w: 20, h: 20 }]
+    }]
+  });
+  rejects(document, /unwrap does not support rotated/, { op: "unwrap", id: "spin" });
+});
+
 test("wrap of top-level NAVIGATE destination fails end-of-patch #42 check", () => {
   const document = normalize({
     canvases: [

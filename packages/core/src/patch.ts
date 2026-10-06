@@ -3,10 +3,9 @@ import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } 
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
 import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames, variantAxesChildConflicts, type VariantAxesPatch } from "./patch-definitions";
 import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, subtreeContainsType } from "./patch-duplicate";
-import { assertPrototypePatchRules, canvasRootId, isTopLevelNodeId, prototypePatchStrictErrors } from "./patch-prototype";
+import { assertPrototypePatchRules, canvasRootId, forEachPrototypeDestination, isTopLevelNodeId, prototypePatchStrictErrors } from "./patch-prototype";
 import { documentIssueOwners, validateDocument } from "./validate";
 import { applyResourceUpsert } from "./patch-resources";
-import { forEachPrototypeDestination } from "./patch-prototype";
 import { hasNonZeroRotation, nodesBoundingBox, unwrapLostVisuals } from "./patch-wrap";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -418,6 +417,18 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     // SCROLL_TO canvas checks can fire when siblings become separate canvases.
     if (target.parent) {
       assertNotInsideInstance(target.parent, operationIndex, operation.id || "", index);
+    }
+    {
+      const ancestors: InternalNode[] = [];
+      let walk: InternalNode | null = target.parent;
+      while (walk) {
+        ancestors.push(walk);
+        walk = index.get(walk.id)?.parent ?? null;
+        if (ancestors.length > 1000) break;
+      }
+      if (hasNonZeroRotation(wrapper, ancestors)) {
+        throw new Error(`patch.operations[${operationIndex}]: unwrap does not support rotated nodes or parents (node '${wrapper.id}' or an ancestor has non-zero rotation).`);
+      }
     }
 
     // Eager: fail if anything outside the wrapper still targets it via prototype
