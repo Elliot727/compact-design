@@ -112,13 +112,30 @@ export interface InternalDocument {
 
 export type ImportMode = "CREATE" | "REPLACE" | "UPDATE";
 
+/**
+ * Normalized values of a patch `set`, independent of the target type. Only
+ * keys present in the authored set appear here: no defaults are added.
+ * Coordinates are parent-relative (the authoring convention).
+ */
+export interface PatchSetValues extends Omit<Partial<DesignProperties>, "position" | "size" | "styles" | "font" | "constraints" | "layout"> {
+  name?: string;
+  position?: { x?: number; y?: number };
+  size?: { width?: number; height?: number };
+  styles?: { fills?: DesignPaint[]; strokes?: DesignPaint[]; effects?: DesignEffect[] };
+  font?: Partial<DesignFont>;
+  constraints?: Partial<Constraints>;
+  layout?: DesignLayout;
+}
+
 export interface PatchOperation {
   op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE";
   id?: string;
   parent?: string;
   index?: number;
+  /** Authored set object (keys from PATCH_SET_KEYS). */
   set?: JsonObject;
-  normalized?: DesignProperties;
+  /** Type-agnostic normalized set values; target-type rules run at apply time. */
+  normalized?: PatchSetValues;
   node?: InternalNode;
 }
 

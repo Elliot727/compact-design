@@ -87,7 +87,16 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
     { "op": "move", "id": "pin", "parent": "list", "index": 2 }
   ] }
 }
-\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end (same parent checks). Rejects missing id/parent, non-container or INSTANCE parents, moving the root, moving out of an INSTANCE, and cycles. Figma resolves ids only via imported compact-design plugin data.
+\`insert\` places a new child at \`index\` (non-negative integer, clamped to children.length on apply). \`move\` reparents or reorders; same-parent \`index\` is the final position after removal. \`append\` equals insert at the end (same parent checks). Rejects missing id/parent, non-container or INSTANCE parents, moving the root, moving out of an INSTANCE, and cycles. Figma resolves ids only via imported compact-design plugin data, checked before any change. A set/remove/move on a node inserted in the same patch fails there, so put those props on the inserted node.
+
+\`set\` changes only the keys it lists. Unknown keys are ERRORs. Nothing is defaulted (no Arial, no TEXT fill).
+- Merge: \`layout\` (and \`layout.padding\` per side), \`font\`, \`constraints\`. \`{ "layout": { "itemSpacing": 24 } }\` keeps direction and padding; \`{ "font": { "size": 32 } }\` keeps family and style.
+- Replace: \`fill\`/\`fills\`, \`stroke\`/\`strokes\` (don't send both forms), \`effects\`/\`shadow\`/\`elevation\` (the whole effect list), \`runs\`, \`layoutGrids\`, \`vectorPaths\`, \`dashPattern\`, \`cornerRadii\`. Setting fill/stroke drops that paint's variable binding or paint style.
+- \`x\`/\`y\` are parent-relative and move the subtree. They are ERRORs under Auto Layout unless \`layoutPositioning: "ABSOLUTE"\`, and on children of a GROUP/BOOLEAN_OPERATION.
+- A partial \`layout\` on a frame without Auto Layout needs \`direction\`. \`counterAxisAlignItems: "STRETCH"\` is not patchable.
+- \`text\` + \`runs\`: text is the content and runs style ranges. runs alone: every run needs \`text\`. Replacing the content of text with per-range styling is an ERROR, so remove + insert it instead. On mixed-font text, send \`font.family\` and \`font.style\` together (\`font.size\` alone is fine).
+- Not patchable yet (ERROR): bindings, styleRefs, variableModes, prototype, componentId, componentProperties, instanceProperties, variantAxes, variant. \`svg\` can't be patched; remove + insert. Changing typography on a text-style-linked node, or a variable-bound field, is an ERROR.
+A failed patch rolls back completely.
 
 ## Workflow
 1. Author Compact Design JSON for the request.

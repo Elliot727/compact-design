@@ -27,6 +27,36 @@ export function applyAutoLayout(node: FrameNode | ComponentNode, layout?: Design
   node.paddingLeft = finite(p.left, 0); node.paddingTop = finite(p.top, 0); node.paddingRight = finite(p.right, 0); node.paddingBottom = finite(p.bottom, 0);
 }
 
+/**
+ * Patch a layout. A frame without Auto Layout is enabled exactly like import
+ * (unmentioned fields take the import defaults). A frame that already has
+ * Auto Layout only receives the mentioned fields, so siblings are kept.
+ */
+export function applyLayoutPatch(node: FrameNode | ComponentNode, layout: DesignLayout): void {
+  if (node.layoutMode === "NONE") {
+    if (!layout.direction) throw new Error(`'${node.name}' has no Auto Layout; layout.direction is required to enable it`);
+    applyAutoLayout(node, layout);
+    return;
+  }
+  const sizing = (value: string) => value === "HUG" || value === "AUTO" ? "AUTO" : "FIXED";
+  if (layout.direction) node.layoutMode = layout.direction as FrameNode["layoutMode"];
+  if (layout.primaryAxisSizingMode !== undefined) node.primaryAxisSizingMode = sizing(layout.primaryAxisSizingMode);
+  if (layout.counterAxisSizingMode !== undefined) node.counterAxisSizingMode = sizing(layout.counterAxisSizingMode);
+  if (layout.primaryAxisAlignItems !== undefined) node.primaryAxisAlignItems = layout.primaryAxisAlignItems as FrameNode["primaryAxisAlignItems"];
+  if (layout.counterAxisAlignItems !== undefined) {
+    if (layout.counterAxisAlignItems === "STRETCH") throw new Error("layout.counterAxisAlignItems STRETCH cannot be patched yet");
+    node.counterAxisAlignItems = layout.counterAxisAlignItems as FrameNode["counterAxisAlignItems"];
+  }
+  if (layout.itemSpacing !== undefined) node.itemSpacing = finite(layout.itemSpacing, 0);
+  if (layout.counterAxisSpacing !== undefined) node.counterAxisSpacing = finite(layout.counterAxisSpacing, 0);
+  if (layout.wrap !== undefined) node.layoutWrap = layout.wrap ? "WRAP" : "NO_WRAP";
+  const p = layout.padding;
+  if (p?.left !== undefined) node.paddingLeft = finite(p.left, 0);
+  if (p?.top !== undefined) node.paddingTop = finite(p.top, 0);
+  if (p?.right !== undefined) node.paddingRight = finite(p.right, 0);
+  if (p?.bottom !== undefined) node.paddingBottom = finite(p.bottom, 0);
+}
+
 export function applyChildLayout(node: SceneNode, props: DesignProperties): void {
   if ("constraints" in node && props.constraints) node.constraints = props.constraints;
   const parent = node.parent;

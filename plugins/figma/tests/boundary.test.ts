@@ -24,8 +24,10 @@ import {
   uniqueVariableExportIds
 } from "../src/plugin/export-variables";
 import { planExport, type ExportCandidate } from "../src/plugin/export-plan";
-import { applyPatch as applyCorePatch, normalize, normalizePatch, validate } from "@compact-design/core";
-import { applyPatch as applyFigmaPatch } from "../src/plugin/patch";
+import { applyPatch as applyCorePatch, normalize, normalizePatch, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, validate, validatePatch, type InternalDocument, type InternalNode, type InternalPatchDocument, type PatchSetKey } from "@compact-design/core";
+import { applyPatch as applyFigmaPatch, FIGMA_SET_ENTRIES } from "../src/plugin/patch";
+import { createNode } from "../src/plugin/nodes";
+import { effectsFromData, paints } from "../src/plugin/paints";
 
 test("Figma adapter consumes core and does not duplicate language modules", () => {
   const files: string[] = [];
@@ -601,7 +603,7 @@ type MockNode = {
   width: number;
   height: number;
   rotation: number;
-  fills: unknown[];
+  fills: unknown;
   strokes: unknown[];
   effects: unknown[];
   pluginData: Record<string, string>;
@@ -612,10 +614,71 @@ type MockNode = {
   clone: () => MockNode;
   getPluginData: (key: string) => string;
   setPluginData: (key: string, value: string) => void;
+  [key: string]: unknown;
 };
+
+const MIXED = Symbol("mixed");
+const FRAME_TYPES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"]);
+const NO_SCENE_PROPS = new Set(["PAGE"]);
+
+function typeDefaults(type: string): Record<string, unknown> {
+  if (NO_SCENE_PROPS.has(type)) return {};
+  const base: Record<string, unknown> = { opacity: 1, blendMode: "PASS_THROUGH", visible: true, locked: false, isMask: false, boundVariables: {} };
+  if (type === "GROUP" || type === "BOOLEAN_OPERATION") return { ...base, layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO", ...(type === "BOOLEAN_OPERATION" ? { booleanOperation: "UNION", strokeWeight: 1, strokeAlign: "CENTER", strokeJoin: "MITER", dashPattern: [], constraints: { horizontal: "MIN", vertical: "MIN" } } : {}) };
+  Object.assign(base, {
+    strokeWeight: 1, strokeAlign: "INSIDE", strokeJoin: "MITER", dashPattern: [],
+    constraints: { horizontal: "MIN", vertical: "MIN" }, layoutAlign: "INHERIT", layoutGrow: 0, layoutPositioning: "AUTO",
+    layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED", minWidth: null, maxWidth: null, minHeight: null, maxHeight: null
+  });
+  if (FRAME_TYPES.has(type) || type === "RECTANGLE") Object.assign(base, { cornerRadius: 0, topLeftRadius: 0, topRightRadius: 0, bottomRightRadius: 0, bottomLeftRadius: 0, strokeTopWeight: 1, strokeRightWeight: 1, strokeBottomWeight: 1, strokeLeftWeight: 1 });
+  if (FRAME_TYPES.has(type)) Object.assign(base, {
+    layoutMode: "NONE", itemSpacing: 0, counterAxisSpacing: 0, paddingLeft: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0,
+    primaryAxisSizingMode: "AUTO", counterAxisSizingMode: "AUTO", primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", layoutWrap: "NO_WRAP",
+    clipsContent: true, layoutGrids: [], overflowDirection: "NONE", numberOfFixedChildren: 0,
+    setExplicitVariableModeForCollection(this: MockNode, collection: { name: string }, modeId: string) { (this.explicitModes as Record<string, string>)[collection.name] = modeId; },
+    explicitModes: {}
+  });
+  if (["POLYGON", "STAR"].includes(type)) Object.assign(base, { pointCount: 5, cornerRadius: 0 });
+  if (type === "STAR") base.innerRadius = 0.5;
+  if (type === "ELLIPSE") Object.assign(base, { arcData: { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 }, strokeCap: "NONE" });
+  if (type === "LINE" || type === "VECTOR") Object.assign(base, { strokeCap: "NONE" });
+  if (type === "VECTOR") Object.assign(base, { vectorPaths: [], cornerRadius: 0 });
+  if (type === "TEXT") Object.assign(base, {
+    characters: "", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PERCENT", value: 0 },
+    textDecoration: "NONE", textCase: "ORIGINAL", paragraphSpacing: 0, paragraphIndent: 0, listSpacing: 0, hangingPunctuation: false, hangingList: false,
+    textAlignHorizontal: "LEFT", textAlignVertical: "TOP", textAutoResize: "NONE", textTruncation: "DISABLED", maxLines: null, hyperlink: null, textStyleId: "",
+    rangeFonts: [] as Array<{ start: number; end: number; font: { family: string; style: string } }>,
+    getRangeAllFontNames(this: MockNode) {
+      const fonts = this.fontName === MIXED ? (this.rangeFonts as Array<{ font: { family: string; style: string } }>).map((range) => range.font) : [this.fontName as { family: string; style: string }];
+      return [...new Map(fonts.map((font) => [`${font.family}/${font.style}`, font])).values()];
+    },
+    setRangeFontName(this: MockNode, start: number, end: number, font: { family: string; style: string }) {
+      const current = this.fontName as { family: string; style: string } | symbol;
+      const whole = start === 0 && end >= String(this.characters).length;
+      if (whole) { this.fontName = font; this.rangeFonts = []; return; }
+      if (current !== MIXED && typeof current === "object" && current.family === font.family && current.style === font.style) return;
+      this.rangeFonts = [...(current !== MIXED ? [{ start: 0, end: String(this.characters).length, font: current }] : this.rangeFonts as unknown[]), { start, end, font }];
+      this.fontName = MIXED;
+    },
+    setRangeFontSize(this: MockNode, start: number, end: number, size: number) { if (start === 0 && end >= String(this.characters).length) this.fontSize = size; else if (size !== this.fontSize) this.fontSize = MIXED; },
+    setRangeFills(this: MockNode, start: number, end: number, fills: unknown[]) { this.fills = start === 0 && end >= String(this.characters).length ? fills : MIXED; },
+    setRangeTextDecoration(this: MockNode, _start: number, _end: number, value: string) { if (value !== this.textDecoration) this.textDecoration = MIXED; },
+    setRangeLetterSpacing(this: MockNode) { this.letterSpacing = MIXED; },
+    setRangeHyperlink(this: MockNode) { this.hyperlink = MIXED; }
+  });
+  base.setBoundVariable = function (this: MockNode, field: string, variable: { id: string }) { (this.boundVariables as Record<string, unknown>)[field] = { type: "VARIABLE_ALIAS", id: variable.id }; };
+  return base;
+}
+
+function cloneMockValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneMockValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneMockValue(item)]));
+  return value;
+}
 
 function createMockNode(type: string, name = type): MockNode {
   const node: MockNode = {
+    ...typeDefaults(type),
     id: `figma:${Math.random().toString(36).slice(2, 9)}`,
     name,
     type,
@@ -651,8 +714,13 @@ function createMockNode(type: string, name = type): MockNode {
       this.removed = true;
     },
     clone() {
-      const copy = createMockNode(this.type, `${this.name} (backup)`);
-      copy.pluginData = { ...this.pluginData };
+      // Like Figma: a full copy of properties, plugin data, and the subtree.
+      const copy = createMockNode(this.type, this.name);
+      for (const [key, value] of Object.entries(this)) {
+        if (["id", "parent", "children", "removed"].includes(key) || typeof value === "function") continue;
+        copy[key] = cloneMockValue(value);
+      }
+      for (const child of this.children) copy.appendChild(child.clone());
       return copy;
     },
     getPluginData(key: string) { return this.pluginData[key] || ""; },
@@ -679,6 +747,8 @@ function emptyPatchContext() {
   };
 }
 
+const loadedFonts: string[] = [];
+
 function installFigmaMock(pageChildren: MockNode[]) {
   const page = createMockNode("PAGE", "Page 1");
   page.children = pageChildren;
@@ -698,12 +768,8 @@ function installFigmaMock(pageChildren: MockNode[]) {
   };
 
   const figmaMock = {
-    mixed: Symbol("mixed"),
-    currentPage: {
-      findAll,
-      selection: [] as MockNode[],
-      children: page.children
-    },
+    mixed: MIXED,
+    currentPage: Object.assign(page, { findAll, selection: [] as MockNode[] }),
     getNodeByIdAsync: async (id: string) => findAll().find((node) => node.id === id) || null,
     createFrame: () => createMockNode("FRAME"),
     createRectangle: () => createMockNode("RECTANGLE"),
@@ -716,7 +782,13 @@ function installFigmaMock(pageChildren: MockNode[]) {
     createVector: () => createMockNode("VECTOR"),
     createText: () => createMockNode("TEXT"),
     createComponent: () => createMockNode("COMPONENT"),
-    loadFontAsync: async () => undefined,
+    loadFontAsync: async (font: { family: string; style: string }) => {
+      loadedFonts.push(`${font.family} ${font.style}`);
+      if (font.family === "Missing Font") throw new Error("font not found");
+    },
+    variables: {
+      setBoundVariableForPaint: (paint: Record<string, unknown>, field: string, variable: { id: string }) => ({ ...paint, boundVariables: { [field]: { type: "VARIABLE_ALIAS", id: variable.id } } })
+    },
     createImage: () => ({ hash: "img" }),
     createImageAsync: async () => ({ hash: "img" })
   };
@@ -964,4 +1036,352 @@ test("Figma append uses the same parent validation as insert", async () => {
     const intoInstance = { op, parent: "copy", ...(op === "insert" ? { index: 0 } : {}), node: { id: `z-${op}`, type: "RECTANGLE", w: 1, h: 1 } };
     await assert.rejects(() => applyFigmaPatch(normalizePatch({ patch: { operations: [intoInstance] } }), context as never), /INSTANCE/);
   }
+});
+
+
+// --- Typed, merging patch set: Figma applicator (PR1) ------------------------
+
+function importContext(variables = new Map<string, { id: string }>(), collections = new Map<string, unknown>()) {
+  return {
+    sourceNodes: new Map(),
+    componentPropertyKeys: new Map(),
+    resources: { paintStyles: new Map(), textStyles: new Map(), variables, variableCollections: collections, createdStyles: [], createdCollections: [], warnings: [], unavailableVariableModes: new Map() },
+    createdNodes: [] as MockNode[]
+  };
+}
+
+/** Import a core document into the mocked scene through the real plugin createNode. */
+async function importIntoMock(document: InternalDocument, context = importContext()): Promise<MockNode> {
+  const { page } = installFigmaMock([]);
+  for (const root of document.nodes) await createNode(root, page as never, { x: 0, y: 0 }, context as never);
+  return page;
+}
+
+function mockById(page: MockNode, id: string): MockNode {
+  const visit = (nodes: MockNode[]): MockNode | null => {
+    for (const node of nodes) {
+      if (node.getPluginData("compactDesignId") === id) return node;
+      const found = visit(node.children);
+      if (found) return found;
+    }
+    return null;
+  };
+  const found = visit(page.children);
+  assert.ok(found, `mock node ${id}`);
+  return found;
+}
+
+type ComparableState = Record<string, unknown>;
+const effectSummary = (effects: unknown) => (Array.isArray(effects) ? effects : []).map((effect) => {
+  const value = effect as { type: string; radius?: number; offset?: { x: number; y: number } };
+  return { type: value.type, radius: value.radius, offset: value.offset };
+});
+
+async function figmaState(page: MockNode): Promise<Record<string, ComparableState>> {
+  const result: Record<string, ComparableState> = {};
+  const visit = (node: MockNode) => {
+    const id = node.getPluginData("compactDesignId");
+    if (id) {
+      const fillList = Array.isArray(node.fills) ? node.fills as Array<Record<string, unknown>> : [];
+      const fills = Array.isArray(node.fills) ? fillList.map(({ boundVariables: _bound, ...paint }) => paint) : node.fills;
+      const state: ComparableState = { name: node.name, x: node.x, y: node.y, w: node.width, h: node.height, opacity: node.opacity, fills, fillBound: Boolean(fillList[0]?.boundVariables), strokes: node.strokes, effects: effectSummary(node.effects), constraints: node.constraints, children: node.children.map((child) => child.getPluginData("compactDesignId")) };
+      if ("cornerRadius" in node) state.cornerRadius = node.cornerRadius;
+      if (FRAME_TYPES.has(node.type)) {
+        state.layoutMode = node.layoutMode;
+        if (node.layoutMode !== "NONE") state.layout = { itemSpacing: node.itemSpacing, padding: [node.paddingLeft, node.paddingTop, node.paddingRight, node.paddingBottom], primary: node.primaryAxisAlignItems, counter: node.counterAxisAlignItems, primarySizing: node.primaryAxisSizingMode, counterSizing: node.counterAxisSizingMode };
+      }
+      if (node.type === "TEXT") state.text = { characters: node.characters, fontName: node.fontName, fontSize: node.fontSize, lineHeight: node.lineHeight, align: node.textAlignHorizontal, letterSpacing: node.letterSpacing, textCase: node.textCase };
+      result[id] = state;
+    }
+    node.children.forEach(visit);
+  };
+  page.children.forEach(visit);
+  return result;
+}
+
+async function coreState(document: InternalDocument): Promise<Record<string, ComparableState>> {
+  const result: Record<string, ComparableState> = {};
+  const sizing = (value: string | undefined) => value === "HUG" || value === "AUTO" ? "AUTO" : "FIXED";
+  const visit = async (node: InternalNode, parent: InternalNode | null) => {
+    const p = node.properties;
+    const origin = parent ? parent.properties.position : { x: 0, y: 0 };
+    const state: ComparableState = { name: node.name, x: p.position.x - origin.x, y: p.position.y - origin.y, w: p.size.width, h: p.size.height, opacity: p.opacity ?? 1, fills: await paints(p.styles.fills), fillBound: Boolean(p.bindings?.fill), strokes: await paints(p.styles.strokes), effects: effectSummary(await effectsFromData(p.styles.effects)), constraints: p.constraints ?? { horizontal: "MIN", vertical: "MIN" }, children: node.children.map((child) => child.id) };
+    if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "RECTANGLE"].includes(node.type)) state.cornerRadius = p.cornerRadius ?? 0;
+    if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"].includes(node.type)) {
+      state.layoutMode = p.layout?.direction ?? "NONE";
+      if (p.layout?.direction) state.layout = { itemSpacing: p.layout.itemSpacing ?? 0, padding: [p.layout.padding?.left ?? 0, p.layout.padding?.top ?? 0, p.layout.padding?.right ?? 0, p.layout.padding?.bottom ?? 0], primary: p.layout.primaryAxisAlignItems ?? "MIN", counter: p.layout.counterAxisAlignItems ?? "MIN", primarySizing: sizing(p.layout.primaryAxisSizingMode), counterSizing: sizing(p.layout.counterAxisSizingMode) };
+    }
+    if (node.type === "TEXT") {
+      const lineHeight = p.lineHeight?.unit === "PERCENT" || p.lineHeight?.unit === "PIXELS" ? { unit: p.lineHeight.unit, value: p.lineHeight.value } : { unit: "AUTO" };
+      state.text = { characters: p.text, fontName: { family: p.font?.family, style: p.font?.style }, fontSize: p.font?.size, lineHeight, align: p.alignment ?? "LEFT", letterSpacing: p.letterSpacing ?? { unit: "PERCENT", value: 0 }, textCase: p.textCase ?? "ORIGINAL" };
+    }
+    result[node.id] = state;
+    for (const child of node.children) await visit(child, node);
+  };
+  for (const root of document.nodes) await visit(root, null);
+  return result;
+}
+
+const parityDocument = () => normalize({
+  canvas: { id: "screen", width: 800, height: 600, fill: "#FFFFFF" },
+  nodes: [
+    { id: "outer", type: "FRAME", x: 100, y: 40, w: 500, h: 400, children: [
+      { id: "inner", type: "FRAME", x: 50, y: 30, w: 300, h: 200, children: [
+        { id: "leaf", type: "RECTANGLE", x: 10, y: 5, w: 20, h: 20, fill: "#FF0000" }
+      ] },
+      { id: "sibling", type: "FRAME", x: 200, y: 250, w: 100, h: 100, children: [] }
+    ] },
+    { id: "stack", type: "FRAME", x: 0, y: 460, w: 400, h: 100, layout: { direction: "HORIZONTAL", itemSpacing: 8, padding: { left: 16, top: 12, right: 16, bottom: 12 }, primaryAxisAlignItems: "CENTER" }, children: [
+      { id: "chip", type: "RECTANGLE", w: 40, h: 20, fill: "#00FF00" }
+    ] },
+    { id: "title", type: "TEXT", x: 20, y: 10, w: 300, h: 40, text: "Hello", font: { family: "Inter", style: "Bold", size: 24 }, fills: [] },
+    { id: "card", type: "RECTANGLE", x: 400, y: 10, w: 100, h: 100, effects: [{ type: "DROP_SHADOW", color: "#00000033", offset: { x: 0, y: 4 }, blur: 8 }, { type: "LAYER_BLUR", blur: 4 }] }
+  ]
+});
+
+const setOp = (id: string, set: Record<string, unknown>) => ({ op: "set", id, set });
+const checkedPatch = (...operations: unknown[]): InternalPatchDocument => {
+  const result = validate({ patch: { operations } });
+  assert.equal(result.valid, true, result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+  return result.patch!;
+};
+
+async function assertParity(document: InternalDocument, steps: unknown[][]): Promise<InternalDocument> {
+  const page = await importIntoMock(document);
+  assert.deepEqual(await figmaState(page), await coreState(document), "import parity before patching");
+  let current = document;
+  for (const [index, operations] of steps.entries()) {
+    const patch = checkedPatch(...operations);
+    current = applyCorePatch(current, patch).document;
+    await applyFigmaPatch(patch, emptyPatchContext() as never);
+    assert.deepEqual(await figmaState(page), await coreState(current), `step ${index}: ${JSON.stringify(operations)}`);
+  }
+  return current;
+}
+
+test("FIGMA_SET_ENTRIES covers exactly the core PATCH_SET_KEYS list", () => {
+  assert.deepEqual(Object.keys(FIGMA_SET_ENTRIES).sort(), [...PATCH_SET_KEYS].sort());
+  for (const key of PATCH_SET_KEYS) {
+    const rejected = FIGMA_SET_ENTRIES[key].phase === "rejected";
+    assert.equal(rejected, ["deferred", "immutable"].includes(PATCH_SET_SEMANTICS[key]), key);
+  }
+});
+
+test("parity: the same set patches give the same result in core and mocked Figma", async () => {
+  await assertParity(parityDocument(), [
+    [setOp("title", { font: { size: 32 } })],
+    [setOp("title", { text: "Changed", align: "CENTER", lineHeight: 1.4, letterSpacing: { unit: "PIXELS", value: 1 }, textCase: "UPPER" })],
+    [setOp("stack", { layout: { itemSpacing: 24 } })],
+    [setOp("stack", { layout: { padding: { left: 40 }, primaryAxisAlignItems: "MAX" } })],
+    [setOp("leaf", { x: 20 })],
+    [setOp("inner", { x: 0, y: 0, w: 320 })],
+    [setOp("leaf", { constraints: { horizontal: "CENTER" }, fill: "#0000FF", cornerRadius: 6, opacity: 0.5 })],
+    [setOp("card", { shadow: { y: 2, blur: 6 } })],
+    [setOp("card", { effects: [] })],
+    [setOp("outer", { layout: { direction: "VERTICAL", itemSpacing: 12 } })],
+    [setOp("chip", { layoutPositioning: "ABSOLUTE", x: 5, y: 6 })],
+    [setOp("title", { font: { family: "Roboto", style: "Medium" } }), setOp("card", { name: "Card", w: 120, h: 80 })]
+  ]);
+});
+
+test("move from #36 then set x lands in the same place in core and mocked Figma", async () => {
+  const final = await assertParity(parityDocument(), [
+    [{ op: "move", id: "leaf", parent: "sibling", index: 0 }, setOp("leaf", { x: 7 })],
+    [{ op: "move", id: "sibling", parent: "screen", index: 0 }, setOp("sibling", { y: 3 })]
+  ]);
+  const leaf = final.nodes[0].children.find((node) => node.id === "sibling")!.children[0];
+  assert.deepEqual(leaf.properties.position, { x: 200 + 7, y: 3 + 5 }, "sibling keeps its relative (200, _) under screen; leaf x is relative to sibling");
+});
+
+test("every settable key applies in Figma or fails explicitly — no silent drops", async () => {
+  const sample: Record<PatchSetKey, [string, unknown]> = {
+    name: ["rect", "Renamed"], x: ["rect", 5], y: ["rect", 6], w: ["rect", 50], h: ["rect", 60], rotation: ["rect", 15],
+    fill: ["rect", "#FF0000"], fills: ["rect", ["#00FF00"]], stroke: ["rect", "#0000FF"], strokes: ["rect", ["#0000FF"]],
+    strokeWeight: ["rect", 3], strokeTopWeight: ["rect", 2], strokeRightWeight: ["rect", 2], strokeBottomWeight: ["rect", 2], strokeLeftWeight: ["rect", 2],
+    strokeAlign: ["rect", "CENTER"], strokeCap: ["line", "ROUND"], strokeJoin: ["rect", "ROUND"], dashPattern: ["rect", [4, 2]],
+    cornerRadius: ["rect", 8], cornerRadii: ["rect", [1, 2, 3, 4]], opacity: ["rect", 0.5], blendMode: ["rect", "MULTIPLY"], visible: ["rect", false], locked: ["rect", true], isMask: ["rect", true], clipsContent: ["frame", false],
+    effects: ["rect", [{ type: "LAYER_BLUR", blur: 4 }]], elevation: ["rect", "LOW"], shadow: ["rect", { y: 2 }],
+    layout: ["stack", { itemSpacing: 24 }], constraints: ["rect", { horizontal: "CENTER" }],
+    layoutSizingHorizontal: ["stackChild", "FILL"], layoutSizingVertical: ["stackText", "HUG"], layoutAlign: ["stackChild", "STRETCH"], layoutGrow: ["stackChild", 1], layoutPositioning: ["stackChild", "ABSOLUTE"],
+    minWidth: ["stackChild", 10], maxWidth: ["stackChild", 500], minHeight: ["stackChild", 5], maxHeight: ["stackChild", 400], layoutGrids: ["frame", [{ pattern: "GRID", sectionSize: 8 }]],
+    text: ["text", "Changed"], font: ["text", { size: 30 }], lineHeight: ["text", 1.5], letterSpacing: ["text", { unit: "PIXELS", value: 1 }], align: ["text", "CENTER"], verticalAlignment: ["text", "BOTTOM"],
+    textDecoration: ["text", "UNDERLINE"], textCase: ["text", "UPPER"], paragraphSpacing: ["text", 4], paragraphIndent: ["text", 2], listSpacing: ["text", 3], hangingPunctuation: ["text", true], hangingList: ["text", true],
+    textAutoResize: ["text", "HEIGHT"], textTruncation: ["text", "ENDING"], maxLines: ["text", 2], runs: ["text", [{ text: "Ab" }, { text: "cd", fill: "#FF0000" }]],
+    pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
+    svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
+    componentId: ["rect", "c"], componentProperties: ["rect", []], instanceProperties: ["rect", {}], variantAxes: ["rect", {}], variant: ["rect", {}],
+    operation: ["bool", "SUBTRACT"], prototype: ["rect", []], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
+    styleRefs: ["rect", { fill: "x" }], bindings: ["rect", { fill: "x" }], variableModes: ["rect", { Theme: "Dark" }]
+  };
+  assert.deepEqual(Object.keys(sample).sort(), [...PATCH_SET_KEYS].sort());
+  const build = () => {
+    const make = (type: string, id: string, parent: MockNode) => { const node = createMockNode(type, id); node.setPluginData("compactDesignId", id); parent.appendChild(node); return node; };
+    const screen = createMockNode("FRAME", "screen"); screen.setPluginData("compactDesignId", "screen");
+    for (const [type, id] of [["RECTANGLE", "rect"], ["LINE", "line"], ["FRAME", "frame"], ["TEXT", "text"], ["POLYGON", "polygon"], ["STAR", "star"], ["ELLIPSE", "ellipse"], ["VECTOR", "vector"]]) make(type, id, screen);
+    const stack = make("FRAME", "stack", screen); stack.layoutMode = "HORIZONTAL";
+    make("FRAME", "stackChild", stack); const stackText = make("TEXT", "stackText", stack); stackText.characters = "x";
+    const bool = make("BOOLEAN_OPERATION", "bool", screen); make("RECTANGLE", "boolChild", bool);
+    (mockLookup(screen, "text") as MockNode).characters = "Hello";
+    installFigmaMock([screen]);
+    return screen;
+  };
+  const snapshot = (node: MockNode) => JSON.stringify(node, (key, value) => key === "parent" || key === "children" ? undefined : typeof value === "symbol" ? "MIXED" : value);
+  for (const key of PATCH_SET_KEYS) {
+    const [target, value] = sample[key];
+    const screen = build();
+    const before = snapshot(mockLookup(screen, target));
+    const semantics = PATCH_SET_SEMANTICS[key];
+    if (semantics === "deferred" || semantics === "immutable") {
+      // Even when handed an un-validated internal patch, Figma rejects explicitly.
+      const raw = { patch: { operations: [{ op: "SET", id: target, set: { [key]: value }, normalized: {} }] } } as unknown as InternalPatchDocument;
+      await assert.rejects(() => applyFigmaPatch(raw, emptyPatchContext() as never), /cannot be patched/, key);
+      assert.equal(snapshot(mockLookup(screen, target)), before, `${key}: rejected set must not change the node`);
+      continue;
+    }
+    await applyFigmaPatch(checkedPatch(setOp(target, { [key]: value })), emptyPatchContext() as never);
+    assert.notEqual(snapshot(mockLookup(screen, target)), before, `${key}: set must change the Figma node`);
+  }
+});
+
+function mockLookup(root: MockNode, id: string): MockNode {
+  if (root.getPluginData("compactDesignId") === id) return root;
+  for (const child of root.children) { const found = mockLookup(child, id); if (found.getPluginData("compactDesignId") === id) return found; }
+  return root.getPluginData("compactDesignId") === id ? root : { getPluginData: () => "" } as unknown as MockNode;
+}
+
+test("Figma partial font keeps family/style; figma.mixed fonts are handled explicitly", async () => {
+  const page = await importIntoMock(parityDocument());
+  const title = mockById(page, "title");
+  await applyFigmaPatch(checkedPatch(setOp("title", { font: { size: 32 } })), emptyPatchContext() as never);
+  assert.deepEqual(title.fontName, { family: "Inter", style: "Bold" });
+  assert.equal(title.fontSize, 32);
+  // Mix fonts across ranges, as runs would.
+  (title.setRangeFontName as (start: number, end: number, font: unknown) => void)(0, 2, { family: "Roboto", style: "Black" });
+  assert.equal(title.fontName, MIXED);
+  await applyFigmaPatch(checkedPatch(setOp("title", { font: { size: 18 } })), emptyPatchContext() as never);
+  const current = mockById(page, "title");
+  assert.equal(current.fontSize, 18, "size alone applies across mixed ranges");
+  assert.ok(loadedFonts.includes("Roboto Black") && loadedFonts.includes("Inter Bold"), "every range font is loaded before editing");
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("title", { font: { family: "Roboto" } })), emptyPatchContext() as never), /set font.family and font.style together/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("title", { text: "New" })), emptyPatchContext() as never), /per-range text styling/);
+  await applyFigmaPatch(checkedPatch(setOp("title", { font: { family: "Roboto", style: "Medium" } })), emptyPatchContext() as never);
+  assert.deepEqual(mockById(page, "title").fontName, { family: "Roboto", style: "Medium" });
+});
+
+test("Figma set on TEXT does not inject a fill and a missing font fails atomically", async () => {
+  const page = await importIntoMock(parityDocument());
+  await applyFigmaPatch(checkedPatch(setOp("title", { text: "Still unfilled" })), emptyPatchContext() as never);
+  assert.deepEqual(mockById(page, "title").fills, []);
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("card", { cornerRadius: 30 }), setOp("title", { font: { family: "Missing Font", style: "Regular" } })), emptyPatchContext() as never), /Missing Font Regular' is not available/);
+  assert.deepEqual(await figmaState(page), before, "earlier set in the same patch is rolled back");
+});
+
+test("Figma partial layout: error without direction on a plain frame, merge on Auto Layout", async () => {
+  const page = await importIntoMock(parityDocument());
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("outer", { layout: { itemSpacing: 4 } })), emptyPatchContext() as never), /no Auto Layout yet/);
+  assert.equal(mockById(page, "outer").layoutMode, "NONE");
+  await applyFigmaPatch(checkedPatch(setOp("stack", { layout: { itemSpacing: 24 } })), emptyPatchContext() as never);
+  const stack = mockById(page, "stack");
+  assert.deepEqual([stack.layoutMode, stack.itemSpacing, stack.paddingLeft, stack.paddingTop, stack.primaryAxisAlignItems], ["HORIZONTAL", 24, 16, 12, "CENTER"]);
+  await applyFigmaPatch(checkedPatch(setOp("stack", { layout: { direction: "VERTICAL" } })), emptyPatchContext() as never);
+  assert.deepEqual([mockById(page, "stack").layoutMode, mockById(page, "stack").paddingLeft, mockById(page, "stack").itemSpacing], ["VERTICAL", 16, 24], "direction change keeps padding and spacing");
+});
+
+test("Figma effects/shadow replace the effect list", async () => {
+  const page = await importIntoMock(parityDocument());
+  assert.equal((mockById(page, "card").effects as unknown[]).length, 2);
+  await applyFigmaPatch(checkedPatch(setOp("card", { shadow: { y: 2 } })), emptyPatchContext() as never);
+  assert.deepEqual(effectSummary(mockById(page, "card").effects).map((effect) => effect.type), ["DROP_SHADOW"]);
+});
+
+test("set on a node inserted in the same patch: Figma preflight rejects it and changes nothing", async () => {
+  const page = await importIntoMock(parityDocument());
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "append", parent: "sibling", node: { id: "fresh", type: "RECTANGLE", w: 5, h: 5 } }, setOp("fresh", { w: 9 })), emptyPatchContext() as never), /node 'fresh' was not found/);
+  assert.deepEqual(await figmaState(page), before);
+});
+
+test("Figma rolls back sets and moves when a later set breaks a rule", async () => {
+  const page = await importIntoMock(parityDocument());
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(
+    setOp("stack", { layout: { itemSpacing: 99 } }),
+    { op: "move", id: "leaf", parent: "sibling", index: 0 },
+    setOp("leaf", { x: 40 }),
+    setOp("card", { text: "not a text node" })
+  ), emptyPatchContext() as never), /'text' does not apply to RECTANGLE/);
+  assert.deepEqual(await figmaState(page), before);
+});
+
+test("Figma rollback restores nested set/insert/remove sequences without stray backups", async () => {
+  const page = await importIntoMock(parityDocument());
+  const before = await figmaState(page);
+  const countIds = () => { const ids: string[] = []; const visit = (node: MockNode) => { const id = node.getPluginData("compactDesignId"); if (id) ids.push(id); node.children.forEach(visit); }; page.children.forEach(visit); return ids.sort(); };
+  const idsBefore = countIds();
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(
+    setOp("leaf", { fill: "#123456" }),
+    { op: "insert", parent: "inner", index: 0, node: { id: "added", type: "RECTANGLE", w: 3, h: 3 } },
+    setOp("inner", { cornerRadius: 9 }),
+    setOp("outer", { name: "Outer renamed" }),
+    { op: "remove", id: "sibling" },
+    setOp("title", { font: { family: "Missing Font", style: "Bold" } })
+  ), emptyPatchContext() as never), /not available/);
+  assert.deepEqual(await figmaState(page), before);
+  assert.deepEqual(countIds(), idsBefore, "no duplicate or leftover compact ids");
+  assert.equal(page.children.some((child) => child.name === "Compact Design patch backup"), false, "backup holder is removed");
+  // A successful patch also leaves no holder behind.
+  await applyFigmaPatch(checkedPatch(setOp("leaf", { fill: "#123456" }), setOp("inner", { cornerRadius: 9 })), emptyPatchContext() as never);
+  assert.equal(page.children.some((child) => child.name === "Compact Design patch backup"), false);
+  assert.deepEqual(countIds(), idsBefore);
+});
+
+test("GROUP children: insert is group-relative, set x/y is rejected in both engines", async () => {
+  const document = normalize({ canvas: { id: "screen", width: 400, height: 400 }, nodes: [{ id: "holder", type: "FRAME", x: 10, y: 10, w: 300, h: 300, children: [] }] });
+  const { page } = installFigmaMock([]);
+  await createNode(document.nodes[0], page as never, { x: 0, y: 0 }, importContext() as never);
+  const holder = mockById(page, "holder");
+  const group = createMockNode("GROUP", "group"); group.setPluginData("compactDesignId", "group"); group.x = 40; group.y = 50; holder.appendChild(group);
+  const member = createMockNode("RECTANGLE", "member"); member.setPluginData("compactDesignId", "member"); member.x = 40; member.y = 50; group.appendChild(member);
+  await applyFigmaPatch(checkedPatch({ op: "append", parent: "group", node: { id: "dot", type: "RECTANGLE", x: 5, y: 6, w: 2, h: 2 } }), emptyPatchContext() as never);
+  assert.deepEqual([mockById(page, "dot").x, mockById(page, "dot").y], [45, 56], "Figma stores group children in the group's parent space");
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("member", { x: 1 })), emptyPatchContext() as never), /children of a GROUP cannot be positioned/);
+  const coreDocument = normalize({ canvas: { id: "screen", width: 400, height: 400 }, nodes: [{ id: "holder", type: "FRAME", x: 10, y: 10, w: 300, h: 300, children: [{ id: "group", type: "GROUP", x: 40, y: 50, w: 10, h: 10, children: [{ id: "member", type: "RECTANGLE", w: 10, h: 10 }] }] }] });
+  const appended = validatePatch(coreDocument, { patch: { operations: [{ op: "append", parent: "group", node: { id: "dot", type: "RECTANGLE", x: 5, y: 6, w: 2, h: 2 } }] } });
+  assert.equal(appended.valid, true);
+  const dot = appended.document!.nodes[0].children[0].children[0].children[1];
+  assert.deepEqual(dot.properties.position, { x: 10 + 40 + 5, y: 10 + 50 + 6 }, "same absolute position as Figma (holder 10 + group 40 + 5)");
+  assert.equal(validatePatch(coreDocument, { patch: { operations: [setOp("member", { x: 1 })] } }).valid, false);
+});
+
+test("e2e: a real multi-node document imports, takes a sequence of set patches, validates, and round-trips identically", async () => {
+  const sample = JSON.parse(readFileSync(join("..", "..", "examples", "update-patch-theme-sample.json"), "utf8"));
+  const document = normalize(sample);
+  assert.equal(validate(sample).valid, true);
+  const variables = new Map([["surface", { id: "var:surface" }], ["ink", { id: "var:ink" }], ["gap", { id: "var:gap" }]]);
+  const collections = new Map([["Theme", { id: "col:theme", name: "Theme", modes: [{ name: "Light", modeId: "1" }, { name: "Dark", modeId: "2" }] }]]);
+  const page = await importIntoMock(document, importContext(variables, collections));
+  assert.deepEqual(await figmaState(page), await coreState(document));
+  const steps: unknown[][] = [
+    [setOp("theme-title", { text: "The same design.\nA different mood." }), setOp("theme-card", { cornerRadius: 40 })],
+    [setOp("theme-card", { layout: { itemSpacing: 28, padding: { top: 48 } } })],
+    [setOp("theme-title", { font: { size: 48 } }), setOp("theme-eyebrow", { textCase: "UPPER", letterSpacing: { unit: "PERCENT", value: 8 } })],
+    [setOp("theme-copy", { fill: "#3A3A3A" })],
+    [setOp("theme-card", { x: 120, y: 96, w: 640 })]
+  ];
+  let current = document;
+  for (const [index, operations] of steps.entries()) {
+    const raw = { patch: { operations } };
+    const checked = validatePatch(current, raw);
+    assert.equal(checked.valid, true, `step ${index}: ${checked.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
+    current = checked.document!;
+    await applyFigmaPatch(checked.patch!, emptyPatchContext() as never);
+    assert.deepEqual(await figmaState(page), await coreState(current), `step ${index}`);
+  }
+  assert.equal(validatePatch(current, { patch: { operations: [setOp("theme-card", { opacity: 1 })] } }).valid, true);
+  const findCore = (id: string) => { const visit = (nodes: InternalNode[]): InternalNode | null => { for (const node of nodes) { if (node.id === id) return node; const found = visit(node.children); if (found) return found; } return null; }; return visit(current.nodes)!; };
+  assert.equal(findCore("theme-copy").properties.bindings, undefined, "fill set detaches the fill binding in core");
+  assert.equal(((mockById(page, "theme-copy").fills as Array<{ boundVariables?: unknown }>)[0]).boundVariables, undefined, "and in Figma");
+  assert.deepEqual(findCore("theme-title").properties.bindings, { fill: "ink" }, "unrelated bindings survive");
+  assert.deepEqual(findCore("theme-card").properties.layout?.padding, { left: 32, top: 48, right: 32, bottom: 32 });
 });

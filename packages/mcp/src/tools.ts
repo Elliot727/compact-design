@@ -60,7 +60,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "figma_patch",
-    description: "Apply a Compact Design patch (set/remove/append/insert/move) to layers previously imported by this plugin. insert places a child at index (clamped); move reparents/reorders with after-removal index semantics.",
+    description: "Apply a Compact Design patch (set/remove/append/insert/move) to layers previously imported by this plugin, atomically. set changes only the listed keys: layout, layout.padding, font and constraints deep-merge; fill(s), stroke(s), effects/shadow/elevation, runs, layoutGrids, vectorPaths, dashPattern and cornerRadii replace. x/y are parent-relative. Unknown keys, keys that don't apply to the target, and not-yet-patchable keys (bindings, styleRefs, variableModes, prototype, component/instance/variant keys, svg) are errors, never ignored. insert places a child at index (clamped); move reparents/reorders with after-removal index semantics and keeps parent-relative x/y.",
     inputSchema: { type: "object", properties: { document: DOCUMENT }, required: ["document"] }
   },
   {
