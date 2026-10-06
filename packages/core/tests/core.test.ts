@@ -390,3 +390,256 @@ test("schema requires an id on SHADER effects", () => {
   assert.equal(result.valid, false);
   assert.ok(result.issues.some((issue) => /effects\/0\/id$/.test(issue.path) && issue.code === "SCHEMA_REQUIRED"), JSON.stringify(result.issues));
 });
+
+function childIds(document: ReturnType<typeof normalize>, parentId: string): string[] {
+  const visit = (nodes: typeof document.nodes): string[] | null => {
+    for (const node of nodes) {
+      if (node.id === parentId) return node.children.map((child) => child.id);
+      const nested = visit(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  return visit(document.nodes) || [];
+}
+
+function findNode(document: ReturnType<typeof normalize>, id: string) {
+  const visit = (nodes: typeof document.nodes): (typeof document.nodes)[number] | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      const nested = visit(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  return visit(document.nodes);
+}
+
+test("normalizes and validates insert and move operations", () => {
+  const patch = normalizePatch({
+    patch: {
+      operations: [
+        { op: "insert", parent: "list", index: 1, node: { id: "mid", type: "FRAME", w: 10, h: 10 } },
+        { op: "move", id: "mid", parent: "list", index: 0 }
+      ]
+    }
+  });
+  assert.deepEqual(patch.patch.operations.map((operation) => operation.op), ["INSERT", "MOVE"]);
+  assert.equal(patch.patch.operations[0].index, 1);
+  assert.equal(patch.patch.operations[0].node?.id, "mid");
+  assert.equal(patch.patch.operations[1].id, "mid");
+  assert.equal(validate({
+    patch: {
+      operations: [
+        { op: "insert", parent: "list", index: 0, node: { type: "FRAME", w: 10, h: 10 } },
+        { op: "move", id: "a", parent: "list", index: 2 }
+      ]
+    }
+  }).valid, true);
+});
+
+test("rejects negative or non-integer patch index in schema and normalize", () => {
+  for (const index of [-1, 1.5, "0", null]) {
+    const result = validate({
+      patch: { operations: [{ op: "insert", parent: "list", index, node: { type: "FRAME", w: 10, h: 10 } }] }
+    });
+    assert.equal(result.valid, false, `index=${String(index)}`);
+  }
+  assert.throws(
+    () => normalizePatch({ patch: { operations: [{ op: "move", id: "a", parent: "list", index: -1 }] } }),
+    /non-negative integer/
+  );
+  assert.throws(
+    () => normalizePatch({ patch: { operations: [{ op: "insert", parent: "list", index: 1.2, node: { type: "FRAME", w: 10, h: 10 } }] } }),
+    /non-negative integer/
+  );
+});
+
+test("insert places children at middle, zero, and clamped end", () => {
+  const document = normalize({
+    canvas: { width: 300, height: 200 },
+    nodes: [{ id: "list", type: "FRAME", w: 200, h: 100, children: [
+      { id: "a", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "b", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "c", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  });
+  const middle = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 1, node: { id: "mid", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }));
+  assert.deepEqual(childIds(middle.document, "list"), ["a", "mid", "b", "c"]);
+
+  const atZero = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 0, node: { id: "first", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }));
+  assert.deepEqual(childIds(atZero.document, "list"), ["first", "a", "b", "c"]);
+
+  const clamped = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 99, node: { id: "tail", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }));
+  assert.deepEqual(childIds(clamped.document, "list"), ["a", "b", "c", "tail"]);
+});
+
+test("append matches insert at children.length", () => {
+  const source = {
+    canvas: { width: 300, height: 200 },
+    nodes: [{ id: "list", type: "FRAME", w: 200, h: 100, children: [
+      { id: "a", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "b", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  };
+  const document = normalize(source);
+  const viaAppend = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "append", parent: "list", node: { id: "z", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }));
+  const viaInsert = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "insert", parent: "list", index: 2, node: { id: "z", type: "RECTANGLE", w: 10, h: 10 } }] }
+  }));
+  assert.deepEqual(childIds(viaAppend.document, "list"), childIds(viaInsert.document, "list"));
+  assert.deepEqual(childIds(viaAppend.document, "list"), ["a", "b", "z"]);
+
+  // Same parent validation as insert: missing parent, non-container, INSTANCE.
+  for (const op of ["append", "insert"] as const) {
+    const missingParent = { op, parent: "nope", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(document, normalizePatch({ patch: { operations: [missingParent] } })), /was not found/);
+    const intoLeaf = { op, parent: "a", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(document, normalizePatch({ patch: { operations: [intoLeaf] } })), /cannot contain children/);
+  }
+  const withInstance = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 20, h: 20 }
+    ]
+  });
+  for (const op of ["append", "insert"] as const) {
+    const intoInstance = { op, parent: "copy", ...(op === "insert" ? { index: 0 } : {}), node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } };
+    assert.throws(() => applyPatch(withInstance, normalizePatch({ patch: { operations: [intoInstance] } })), /INSTANCE/);
+  }
+});
+
+test("move reorders within parent using after-removal index", () => {
+  const document = normalize({
+    canvas: { width: 300, height: 200 },
+    nodes: [{ id: "list", type: "FRAME", w: 200, h: 100, children: [
+      { id: "a", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "b", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "c", type: "RECTANGLE", w: 10, h: 10 },
+      { id: "d", type: "RECTANGLE", w: 10, h: 10 }
+    ] }]
+  });
+  // Move b to final index 2 after removal → [a, c, b, d]
+  const reordered = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "move", id: "b", parent: "list", index: 2 }] }
+  }));
+  assert.deepEqual(childIds(reordered.document, "list"), ["a", "c", "b", "d"]);
+
+  const clamped = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "move", id: "a", parent: "list", index: 99 }] }
+  }));
+  assert.deepEqual(childIds(clamped.document, "list"), ["b", "c", "d", "a"]);
+});
+
+test("move reparents, clamps, and rejects cycles, missing targets, roots, and instances", () => {
+  const document = normalize({
+    canvas: { id: "canvas", width: 300, height: 200 },
+    nodes: [{
+      id: "outer", type: "FRAME", w: 200, h: 100, children: [
+        { id: "inner", type: "FRAME", w: 80, h: 80, children: [
+          { id: "leaf", type: "RECTANGLE", w: 10, h: 10 }
+        ] },
+        { id: "sibling", type: "FRAME", w: 40, h: 40, children: [] }
+      ]
+    }]
+  });
+
+  const reparented = applyPatch(document, normalizePatch({
+    patch: { operations: [{ op: "move", id: "leaf", parent: "sibling", index: 0 }] }
+  }));
+  assert.deepEqual(childIds(reparented.document, "inner"), []);
+  assert.deepEqual(childIds(reparented.document, "sibling"), ["leaf"]);
+
+  assert.throws(
+    () => applyPatch(document, normalizePatch({ patch: { operations: [{ op: "move", id: "outer", parent: "inner", index: 0 }] } })),
+    /itself or its descendants/
+  );
+  assert.throws(
+    () => applyPatch(document, normalizePatch({ patch: { operations: [{ op: "move", id: "missing", parent: "outer", index: 0 }] } })),
+    /was not found/
+  );
+  assert.throws(
+    () => applyPatch(document, normalizePatch({ patch: { operations: [{ op: "move", id: "leaf", parent: "missing", index: 0 }] } })),
+    /was not found/
+  );
+  assert.throws(
+    () => applyPatch(document, normalizePatch({ patch: { operations: [{ op: "move", id: "canvas", parent: "outer", index: 0 }] } })),
+    /document root/
+  );
+  assert.throws(
+    () => applyPatch(document, normalizePatch({ patch: { operations: [{ op: "insert", parent: "leaf", index: 0, node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } }] } })),
+    /cannot contain children/
+  );
+
+  const withInstance = normalize({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 20, h: 20 },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 20, h: 20, children: [{ id: "slot", type: "FRAME", w: 10, h: 10 }] }
+    ]
+  });
+  assert.throws(
+    () => applyPatch(withInstance, normalizePatch({ patch: { operations: [{ op: "insert", parent: "copy", index: 0, node: { id: "x", type: "RECTANGLE", w: 1, h: 1 } }] } })),
+    /INSTANCE/
+  );
+  assert.throws(
+    () => applyPatch(withInstance, normalizePatch({ patch: { operations: [{ op: "move", id: "button", parent: "slot", index: 0 }] } })),
+    /INSTANCE/
+  );
+  assert.throws(
+    () => applyPatch(withInstance, normalizePatch({ patch: { operations: [{ op: "move", id: "slot", parent: "button", index: 0 }] } })),
+    /inside an INSTANCE and cannot be moved/
+  );
+});
+
+test("end-to-end insert+move+set patch validates the resulting multi-node document", () => {
+  const source = {
+    canvas: { id: "screen", width: 390, height: 844, fill: "#F6F0E4" },
+    nodes: [{
+      id: "card",
+      type: "FRAME",
+      w: 320,
+      h: 200,
+      fill: "#FFFFFF",
+      children: [
+        { id: "title", type: "TEXT", w: 280, h: 24, text: "Before", font: { family: "Inter", style: "Bold", size: 18 }, fill: "#111111" },
+        { id: "body", type: "TEXT", w: 280, h: 40, text: "Details", font: { family: "Inter", style: "Regular", size: 14 }, fill: "#333333" },
+        { id: "footer", type: "FRAME", w: 280, h: 40, children: [
+          { id: "chip-a", type: "RECTANGLE", w: 40, h: 20, fill: "#6C5CFF" },
+          { id: "chip-b", type: "RECTANGLE", w: 40, h: 20, fill: "#B69B62" }
+        ] }
+      ]
+    }]
+  };
+  const document = normalize(source);
+  assert.deepEqual(validateDocument(document), []);
+
+  const patch = normalizePatch({
+    patch: {
+      operations: [
+        { op: "insert", parent: "footer", index: 1, node: { id: "chip-mid", type: "RECTANGLE", w: 40, h: 20, fill: "#00AA88" } },
+        { op: "move", id: "body", parent: "card", index: 0 },
+        { op: "set", id: "title", set: { text: "After patch", fill: "#001122" } },
+        { op: "append", parent: "card", node: { id: "note", type: "TEXT", w: 280, h: 16, text: "Note", font: { size: 12 }, fill: "#666666" } }
+      ]
+    }
+  });
+  const result = applyPatch(document, patch);
+  assert.deepEqual(validateDocument(result.document), []);
+  assert.deepEqual(childIds(result.document, "card"), ["body", "title", "footer", "note"]);
+  assert.deepEqual(childIds(result.document, "footer"), ["chip-a", "chip-mid", "chip-b"]);
+  assert.equal(findNode(result.document, "title")?.properties.text, "After patch");
+  assert.deepEqual(result.affectedIds, ["chip-mid", "body", "title", "note"]);
+  // Original document is untouched (round-trip safety).
+  assert.deepEqual(childIds(document, "card"), ["title", "body", "footer"]);
+  assert.equal(findNode(document, "title")?.properties.text, "Before");
+});

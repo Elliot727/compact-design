@@ -198,3 +198,16 @@ test("stdio writes newline-delimited JSON, not LSP Content-Length frames", () =>
   assert.doesNotMatch(line, /Content-Length/i);
   assert.deepEqual(JSON.parse(line), { jsonrpc: "2.0", id: 1, result: { ok: true } });
 });
+
+test("get_language covers insert and move patch operations", async () => {
+  const response = await rpc("tools/call", { name: "get_language", arguments: {} });
+  const guide = toolText(response);
+  assert.match(guide, /"op": "insert"/);
+  assert.match(guide, /"op": "move"/);
+  assert.match(guide, /after removal/);
+  assert.match(guide, /clamped to children\.length/);
+  const patchTool = TOOLS.find((tool) => tool.name === "figma_patch");
+  assert.ok(patchTool);
+  assert.match(patchTool!.description, /insert/);
+  assert.match(patchTool!.description, /move/);
+});

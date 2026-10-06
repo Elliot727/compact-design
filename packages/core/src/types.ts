@@ -113,9 +113,10 @@ export interface InternalDocument {
 export type ImportMode = "CREATE" | "REPLACE" | "UPDATE";
 
 export interface PatchOperation {
-  op: "SET" | "REMOVE" | "APPEND";
+  op: "SET" | "REMOVE" | "APPEND" | "INSERT" | "MOVE";
   id?: string;
   parent?: string;
+  index?: number;
   set?: JsonObject;
   normalized?: DesignProperties;
   node?: InternalNode;

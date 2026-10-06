@@ -947,6 +947,28 @@
             "parent": { "type": "string" },
             "node": { "$ref": "#/$defs/node" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "parent", "index", "node"],
+          "properties": {
+            "op": { "const": "insert" },
+            "parent": { "type": "string" },
+            "index": { "type": "integer", "minimum": 0 },
+            "node": { "$ref": "#/$defs/node" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id", "parent", "index"],
+          "properties": {
+            "op": { "const": "move" },
+            "id": { "type": "string" },
+            "parent": { "type": "string" },
+            "index": { "type": "integer", "minimum": 0 }
+          }
         }
       ]
     },

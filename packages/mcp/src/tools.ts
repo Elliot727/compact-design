@@ -60,7 +60,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "figma_patch",
-    description: "Apply a Compact Design patch (set/remove/append) to layers previously imported by this plugin.",
+    description: "Apply a Compact Design patch (set/remove/append/insert/move) to layers previously imported by this plugin. insert places a child at index (clamped); move reparents/reorders with after-removal index semantics.",
     inputSchema: { type: "object", properties: { document: DOCUMENT }, required: ["document"] }
   },
   {

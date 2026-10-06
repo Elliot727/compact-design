@@ -2,6 +2,8 @@ import type { InternalDocument, InternalNode, InternalPatchDocument, PatchOperat
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; }
 
+const CONTAINER_TYPES = new Set(["FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "SECTION", "BOOLEAN_OPERATION"]);
+
 function cloneValue<T>(value: T): T {
   if (value instanceof Uint8Array) return new Uint8Array(value) as T;
   if (Array.isArray(value)) return value.map(cloneValue) as T;
@@ -31,18 +33,86 @@ function mergeSet(node: InternalNode, operation: PatchOperation): void {
   }
 }
 
+type NodeRef = { node: InternalNode; parent: InternalNode | null; siblings: InternalNode[] };
+
+function clampIndex(index: number, length: number): number {
+  return Math.max(0, Math.min(index, length));
+}
+
+function isDescendantOf(ancestor: InternalNode, candidate: InternalNode): boolean {
+  for (const child of ancestor.children) {
+    if (child === candidate || isDescendantOf(child, candidate)) return true;
+  }
+  return false;
+}
+
+function hasInstanceAncestor(node: InternalNode | null, index: Map<string, NodeRef>): boolean {
+  let current = node;
+  while (current) {
+    if (current.type === "INSTANCE") return true;
+    const ref = index.get(current.id);
+    current = ref?.parent ?? null;
+  }
+  return false;
+}
+
+function assertContainerParent(parent: InternalNode, operationIndex: number, parentId: string, index: Map<string, NodeRef>): void {
+  if (parent.type === "INSTANCE" || hasInstanceAncestor(parent, index)) {
+    throw new Error(`patch.operations[${operationIndex}]: parent '${parentId}' is an INSTANCE (or inside one) and cannot accept structural edits.`);
+  }
+  if (!CONTAINER_TYPES.has(parent.type)) {
+    throw new Error(`patch.operations[${operationIndex}]: parent '${parentId}' cannot contain children.`);
+  }
+}
+
+function assertNotInsideInstance(parent: InternalNode | null, operationIndex: number, id: string, index: Map<string, NodeRef>): void {
+  if (parent && hasInstanceAncestor(parent, index)) {
+    throw new Error(`patch.operations[${operationIndex}]: node '${id}' is inside an INSTANCE and cannot be moved.`);
+  }
+}
+
 export function applyDocumentPatch(document: InternalDocument, patch: InternalPatchDocument): PatchResult {
   const result: InternalDocument = { ...document, nodes: document.nodes.map(cloneNode), styles: cloneValue(document.styles), variables: cloneValue(document.variables) };
   const affectedIds: string[] = [];
-  const index = new Map<string, { node: InternalNode; parent: InternalNode | null; siblings: InternalNode[] }>();
+  const index = new Map<string, NodeRef>();
   const visit = (nodes: InternalNode[], parent: InternalNode | null): void => nodes.forEach((node) => { index.set(node.id, { node, parent, siblings: nodes }); visit(node.children, node); });
   visit(result.nodes, null);
   for (const [operationIndex, operation] of patch.patch.operations.entries()) {
-    if (operation.op === "APPEND") {
+    if (operation.op === "APPEND" || operation.op === "INSERT") {
       const target = operation.parent ? index.get(operation.parent) : undefined;
       if (!target || !operation.node) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
+      assertContainerParent(target.node, operationIndex, operation.parent || "", index);
       if (index.has(operation.node.id)) throw new Error(`patch.operations[${operationIndex}]: ID '${operation.node.id}' already exists.`);
-      const appended = cloneNode(operation.node); target.node.children.push(appended); visit([appended], target.node); affectedIds.push(appended.id);
+      const child = cloneNode(operation.node);
+      if (operation.op === "APPEND") {
+        target.node.children.push(child);
+      } else {
+        const at = clampIndex(operation.index ?? 0, target.node.children.length);
+        target.node.children.splice(at, 0, child);
+      }
+      visit([child], target.node);
+      affectedIds.push(child.id);
+      continue;
+    }
+    if (operation.op === "MOVE") {
+      const moving = operation.id ? index.get(operation.id) : undefined;
+      if (!moving) throw new Error(`patch.operations[${operationIndex}]: node '${operation.id || ""}' was not found.`);
+      if (!moving.parent) throw new Error(`patch.operations[${operationIndex}]: cannot move the document root.`);
+      assertNotInsideInstance(moving.parent, operationIndex, operation.id || "", index);
+      const destination = operation.parent ? index.get(operation.parent) : undefined;
+      if (!destination) throw new Error(`patch.operations[${operationIndex}]: parent '${operation.parent || ""}' was not found.`);
+      assertContainerParent(destination.node, operationIndex, operation.parent || "", index);
+      if (destination.node === moving.node || isDescendantOf(moving.node, destination.node)) {
+        throw new Error(`patch.operations[${operationIndex}]: cannot move a node under itself or its descendants.`);
+      }
+      const fromIndex = moving.siblings.indexOf(moving.node);
+      moving.siblings.splice(fromIndex, 1);
+      // Same-parent moves: index is the final position after removal.
+      const at = clampIndex(operation.index ?? 0, destination.node.children.length);
+      destination.node.children.splice(at, 0, moving.node);
+      index.set(moving.node.id, { node: moving.node, parent: destination.node, siblings: destination.node.children });
+      visit(moving.node.children, moving.node);
+      affectedIds.push(moving.node.id);
       continue;
     }
     const target = operation.id ? index.get(operation.id) : undefined;
