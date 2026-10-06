@@ -25,7 +25,7 @@
     },
     {
       "required": ["patch"],
-      "not": { "anyOf": [{ "required": ["canvas"] }, { "required": ["canvases"] }] }
+      "not": { "anyOf": [{ "required": ["canvas"] }, { "required": ["canvases"] }, { "required": ["nodes"] }] }
     }
   ],
   "$defs": {

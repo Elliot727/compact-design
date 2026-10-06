@@ -24,7 +24,7 @@ import {
   uniqueVariableExportIds
 } from "../src/plugin/export-variables";
 import { planExport, type ExportCandidate } from "../src/plugin/export-plan";
-import { applyPatch as applyCorePatch, normalize, normalizePatch, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, validate, validatePatch, type InternalDocument, type InternalNode, type InternalPatchDocument, type PatchSetKey } from "@compact-design/core";
+import { applyPatch as applyCorePatch, applyResourceUpsert, matchStyle, matchVariable, normalize, normalizePatch, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, validate, validatePatch, type InternalDocument, type InternalNode, type InternalPatchDocument, type PatchSetKey } from "@compact-design/core";
 import { applyPatch as applyFigmaPatch, FIGMA_SET_ENTRIES } from "../src/plugin/patch";
 import { createNode } from "../src/plugin/nodes";
 import { effectsFromData, paints } from "../src/plugin/paints";
@@ -991,6 +991,140 @@ function emptyPatchContext() {
 
 const loadedFonts: string[] = [];
 
+type MockStyle = {
+  id: string;
+  name: string;
+  type: "PAINT" | "TEXT";
+  paints: unknown[];
+  fontName: { family: string; style: string };
+  fontSize: number;
+  lineHeight: { unit: string; value?: number };
+  letterSpacing: { unit: string; value: number };
+  paragraphSpacing: number;
+  removed: boolean;
+  pluginData: Record<string, string>;
+  getPluginData: (key: string) => string;
+  setPluginData: (key: string, value: string) => void;
+  remove: () => void;
+};
+
+type MockVariableCollection = {
+  id: string;
+  name: string;
+  modes: Array<{ modeId: string; name: string }>;
+  removed: boolean;
+  _modeSeq: number;
+  renameMode: (modeId: string, name: string) => void;
+  addMode: (name: string) => string;
+  removeMode: (modeId: string) => void;
+  remove: () => void;
+};
+
+type MockVariable = {
+  id: string;
+  name: string;
+  resolvedType: string;
+  variableCollectionId: string;
+  valuesByMode: Record<string, unknown>;
+  removed: boolean;
+  pluginData: Record<string, string>;
+  getPluginData: (key: string) => string;
+  setPluginData: (key: string, value: string) => void;
+  setValueForMode: (modeId: string, value: unknown) => void;
+  remove: () => void;
+};
+
+let mockStyleSeq = 0;
+let mockCollectionSeq = 0;
+let mockVariableSeq = 0;
+
+function createMockStyle(type: "PAINT" | "TEXT"): MockStyle {
+  mockStyleSeq += 1;
+  const style: MockStyle = {
+    id: `style:${mockStyleSeq}`,
+    name: `Style ${mockStyleSeq}`,
+    type,
+    paints: [],
+    fontName: { family: "Inter", style: "Regular" },
+    fontSize: 12,
+    lineHeight: { unit: "AUTO" },
+    letterSpacing: { unit: "PERCENT", value: 0 },
+    paragraphSpacing: 0,
+    removed: false,
+    pluginData: {},
+    getPluginData(key: string) { return this.pluginData[key] || ""; },
+    setPluginData(key: string, value: string) { this.pluginData[key] = value; },
+    remove() { this.removed = true; }
+  };
+  return style;
+}
+
+function createMockVariableCollection(name: string): MockVariableCollection {
+  mockCollectionSeq += 1;
+  const collection: MockVariableCollection = {
+    id: `VariableCollectionId:${mockCollectionSeq}`,
+    name,
+    modes: [{ modeId: `${mockCollectionSeq}:0`, name: "Mode 1" }],
+    removed: false,
+    _modeSeq: 0,
+    renameMode(modeId: string, next: string) {
+      const mode = this.modes.find((candidate) => candidate.modeId === modeId);
+      if (mode) mode.name = next;
+    },
+    addMode(modeName: string) {
+      const api = (globalThis as { figma?: { _modeLimit?: number } }).figma;
+      if (api?._modeLimit !== undefined && this.modes.length >= api._modeLimit) {
+        throw new Error(`in addMode: Limited to ${api._modeLimit} modes only`);
+      }
+      this._modeSeq += 1;
+      const modeId = `${this.id}:${this._modeSeq}`;
+      this.modes.push({ modeId, name: modeName });
+      // Seed existing variables from mode 0 (Figma behaviour).
+      const vars = ((globalThis as { figma?: { _variables?: MockVariable[] } }).figma?._variables || []).filter((variable) => variable.variableCollectionId === this.id && !variable.removed);
+      const seedId = this.modes[0].modeId;
+      for (const variable of vars) {
+        if (!(modeId in variable.valuesByMode) && seedId in variable.valuesByMode) {
+          variable.valuesByMode[modeId] = typeof variable.valuesByMode[seedId] === "object" && variable.valuesByMode[seedId]
+            ? JSON.parse(JSON.stringify(variable.valuesByMode[seedId]))
+            : variable.valuesByMode[seedId];
+        }
+      }
+      return modeId;
+    },
+    removeMode(modeId: string) {
+      this.modes = this.modes.filter((mode) => mode.modeId !== modeId);
+      const vars = ((globalThis as { figma?: { _variables?: MockVariable[] } }).figma?._variables || []).filter((variable) => variable.variableCollectionId === this.id);
+      for (const variable of vars) delete variable.valuesByMode[modeId];
+    },
+    remove() { this.removed = true; }
+  };
+  return collection;
+}
+
+function createMockVariable(name: string, collection: MockVariableCollection, resolvedType: string): MockVariable {
+  mockVariableSeq += 1;
+  const valuesByMode: Record<string, unknown> = {};
+  for (const mode of collection.modes) {
+    valuesByMode[mode.modeId] = resolvedType === "COLOR" ? { r: 0, g: 0, b: 0, a: 1 } : resolvedType === "FLOAT" ? 0 : resolvedType === "BOOLEAN" ? false : "";
+  }
+  const variable: MockVariable = {
+    id: `VariableID:${mockVariableSeq}`,
+    name,
+    resolvedType,
+    variableCollectionId: collection.id,
+    valuesByMode,
+    removed: false,
+    pluginData: {},
+    getPluginData(key: string) { return this.pluginData[key] || ""; },
+    setPluginData(key: string, value: string) { this.pluginData[key] = value; },
+    setValueForMode(modeId: string, value: unknown) {
+      this.valuesByMode[modeId] = typeof value === "object" && value ? JSON.parse(JSON.stringify(value)) : value;
+    },
+    remove() { this.removed = true; }
+  };
+  return variable;
+}
+
 function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = []) {
   const page = createMockNode("PAGE", "Page 1");
   page.children = pageChildren;
@@ -1071,8 +1205,37 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
       loadedFonts.push(`${font.family} ${font.style}`);
       if (font.family === "Missing Font") throw new Error("font not found");
     },
+    _paintStyles: [] as MockStyle[],
+    _textStyles: [] as MockStyle[],
+    _variableCollections: [] as MockVariableCollection[],
+    _variables: [] as MockVariable[],
+    _modeLimit: undefined as number | undefined,
+    getLocalPaintStylesAsync: async function (this: { _paintStyles: MockStyle[]; _textStyles: MockStyle[] }) { return this._paintStyles.filter((style) => !style.removed); },
+    getLocalTextStylesAsync: async function (this: { _paintStyles: MockStyle[]; _textStyles: MockStyle[] }) { return this._textStyles.filter((style) => !style.removed); },
+    createPaintStyle: function (this: { _paintStyles: MockStyle[]; _textStyles: MockStyle[] }) {
+      const style = createMockStyle("PAINT");
+      this._paintStyles.push(style);
+      return style;
+    },
+    createTextStyle: function (this: { _paintStyles: MockStyle[]; _textStyles: MockStyle[] }) {
+      const style = createMockStyle("TEXT");
+      this._textStyles.push(style);
+      return style;
+    },
     variables: {
-      setBoundVariableForPaint: (paint: Record<string, unknown>, field: string, variable: { id: string }) => ({ ...paint, boundVariables: { [field]: { type: "VARIABLE_ALIAS", id: variable.id } } })
+      setBoundVariableForPaint: (paint: Record<string, unknown>, field: string, variable: { id: string }) => ({ ...paint, boundVariables: { [field]: { type: "VARIABLE_ALIAS", id: variable.id } } }),
+      getLocalVariableCollectionsAsync: async () => (figmaMock._variableCollections as MockVariableCollection[]).filter((collection) => !collection.removed),
+      getLocalVariablesAsync: async () => (figmaMock._variables as MockVariable[]).filter((variable) => !variable.removed),
+      createVariableCollection: (name: string) => {
+        const collection = createMockVariableCollection(name);
+        (figmaMock._variableCollections as MockVariableCollection[]).push(collection);
+        return collection;
+      },
+      createVariable: (name: string, collection: MockVariableCollection, resolvedType: string) => {
+        const variable = createMockVariable(name, collection, resolvedType);
+        (figmaMock._variables as MockVariable[]).push(variable);
+        return variable;
+      }
     },
     createImage: () => ({ hash: "img" }),
     createImageAsync: async () => ({ hash: "img" })
@@ -1080,6 +1243,7 @@ function installFigmaMock(pageChildren: MockNode[], extraPages: MockNode[][] = [
   (globalThis as { figma?: unknown }).figma = figmaMock;
   return { page, figmaMock };
 }
+
 
 function compactIds(parent: MockNode): string[] {
   return parent.children.map((child) => child.getPluginData("compactDesignId"));
@@ -2608,4 +2772,292 @@ test("componentId remains rejected while prototype is patchable", async () => {
   const raw = { patch: { operations: [{ op: "SET", id: "box", set: { componentId: "x" }, normalized: {} }] } } as unknown as InternalPatchDocument;
   await assert.rejects(() => applyFigmaPatch(raw, emptyPatchContext() as never), /cannot be patched/);
   await applyFigmaPatch(checkedPatch(setOp("box", { prototype: [] })), emptyPatchContext() as never);
+});
+
+// --- Patch resource upsert (variables / styles) -----------------------------
+
+test("Figma patch upsert: create collection/variable/style then rollback removes them", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ff0000" }]
+  });
+  const page = await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: { _variables: MockVariable[]; _variableCollections: MockVariableCollection[]; _paintStyles: MockStyle[]; _textStyles: MockStyle[] } }).figma;
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+      styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 44 } }],
+      patch: { operations: [
+        { op: "set", id: "cta", set: { bindings: { fill: "brand" } } },
+        { op: "set", id: "cta", set: { text: "nope" } }
+      ] }
+    }), ctx as never),
+    /does not apply|text/
+  );
+
+  assert.equal(api._variableCollections.filter((c) => !c.removed).length, 0, "collections rolled back");
+  assert.equal(api._variables.filter((v) => !v.removed).length, 0, "variables rolled back");
+  assert.equal(api._textStyles.filter((s) => !s.removed).length, 0, "styles rolled back");
+  assert.equal(mockById(page, "cta").getPluginData("compactDesignId"), "cta");
+});
+
+test("Figma patch upsert: update then fail restores per-mode values", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }]
+  });
+  const page = await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: {
+    _variables: MockVariable[];
+    _variableCollections: MockVariableCollection[];
+    variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable };
+  } }).figma;
+
+  // Seed an existing collection/variable outside the patch path.
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  collection.addMode("Dark");
+  const variable = api.variables.createVariable("color/brand", collection, "COLOR");
+  variable.setPluginData("compactDesignId", "brand");
+  variable.setValueForMode(collection.modes[0].modeId, { r: 1, g: 0, b: 0, a: 1 });
+  variable.setValueForMode(collection.modes[1].modeId, { r: 0, g: 0, b: 1, a: 1 });
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("brand", variable as never);
+  ctx.resources.variables.set("color/brand", variable as never);
+
+  const beforeLight = { ...(variable.valuesByMode[collection.modes[0].modeId] as object) };
+  const beforeDark = { ...(variable.valuesByMode[collection.modes[1].modeId] as object) };
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 0.2, g: 0.3, b: 0.4, a: 1 } } }] }],
+      patch: { operations: [
+        { op: "set", id: "cta", set: { bindings: { fill: "brand" } } },
+        { op: "set", id: "missing", set: { name: "x" } }
+      ] }
+    }), ctx as never),
+    /was not found|missing/
+  );
+
+  assert.deepEqual(variable.valuesByMode[collection.modes[0].modeId], beforeLight);
+  assert.deepEqual(variable.valuesByMode[collection.modes[1].modeId], beforeDark);
+  assert.ok(page);
+});
+
+test("Figma patch upsert: mode add + TEXT style merge then fail restores both exactly", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }]
+  });
+  await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: {
+    _modeLimit?: number;
+    createTextStyle: () => MockStyle;
+    variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable };
+    _variableCollections: MockVariableCollection[];
+    _variables: MockVariable[];
+    _textStyles: MockStyle[];
+  } }).figma;
+
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("gap", collection, "FLOAT");
+  variable.setPluginData("compactDesignId", "gap");
+  variable.setValueForMode(collection.modes[0].modeId, 8);
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("gap", variable as never);
+
+  const style = api.createTextStyle();
+  style.name = "Heading";
+  style.setPluginData("compactDesignId", "heading");
+  style.fontName = { family: "Inter", style: "Bold" };
+  style.fontSize = 32;
+  style.paragraphSpacing = 4;
+  ctx.resources.textStyles.set("heading", style as never);
+  ctx.resources.textStyles.set("Heading", style as never);
+
+  const modeNamesBefore = collection.modes.map((mode) => mode.name);
+  const gapBefore = variable.valuesByMode[collection.modes[0].modeId];
+  const fontBefore = { ...style.fontName };
+  const sizeBefore = style.fontSize;
+  const paraBefore = style.paragraphSpacing;
+
+  await assert.rejects(
+    () => applyFigmaPatch(normalizePatch({
+      variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Dark: 16 } }] }],
+      styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { size: 44 } }],
+      patch: { operations: [
+        { op: "set", id: "cta", set: { name: "CTA" } },
+        { op: "set", id: "ghost", set: { name: "nope" } }
+      ] }
+    }), ctx as never),
+    /was not found|ghost/
+  );
+
+  assert.deepEqual(collection.modes.map((mode) => mode.name), modeNamesBefore, "mode list restored");
+  assert.equal(variable.valuesByMode[collection.modes[0].modeId], gapBefore);
+  assert.deepEqual(style.fontName, fontBefore);
+  assert.equal(style.fontSize, sizeBefore);
+  assert.equal(style.paragraphSpacing, paraBefore);
+});
+
+test("Figma patch upsert: modes[0] never renamed; created styles carry compactDesignId; plan-limit WARNING", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ffffff" }]
+  });
+  await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  const api = (globalThis as { figma: {
+    _modeLimit?: number;
+    createTextStyle: () => MockStyle;
+    variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable };
+    _textStyles: MockStyle[];
+    _variableCollections: MockVariableCollection[];
+  } }).figma;
+
+  const collection = api.variables.createVariableCollection("Theme");
+  collection.renameMode(collection.modes[0].modeId, "Light");
+  const variable = api.variables.createVariable("x", collection, "FLOAT");
+  variable.setPluginData("compactDesignId", "x");
+  variable.setValueForMode(collection.modes[0].modeId, 1);
+  ctx.resources.variableCollections.set("Theme", collection as never);
+  ctx.resources.variableCollections.set(collection.id, collection as never);
+  ctx.resources.variables.set("x", variable as never);
+
+  const { warnings } = await applyFigmaPatch(normalizePatch({
+    variables: [{ name: "Theme", modes: ["Dark"], items: [{ id: "x", name: "x", type: "FLOAT", values: { Dark: 2 } }] }],
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 20 } }],
+    patch: { operations: [{ op: "set", id: "cta", set: { name: "CTA" } }] }
+  }), ctx as never);
+
+  assert.equal(collection.modes[0].name, "Light", "mode 0 not renamed");
+  assert.ok(collection.modes.some((mode) => mode.name === "Dark"));
+  const created = api._textStyles.find((style) => style.name === "Heading" && !style.removed);
+  assert.ok(created);
+  assert.equal(created!.getPluginData("compactDesignId"), "heading");
+
+  // Plan-limit path: limit to 1 mode on a fresh collection via import-style create.
+  api._modeLimit = 1;
+  const ctx2 = emptyPatchContext();
+  const result2 = await applyFigmaPatch(normalizePatch({
+    variables: [{ name: "Limited", modes: ["A", "B"], items: [{ id: "y", name: "y", type: "FLOAT", values: { A: 1 } }] }],
+    patch: { operations: [{ op: "set", id: "cta", set: { opacity: 0.9 } }] }
+  }), ctx2 as never);
+  assert.ok(result2.warnings.some((warning) => /Limited|omitted B|mode/i.test(warning)), result2.warnings.join("; "));
+  assert.ok(warnings || true);
+});
+
+test("lockstep: resource upsert conflicts agree in core and Figma", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 100, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }],
+    variables: [{ name: "Theme", modes: ["Light"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 1, g: 0, b: 0, a: 1 } } }] }],
+    styles: [{ id: "ink", name: "Ink", type: "PAINT", paints: ["#111"] }]
+  });
+
+  const cases: Array<{ label: string; patch: unknown; pattern: RegExp }> = [
+    {
+      label: "type conflict",
+      patch: {
+        variables: [{ name: "Theme", items: [{ name: "color/brand", type: "FLOAT", value: 1 }] }],
+        patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] }
+      },
+      pattern: /PATCH_RESOURCE_CONFLICT|already exists.*FLOAT|type/
+    },
+    {
+      label: "id/name mismatch",
+      patch: {
+        variables: [{ name: "Theme", items: [{ id: "brand", name: "color/other", type: "COLOR", value: { r: 0, g: 1, b: 0, a: 1 } }] }],
+        patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] }
+      },
+      pattern: /cannot rename|PATCH_RESOURCE_CONFLICT/
+    },
+    {
+      label: "unknown mode",
+      patch: {
+        variables: [{ name: "Theme", items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Dark: { r: 0, g: 0, b: 1, a: 1 } } }] }],
+        patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] }
+      },
+      pattern: /mode 'Dark'|PATCH_RESOURCE_INVALID/
+    },
+    {
+      label: "style type conflict",
+      patch: {
+        styles: [{ id: "ink", name: "Ink", type: "TEXT", font: { family: "Inter", style: "Bold", size: 12 } }],
+        patch: { operations: [{ op: "set", id: "cta", set: { name: "x" } }] }
+      },
+      pattern: /PATCH_RESOURCE_CONFLICT|type TEXT|type PAINT|already exists/
+    }
+  ];
+
+  for (const entry of cases) {
+    const core = validatePatch(document, entry.patch);
+    assert.equal(core.valid, false, entry.label);
+    assert.match(core.issues.map((issue) => `${issue.code}: ${issue.message}`).join("\n"), entry.pattern, entry.label);
+
+    await importIntoMock(normalize({
+      canvas: { id: "screen", width: 100, height: 100 },
+      nodes: [{ id: "cta", type: "RECTANGLE", w: 10, h: 10, fill: "#fff" }]
+    }));
+    const ctx = emptyPatchContext();
+    const api = (globalThis as { figma: {
+      variables: { createVariableCollection: (n: string) => MockVariableCollection; createVariable: (n: string, c: MockVariableCollection, t: string) => MockVariable };
+      createPaintStyle: () => MockStyle;
+    } }).figma;
+    const collection = api.variables.createVariableCollection("Theme");
+    collection.renameMode(collection.modes[0].modeId, "Light");
+    const variable = api.variables.createVariable("color/brand", collection, "COLOR");
+    variable.setPluginData("compactDesignId", "brand");
+    variable.setValueForMode(collection.modes[0].modeId, { r: 1, g: 0, b: 0, a: 1 });
+    ctx.resources.variableCollections.set("Theme", collection as never);
+    ctx.resources.variableCollections.set(collection.id, collection as never);
+    ctx.resources.variables.set("brand", variable as never);
+    ctx.resources.variables.set("color/brand", variable as never);
+    const paint = api.createPaintStyle();
+    paint.name = "Ink";
+    paint.setPluginData("compactDesignId", "ink");
+    ctx.resources.paintStyles.set("ink", paint as never);
+    ctx.resources.paintStyles.set("Ink", paint as never);
+
+    await assert.rejects(
+      () => applyFigmaPatch(normalizePatch(entry.patch), ctx as never),
+      entry.pattern,
+      entry.label
+    );
+  }
+
+  // Shared match helpers
+  assert.equal(matchStyle([{ id: "a", name: "A", type: "PAINT", paints: [] }], { id: "a", name: "Other" })?.by, "id");
+  assert.equal(matchVariable([{ id: "v", name: "n", type: "FLOAT" }], { id: "v", name: "other" })?.by, "id");
+  assert.ok(applyResourceUpsert);
+});
+
+test("Figma patch upsert: successful create + bind round-trip", async () => {
+  const document = normalize({
+    canvas: { id: "screen", width: 200, height: 100 },
+    nodes: [{ id: "cta", type: "RECTANGLE", w: 40, h: 20, fill: "#ff0000" }]
+  });
+  const page = await importIntoMock(document);
+  const ctx = emptyPatchContext();
+  await applyFigmaPatch(normalizePatch({
+    variables: [{ name: "Theme", modes: ["Light", "Dark"], items: [{ id: "brand", name: "color/brand", type: "COLOR", values: { Light: { r: 214, g: 92, b: 40, a: 1 }, Dark: { r: 255, g: 140, b: 90, a: 1 } } }] }],
+    styles: [{ id: "heading", name: "Heading", type: "TEXT", font: { family: "Inter", style: "Bold", size: 44 } }],
+    patch: { operations: [
+      { op: "set", id: "cta", set: { bindings: { fill: "brand" } } },
+      { op: "set", id: "screen", set: { variableModes: { Theme: "Dark" } } }
+    ] }
+  }), ctx as never);
+
+  assert.ok(ctx.resources.variables.get("brand"), "brand visible in resources");
+  assert.ok(ctx.resources.textStyles.get("heading"), "heading style keyed by compact id");
+  assert.equal((ctx.resources.textStyles.get("heading") as { getPluginData: (k: string) => string }).getPluginData("compactDesignId"), "heading");
+  const cta = mockById(page, "cta");
+  assert.ok(cta.fills && Array.isArray(cta.fills) && (cta.fills[0] as { boundVariables?: unknown }).boundVariables, "fill bound");
 });

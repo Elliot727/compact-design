@@ -20,7 +20,7 @@ Give every layer that may be updated or patched an explicit stable ID. Generated
 
 ## JSON patch documents
 
-A patch is the second accepted top-level document form. It targets layers previously imported by this plugin:
+A patch is the second accepted top-level document form. It targets layers previously imported by this plugin. It may also carry top-level `variables` / `styles` (upserted before operations — see [Tokens in patches](#tokens-in-patches)):
 
 ```json
 {
@@ -57,6 +57,47 @@ A patch is the second accepted top-level document form. It targets layers previo
 All targets, parents, and created IDs are checked before the first mutation against layers previously imported by this plugin (compact-design plugin data only — raw Figma ids are not accepted). Figma preflight tracks ids created earlier in the **same** patch (`append`/`insert`/`duplicate`, including every layer in a duplicated subtree), so a later `set`/`remove`/`move`/`duplicate` can target them. Core and Figma stay in lockstep.
 
 Patches are atomic in Figma. Every `set` is checked against the rules below before its target is touched. Each changed or removed node is cloned into a hidden "Compact Design patch backup" frame before it is changed. Inserts and duplicates are removed, and moves go back to their original parent, index, and x/y, if a later operation fails. The undo log is replayed in reverse, so a `set` after a `move` of the same node, or a `set` on an ancestor after edits to its children, also restores cleanly. The holder frame is deleted when the patch finishes. A layer restored after a failure is the clone, so it gets a new Figma node id. Patch image fills use the same remote, local-file, embedded-image and downscaling pipeline as full documents.
+
+### Tokens in patches
+
+A patch document may carry top-level `variables` and `styles` (the same shapes as a full document). They are **upserted before `operations` run**, so later `set` / `insert` / `duplicate` can bind to tokens declared in the same patch:
+
+```json
+{
+  "variables": [{
+    "name": "Theme",
+    "modes": ["Light", "Dark"],
+    "items": [
+      { "id": "brand", "name": "color/brand", "type": "COLOR",
+        "values": { "Light": { "r": 214, "g": 92, "b": 40, "a": 1 }, "Dark": { "r": 255, "g": 140, "b": 90, "a": 1 } } }
+    ]
+  }],
+  "styles": [{ "id": "heading", "name": "Heading", "type": "TEXT", "font": { "family": "Inter", "style": "Bold", "size": 44 } }],
+  "patch": { "operations": [
+    { "op": "set", "id": "cta", "set": { "bindings": { "fill": "brand" } } },
+    { "op": "set", "id": "screen-home", "set": { "variableModes": { "Theme": "Dark" } } }
+  ] }
+}
+```
+
+| Resource | Identity | Existing → | Missing → |
+| --- | --- | --- | --- |
+| Collection | `name` | merge: requested `modes` are **added**; unlisted existing modes are **kept** | create |
+| Variable | collection + (`id` if it matches, else `name`) + `type` | write values **only for the modes given**; `value` writes mode 0 | create (every mode after the patch must have a value) |
+| PAINT style | compact `id` first, then `name` | replace `paints` | create |
+| TEXT style | compact `id` first, then `name` | merge typography (`font` partial-merges like `set.font`) | create (`font.family` + `font.style` required) |
+
+Edges:
+
+- **Type conflict** (same name, different type) or **style type clash** → `PATCH_RESOURCE_CONFLICT`.
+- **Id matches, name differs** → error in v1 (no rename); keep the name or omit `id`.
+- **Unknown mode in `values`** → `PATCH_RESOURCE_INVALID` (not silently ignored).
+- **Mode 0 is never renamed** on an existing collection (import may rename mode 0; a patch appends instead). A new mode seeds unmentioned variables from mode 0.
+- **Plan mode limit** uses the same WARNING fallback as import.
+- **Atomicity:** Figma snapshots every touched variable (per-mode values), collection (added modes), and style before writing; on failure it restores them and removes created tokens. (Import's "reused resources can't be restored" does **not** apply to patches.)
+- Created styles set `compactDesignId` so later patches find them by `id`.
+- `affectedIds` may include resource keys such as `variable:Theme/color/brand` and `style:Heading`.
+- Schema: `nodes` next to `patch` is rejected (same silent-drop class as `canvas` / `canvases`).
 
 ### Patch `set` semantics
 

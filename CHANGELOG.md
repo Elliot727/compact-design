@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Features
+
+- **feat(core,figma,mcp): upsert `variables` / `styles` in a patch document** — patch documents may carry top-level tokens; they are upserted before operations so later ops can bind. Shared `applyResourceUpsert` / `matchStyle` / `matchVariable` keep core and Figma in lockstep. Figma snapshots touched tokens and restores them on failure (atomicity). Schema rejects `nodes` next to `patch` (breaking for that silent-drop shape). Unknown mode keys in `values` are `PATCH_RESOURCE_INVALID`. Mode 0 is never renamed by a patch.
+
 ## 0.3.0 — 2026-10-06
 
 Published packages: `@compact-design/core`, `@compact-design/html`, `@compact-design/mcp` (Figma plugin is not on npm).

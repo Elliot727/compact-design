@@ -51,7 +51,7 @@ Document \`styles\` hold reusable PAINT and TEXT styles. Nodes reference them vi
 validate returns ERROR if a styleRef is missing or the wrong type (same class as bindings).
 
 ## Variables and modes
-Collections live under document \`variables\`. Types: COLOR | FLOAT | STRING | BOOLEAN.
+Collections live under document \`variables\` (and may also appear on a patch document, upserted before operations). Types: COLOR | FLOAT | STRING | BOOLEAN.
 Single-mode (default):
 { "variables": [{ "name": "Tokens", "items": [
   { "id": "brand", "name": "color/brand", "type": "COLOR", "value": { "r": 0, "g": 25, "b": 168, "a": 1 } },
@@ -115,7 +115,9 @@ Without \`componentPropertyReferences\`, instance overrides do not affect childr
 - Patchable (shallow-merge; field \`null\` clears): bindings, styleRefs, variableModes, instanceProperties, componentPropertyReferences. Setting raw fill/font on a bound/styled node detaches with a WARNING.
 - Patchable definitions: \`componentProperties\` (name-keyed upsert on COMPONENT; null deletes; type immutable), \`variantAxes\` (shallow-merge on COMPONENT_SET; string[] replaces options and never renames; object form \`{ rename?, options?, renameOptions? }\` renames explicitly; every option must be carried by a child; axis null ERROR), \`variant\` (merge on COMPONENT in a set; whole-key/per-axis null ERROR). Renames rewrite only instances of that set.
 - Patchable replace: \`prototype\` (full reaction list; \`[]\` clears; destinations must exist including same-patch ids; NAVIGATE/SWAP/OVERLAY destinations must be top-level frames; AFTER_TIMEOUT only on a top-level target; CHANGE_TO→COMPONENT; SCROLL_TO same canvas). Not patchable yet (ERROR): componentId. \`svg\` can't be patched; remove + insert.
-A failed patch rolls back completely.
+A patch may also carry top-level \`variables\` / \`styles\` (same shapes as a full document). They are **upserted before operations**, so a later \`set\` can bind to a token declared in the same patch. Collections merge by name (add missing modes, keep unlisted); variables match by collection + id-or-name + type (write only the modes given; unknown mode keys ERROR); PAINT styles replace paints; TEXT styles merge font fields. Mode 0 is never renamed. Type clashes and id/name mismatches are \`PATCH_RESOURCE_CONFLICT\`. Figma snapshots touched tokens and restores them on failure.
+
+A failed patch rolls back completely (nodes and upserted tokens).
 
 ## Workflow
 1. Author Compact Design JSON for the request.

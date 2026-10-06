@@ -6,6 +6,7 @@ import { FigmaBridge } from "../src/bridge";
 import { handleRpc } from "../src/protocol";
 import { encodeStdioMessage } from "../src/stdio";
 import { createToolRunner, TOOLS } from "../src/tools";
+import { LANGUAGE_GUIDE } from "../src/guide";
 
 const runTool = createToolRunner(new FigmaBridge({ connectTimeoutMs: 20, jobTimeoutMs: 50 }));
 
@@ -237,3 +238,13 @@ test("patch set semantics: guide and tool describe merge/replace/errors, and val
   const proto = { patch: { operations: [{ op: "set", id: "title", set: { prototype: [] } }] } };
   assert.equal(JSON.parse(toolText(await rpc("tools/call", { name: "validate", arguments: { document: proto } }))).valid, true);
 });
+
+test("LANGUAGE_GUIDE and figma_patch describe token upsert on patches", () => {
+  assert.match(LANGUAGE_GUIDE, /upserted before operations/);
+  assert.match(LANGUAGE_GUIDE, /Mode 0 is never renamed/);
+  const patchTool = TOOLS.find((tool) => tool.name === "figma_patch");
+  assert.ok(patchTool);
+  assert.match(patchTool!.description, /variables\/styles/);
+  assert.match(patchTool!.description, /upserted before operations/);
+});
+

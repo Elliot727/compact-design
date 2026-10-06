@@ -1,5 +1,5 @@
 import { PATCH_SET_KEYS, patchSetShapeIssues } from "./patch-keys";
-import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, JsonValue, LetterSpacing, LineHeight, PatchOperation, PatchSetValues, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
+import type { CompactCanvas, CompactDocument, CompactNode, DesignColor, DesignEffect, DesignFont, DesignPaint, DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, JsonValue, LetterSpacing, LineHeight, PatchOperation, PatchSetValues, PatchStyleDefinition, StyleDefinition, Transform, VariableCollectionDefinition } from "./types";
 
 interface RawPaint extends JsonObject { type?: string; image?: string; fit?: string; opacity?: number; transform?: Transform; gradient?: string; angle?: number; stops?: Array<{ at: number; color: string | DesignColor }>; }
 interface RawEffect extends JsonObject {
@@ -350,6 +350,45 @@ export function normalizePatchSet(set: JsonObject, path = "set"): PatchSetValues
 
 export function isPatchDocument(value: unknown): boolean { return Boolean(value && typeof value === "object" && !Array.isArray(value) && "patch" in value); }
 
+
+/** Patch styles: TEXT font may be partial (merged on upsert). PAINT paints still required when present. */
+function normalizePatchStyles(value: unknown): PatchStyleDefinition[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("styles must be an array.");
+  return value.map((entry, index) => {
+    const path = `styles[${index}]`; const raw = objectAt(entry, path);
+    const type = stringAt(raw.type, `${path}.type`);
+    if (type !== "PAINT" && type !== "TEXT") throw new Error(`${path}.type must be PAINT or TEXT.`);
+    const style: PatchStyleDefinition = { id: typeof raw.id === "string" ? raw.id : undefined, name: stringAt(raw.name, `${path}.name`), type };
+    if (type === "PAINT") {
+      if (raw.paints !== undefined) {
+        if (!Array.isArray(raw.paints)) throw new Error(`${path}.paints must be an array.`);
+        style.paints = raw.paints.map((item, paintIndex) => {
+          if (typeof item === "string") return paint(item);
+          return paint(objectAt(item, `${path}.paints[${paintIndex}]`) as RawPaint);
+        });
+      }
+    } else {
+      if (raw.font !== undefined) {
+        const fontValue = objectAt(raw.font, `${path}.font`);
+        const font: Partial<DesignFont> = {};
+        if (fontValue.family !== undefined) font.family = stringAt(fontValue.family, `${path}.font.family`);
+        if (fontValue.style !== undefined) font.style = stringAt(fontValue.style, `${path}.font.style`);
+        if (fontValue.size !== undefined) {
+          if (typeof fontValue.size !== "number" || !Number.isFinite(fontValue.size) || fontValue.size <= 0) throw new Error(`${path}.font.size must be a positive number.`);
+          font.size = fontValue.size;
+        }
+        if (!Object.keys(font).length) throw new Error(`${path}.font must include at least one of family, style, size.`);
+        style.font = font;
+      }
+      if (typeof raw.paragraphSpacing === "number") style.paragraphSpacing = raw.paragraphSpacing;
+      if (typeof raw.lineHeight === "number" || (raw.lineHeight && typeof raw.lineHeight === "object")) style.lineHeight = raw.lineHeight as number | LineHeight;
+      if (raw.letterSpacing && typeof raw.letterSpacing === "object") style.letterSpacing = raw.letterSpacing as LetterSpacing;
+    }
+    return style;
+  });
+}
+
 export function normalizePatchDocument(value: unknown): InternalPatchDocument {
   if (!isPatchDocument(value)) throw new Error("Patch document requires a patch object.");
   const source = value as { patch?: { operations?: JsonObject[] } };
@@ -403,5 +442,11 @@ export function normalizePatchDocument(value: unknown): InternalPatchDocument {
     if (op === 'INSERT') result.node = normalizeNode(operation.node as CompactNode, { x: 0, y: 0 }, `patch-${index}-insert`);
     return result;
   });
-  return { patch: { operations } };
+  const sourceObj = value as { variables?: unknown; styles?: unknown };
+  const result: InternalPatchDocument = { patch: { operations } };
+  const variables = normalizeVariables(sourceObj.variables);
+  if (variables.length) result.variables = variables;
+  const styles = normalizePatchStyles(sourceObj.styles);
+  if (styles.length) result.styles = styles;
+  return result;
 }

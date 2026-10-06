@@ -5,6 +5,7 @@ import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVaria
 import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, subtreeContainsType } from "./patch-duplicate";
 import { assertPrototypePatchRules, canvasRootId, isTopLevelNodeId, prototypePatchStrictErrors } from "./patch-prototype";
 import { documentIssueOwners, validateDocument } from "./validate";
+import { applyResourceUpsert } from "./patch-resources";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
 
@@ -436,6 +437,17 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
   const affectedIds: string[] = [];
   const warnings: string[] = [];
   const duplicateMaps: Array<Map<string, string>> = [];
+  // Upsert variables/styles before operations so later set/insert/duplicate can bind.
+  if ((patch.variables && patch.variables.length) || (patch.styles && patch.styles.length)) {
+    const upserted = applyResourceUpsert(
+      { styles: result.styles, variables: result.variables },
+      { styles: patch.styles, variables: patch.variables }
+    );
+    if (upserted.issues.length) throw new PatchError(upserted.issues);
+    result.styles = upserted.styles;
+    result.variables = upserted.variables;
+    for (const key of upserted.affectedKeys) affectedIds.push(key);
+  }
   const index = new Map<string, NodeRef>();
   const visit = (nodes: InternalNode[], parent: InternalNode | null): void => nodes.forEach((node) => { index.set(node.id, { node, parent, siblings: nodes }); visit(node.children, node); });
   visit(result.nodes, null);
