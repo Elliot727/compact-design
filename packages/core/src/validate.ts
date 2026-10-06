@@ -1,6 +1,7 @@
 import { SUPPORTED_NODE_TYPES, SUPPORTED_PAINT_TYPES } from "./constants";
 import type { DesignPaint, DesignProperties, InternalDocument, InternalNode, JsonObject } from "./types";
 import { variantAxesUncarriedOptions } from "./patch-definitions";
+import { prototypeDestinationErrors } from "./patch-prototype";
 
 /** Validate a canonical document. Reports at most `limit` errors (default 30; pass Infinity for all). */
 export function validateDocument(document: InternalDocument, limit = 30): string[] {
@@ -273,6 +274,10 @@ export function validateDocument(document: InternalDocument, limit = 30): string
     node.children.forEach((child, index) => tokenReferences(child, `${path}.children[${index}]`));
   }
   document.nodes.forEach((node, index) => tokenReferences(node, `nodes[${index}]`));
+  for (const message of prototypeDestinationErrors(document)) {
+    const split = message.indexOf(": ");
+    add(split > 0 ? message.slice(0, split) : "$", split > 0 ? message.slice(split + 2) : message);
+  }
   return errors;
 }
 

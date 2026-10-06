@@ -4,7 +4,7 @@ import type { JsonObject, JsonPrimitive } from "@compact-design/core";
 function object(value: unknown): JsonObject { return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {}; }
 function objects(value: unknown): JsonObject[] { return Array.isArray(value) ? value.filter((item): item is JsonObject => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : []; }
 
-function prototypeRoot(node: SceneNode): SceneNode {
+export function prototypeRoot(node: SceneNode): SceneNode {
   let current = node;
   while (current.parent && current.parent.type !== "PAGE" && "type" in current.parent) current = current.parent as SceneNode;
   return current;
@@ -68,13 +68,15 @@ async function variableData(value: unknown, resources: Resources): Promise<Varia
   return primitiveData((source.value ?? "") as JsonPrimitive);
 }
 
-async function action(value: JsonObject, nodes: Map<string, SceneNode>, resources: Resources, source?: SceneNode): Promise<Action> {
+export type BuildReactionsOptions = { /** Import remaps NAVIGATE/SWAP/OVERLAY to the canvas root; patch set keeps the exact destination. Default true. */ remapNavigateToRoot?: boolean };
+
+async function action(value: JsonObject, nodes: Map<string, SceneNode>, resources: Resources, source?: SceneNode, options?: BuildReactionsOptions): Promise<Action> {
   const type = String(value.type || value.action || "NAVIGATE").toUpperCase();
   if (["NAVIGATE", "SWAP", "OVERLAY", "SCROLL_TO", "CHANGE_TO"].includes(type)) {
     const destinationKey = typeof value.destination === "string" ? value.destination : "";
     let destination = destinationKey ? nodes.get(destinationKey) : null;
     if (value.destination && !destination) throw new Error(`Prototype destination '${value.destination}' was not found`);
-    if (destination && ["NAVIGATE", "SWAP", "OVERLAY"].includes(type)) destination = prototypeRoot(destination);
+    if (destination && ["NAVIGATE", "SWAP", "OVERLAY"].includes(type) && options?.remapNavigateToRoot !== false) destination = prototypeRoot(destination);
     if (destination && source && type === "SCROLL_TO" && !isDescendantOf(destination, prototypeRoot(source))) {
       throw new Error(`SCROLL_TO destination '${destinationKey}' must be inside the same top-level canvas as its source`);
     }
@@ -112,16 +114,16 @@ async function action(value: JsonObject, nodes: Map<string, SceneNode>, resource
   if (type === "CONDITIONAL") return {
     type, conditionalBlocks: await Promise.all(objects(value.blocks || value.conditionalBlocks).map(async (block) => ({
       ...(block.condition !== undefined ? { condition: await variableData(block.condition, resources) } : {}),
-      actions: await Promise.all(objects(block.actions).map((nested) => action(nested, nodes, resources, source)))
+      actions: await Promise.all(objects(block.actions).map((nested) => action(nested, nodes, resources, source, options)))
     })))
   };
   throw new Error(`Unsupported prototype action '${type}'`);
 }
 
-export async function buildReactions(items: JsonObject[], nodes: Map<string, SceneNode>, resources: Resources, source?: SceneNode): Promise<Reaction[]> {
+export async function buildReactions(items: JsonObject[], nodes: Map<string, SceneNode>, resources: Resources, source?: SceneNode, options?: BuildReactionsOptions): Promise<Reaction[]> {
   return Promise.all(items.map(async (item) => {
     const values = Array.isArray(item.actions) ? item.actions : [{ ...item, type: item.action || "NAVIGATE" }];
     if (!values.length) throw new Error("Prototype reaction requires at least one action");
-    return { trigger: trigger(item.trigger), actions: await Promise.all(objects(values).map((value) => action(value, nodes, resources, source))) };
+    return { trigger: trigger(item.trigger), actions: await Promise.all(objects(values).map((value) => action(value, nodes, resources, source, options))) };
   }));
 }

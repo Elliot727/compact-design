@@ -3,6 +3,7 @@ import { patchSetBindingFields, patchSetTargetIssues, type PatchTargetContext } 
 import type { DesignProperties, InternalDocument, InternalNode, InternalPatchDocument, JsonObject, PatchOperation, PatchSetValues } from "./types";
 import { applyComponentPropertiesPatch, applyVariantPatchOnComponent, applyVariantRenamesInForest, detectVariantRenames, rewriteVariantChildNames, variantAxesChildConflicts, type VariantAxesPatch } from "./patch-definitions";
 import { buildDuplicateIdMap, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, subtreeContainsType } from "./patch-duplicate";
+import { assertPrototypePatchRules, canvasRootId, isTopLevelNodeId, prototypePatchStrictErrors } from "./patch-prototype";
 import { documentIssueOwners, validateDocument } from "./validate";
 
 export interface PatchResult { document: InternalDocument; affectedIds: string[]; warnings: string[]; }
@@ -364,6 +365,26 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
       return patchIssue("PATCH_SET_INVALID", `patch.operations[${operationIndex}].set.${message.slice(0, split)}`, message.slice(split + 1).trim(), "Use a key that applies to this node, or see the patch rules in DESIGN-LANGUAGE.md.");
     }));
   }
+  if (values.prototype !== undefined) {
+    const protoErrors = assertPrototypePatchRules(
+      values.prototype,
+      {
+        has: (id) => index.has(id),
+        typeOf: (id) => index.get(id)?.node.type,
+        canvasOf: (id) => canvasRootId(roots, id),
+        isTopLevel: (id) => isTopLevelNodeId(roots, id)
+      },
+      `patch.operations[${operationIndex}].set.prototype`,
+      target.node.id,
+      isTopLevelNodeId(roots, target.node.id)
+    );
+    if (protoErrors.length) {
+      throw new PatchError(protoErrors.map((message) => {
+        const split = message.indexOf(": ");
+        return patchIssue("PATCH_OPERATION", split > 0 ? message.slice(0, split) : `patch.operations[${operationIndex}].set.prototype`, split > 0 ? message.slice(split + 2) : message, "Use a top-level frame destination; AFTER_TIMEOUT only on a top-level node.");
+      }));
+    }
+  }
   mergeSet(target, values, set, warnings);
   const defErrors: string[] = [];
   if (values.componentProperties !== undefined) {
@@ -429,6 +450,32 @@ export function applyDocumentPatch(document: InternalDocument, patch: InternalPa
     }
   }
   const introduced = newDocumentIssues(document, result, duplicateMaps);
+  // Strict set.prototype rules (top-level NAVIGATE dest, AFTER_TIMEOUT host) — exempt
+  // pre-existing (and duplicate copies of them via duplicateMaps), keyed like newDocumentIssues.
+  const strictKeyed = (doc: InternalDocument) => {
+    const owners = documentIssueOwners(doc);
+    return prototypePatchStrictErrors(doc).map((message) => {
+      const split = message.indexOf(": ");
+      const path = split > 0 ? message.slice(0, split) : "$";
+      const body = split > 0 ? message.slice(split + 2) : message;
+      const owner = owners(path);
+      return { path, body, key: `STRICT|${owner.owner}|${owner.rest}|${body}` };
+    });
+  };
+  const strictExisting = new Map<string, number>();
+  const beforeStrict = strictKeyed(document);
+  for (const { key } of beforeStrict) strictExisting.set(key, (strictExisting.get(key) || 0) + 1);
+  for (const idMap of duplicateMaps) {
+    for (const { key } of beforeStrict) {
+      const remapped = remapIssueKeyThroughDuplicate(key, idMap);
+      if (remapped) strictExisting.set(remapped, (strictExisting.get(remapped) || 0) + 1);
+    }
+  }
+  for (const { path, body, key } of strictKeyed(result)) {
+    const count = strictExisting.get(key) || 0;
+    if (count > 0) { strictExisting.set(key, count - 1); continue; }
+    introduced.push(patchIssue("PATCH_RESULT_INVALID", path, `after patch: ${body}`, "NAVIGATE/SWAP/OVERLAY destinations must be top-level frames; AFTER_TIMEOUT only on top-level nodes."));
+  }
   if (introduced.length) throw new PatchError(introduced);
   return { document: result, affectedIds, warnings };
 }

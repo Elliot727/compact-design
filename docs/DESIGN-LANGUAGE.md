@@ -76,7 +76,8 @@ Patches are atomic in Figma. Every `set` is checked against the rules below befo
 | `componentProperties` | **Name-keyed upsert on COMPONENT** (not COMPONENT_SET). Pass `{ "Label": { "defaultValue": "Go" } }` to edit, `{ "Icon": { "type": "INSTANCE_SWAP", "defaultValue": "icon-id" } }` to add (type + defaultValue required on create), `{ "Show": null }` to delete. Type is immutable after create. VARIANT properties are not authorable here — use `variantAxes`. Deleting a property still referenced by `componentPropertyReferences` fails post-patch validation. Figma remaps INSTANCE_SWAP defaults the same way as import. |
 | `variantAxes` | **Shallow-merge on COMPONENT_SET.** Unmentioned axes are kept. A **string array** replaces that axis's options and **never** renames. Object form `{ "rename"?, "options"?, "renameOptions"? }` renames explicitly (e.g. `{ "State": { "rename": "Status", "options": ["Default", "Pressed"], "renameOptions": { "Hover": "Pressed" } } }`). Axis `null` is an error (Figma cannot delete VARIANT properties). Removing an option still used by a child without `renameOptions` is an error. Every declared option must be carried by a COMPONENT child after the patch (Figma derives options from child names); a later op in the same patch may set/append a child to carry a new option. Renames rewrite child names/`variant` and instance VARIANT overrides **only for instances of this set**. |
 | `variant` | **Merge on a COMPONENT inside a COMPONENT_SET.** Every axis/value must already be declared on the parent `variantAxes`. Rewrites the component's variant name (`State=Hover`). Whole-key `null` and per-axis `null` are rejected (variant components require a selection). |
-| `prototype`, `componentId` | **Not patchable yet.** Rejected with `PATCH_SET_UNSUPPORTED`. Remapping prototype destinations / swapping the instance main component is deferred. Re-import, or remove and insert. |
+| `prototype` | **Replace** the full reaction list (like `runs` / `effects`). `[]` clears. No whole-key `null` (schema is array-only). Applies to every node type. Destinations are checked eagerly and again at end of patch (ids created earlier in the same patch via append/insert/duplicate resolve). **Patch-strict (import stays lenient):** NAVIGATE/SWAP/OVERLAY destinations must be **top-level frames** (no silent remapping to the canvas root); AFTER_TIMEOUT is allowed **only when the set target is top-level**. CHANGE_TO must target a COMPONENT; SCROLL_TO must stay in the same top-level canvas. Removing a linked destination fails — no dangling links. Figma uses `buildReactions` + `setReactionsAsync` (exact destination ids) with the import plan-limit fallback (one action per reaction + WARNING). Transition/easing round-trips for idempotent set→export→set. |
+| `componentId` | **Not patchable yet.** Rejected with `PATCH_SET_UNSUPPORTED`. Swapping the instance main component is deferred. Re-import, or remove and insert. |
 | `svg` | **Never patchable in place.** Remove the node and insert a new SVG node. |
 
 Target rules. Each is an error in both engines, never a silent no-op:
@@ -119,7 +120,7 @@ The optional design lint checks:
 - repeated detached elements and missing component usage;
 - likely fixed-box text overflow;
 - repeated hard-coded colours not bound to variables;
-- broken prototype destination IDs.
+- (legacy note) prototype destination IDs — missing destinations and CHANGE_TO/SCROLL_TO rule breaks are now **errors** from `validateDocument`, not lint.
 
 Lint is heuristic and advisory because Figma is not a browser layout engine. Schema/semantic validation errors remain blocking.
 
@@ -580,6 +581,9 @@ Triggers:
 
 - Immediate interaction: `ON_CLICK`, `ON_HOVER`, `ON_PRESS`, `ON_DRAG`.
 - Timed: `{ "type": "AFTER_TIMEOUT", "timeout": 1.5 }`.
+
+`validateDocument` rejects missing destinations and CHANGE_TO/SCROLL_TO rule breaks in any authored document (not lint-only). **Patch `set.prototype` is stricter than import:** NAVIGATE/SWAP/OVERLAY destinations must already be **top-level frames** (no silent remapping to the canvas root); AFTER_TIMEOUT is allowed **only when the set target itself is top-level**. Import may still re-point navigate destinations and place AFTER_TIMEOUT on the canvas root for authored JSON; patch never does.
+
 - Mouse: `MOUSE_UP`, `MOUSE_DOWN`, `MOUSE_ENTER`, `MOUSE_LEAVE` with optional `delay`.
 - Keyboard/controller: `ON_KEY_DOWN` with `device` and numeric `keyCodes`.
 - Media: `ON_MEDIA_HIT` with `mediaHitTime`, or `ON_MEDIA_END`.

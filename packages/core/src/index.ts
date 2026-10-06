@@ -96,6 +96,7 @@ export type { PatchSetKey, PatchSetSemantics, PatchTargetContext } from "./patch
 export { indexDocument } from "./references";
 export { detectVariantRenames, variantAxesUncarriedOptions, type AxisRename, type OptionRename, type VariantAxisPatchEntry, type VariantAxesPatch } from "./patch-definitions";
 export { buildDuplicateIdMap, buildDuplicateIdMapFromIds, collectSubtreeIds, cloneSubtreeWithIds, remapIssueKeyThroughDuplicate, remapDelimitedIds, subtreeContainsType } from "./patch-duplicate";
+export { assertPrototypeSetDestinations, assertPrototypePatchRules, prototypeDestinationErrors, prototypePatchStrictErrors, forEachPrototypeDestination, isAfterTimeoutReaction, isTopLevelNodeId } from "./patch-prototype";
 export type { DocumentIndex } from "./references";
 export type { PatchResult, RepairIssue };
 export type * from "./types";

@@ -958,7 +958,13 @@ function createMockNode(type: string, name = type): MockNode {
     reactions: [] as Array<Record<string, unknown>>,
     getPluginData(key: string) { return this.pluginData[key] || ""; },
     setPluginData(key: string, value: string) { this.pluginData[key] = value; },
-    async setReactionsAsync(reactions: Array<Record<string, unknown>>) { this.reactions = reactions; }
+    async setReactionsAsync(reactions: Array<Record<string, unknown>>) {
+      const multi = reactions.some((reaction) => Array.isArray(reaction.actions) && (reaction.actions as unknown[]).length > 1);
+      if (multi && !(this as MockNode & { __allowMultiAction?: boolean }).__allowMultiAction) {
+        throw new Error("in setReactionsAsync: Multiple actions per reaction are not supported on the current plan");
+      }
+      this.reactions = reactions;
+    }
   };
   installFigmaCopyGetters(node);
   return node;
@@ -1490,7 +1496,7 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
     svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
     componentId: ["rect", "c"], componentProperties: ["comp", { Title: { type: "TEXT", defaultValue: "Hi" } }], instanceProperties: ["inst", { Label: "Go" }], componentPropertyReferences: ["comp-label", { characters: "Label" }], variantAxes: ["set", { State: { rename: "Status" } }], variant: ["set-a", { State: "Hover" }],
-    operation: ["bool", "SUBTRACT"], prototype: ["rect", []], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
+    operation: ["bool", "SUBTRACT"], prototype: ["rect", [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "screen" }] }]], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
     styleRefs: ["rect", { fill: "Ink" }], bindings: ["rect", { opacity: "gap" }], variableModes: ["rect", { Theme: "Dark" }]
   };
   assert.deepEqual(Object.keys(sample).sort(), [...PATCH_SET_KEYS].sort());
@@ -2449,3 +2455,157 @@ test("lockstep: duplicate into a different parent keeps parent-relative x/y", as
   assert.deepEqual({ x: figmaCopy.x, y: figmaCopy.y }, { x: 10, y: 10 }, "Figma keeps parent-relative x/y after reparent");
 });
 
+
+test("lockstep: patch set prototype NAVIGATE, clear, missing dest, same-patch dest", async () => {
+  const document = normalize({
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
+      { id: "checkout", width: 200, height: 100, nodes: [] }
+    ]
+  });
+  await assertParity(document, [
+    [setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout", transition: { type: "DISSOLVE", easing: "EASE_OUT", duration: 0.3 } }] }] })],
+    [setOp("cta", { prototype: [] })]
+  ]);
+  const page = await importIntoMock(document);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "ghost" }] }]
+  })), emptyPatchContext() as never), /was not found/);
+
+  await assertParity(document, [[
+    { op: "duplicate", id: "checkout", idSuffix: "-2" },
+    setOp("cta", { prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout-2" }] }] })
+  ]]);
+});
+
+test("lockstep: non-top-level NAVIGATE destination is rejected", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "cta", type: "FRAME", w: 40, h: 20 },
+      { id: "panel", type: "FRAME", x: 100, w: 40, h: 40 }
+    ]
+  });
+  const page = await importIntoMock(document);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "panel" }] }]
+  })), emptyPatchContext() as never), /must be a top-level frame/);
+});
+
+test("lockstep: prototype CHANGE_TO non-COMPONENT and SCROLL_TO across canvases", async () => {
+  const document = normalize({
+    canvases: [
+      { id: "screen-a", width: 100, height: 80, nodes: [
+        { id: "btn", type: "FRAME", w: 20, h: 10 },
+        { id: "panel", type: "FRAME", w: 40, h: 40 }
+      ] },
+      { id: "screen-b", width: 100, height: 80, nodes: [{ id: "other", type: "FRAME", w: 20, h: 10 }] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("btn", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "CHANGE_TO", destination: "panel" }] }]
+  })), emptyPatchContext() as never), /CHANGE_TO destination/);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("btn", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "SCROLL_TO", destination: "other" }] }]
+  })), emptyPatchContext() as never), /SCROLL_TO destination|same top-level canvas/);
+});
+
+test("lockstep: end-of-patch remove of prototype destination fails", async () => {
+  const document = normalize({
+    canvases: [
+      { id: "home", width: 200, height: 100, nodes: [{ id: "cta", type: "FRAME", w: 40, h: 20 }] },
+      { id: "checkout", width: 200, height: 100, nodes: [] }
+    ]
+  });
+  const seeded = applyCorePatch(document, checkedPatch(setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }]
+  }))).document;
+  const core = validatePatch(seeded, { patch: { operations: [{ op: "remove", id: "checkout" }] } });
+  assert.equal(core.valid, false);
+  assert.match(core.issues.map((i) => i.message).join("\n"), /was not found/);
+
+  const page = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch(setOp("cta", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "NAVIGATE", destination: "checkout" }] }]
+  })), emptyPatchContext() as never);
+  assert.ok((mockById(page, "cta").reactions as unknown[]).length >= 1);
+  const before = await figmaState(page);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "remove", id: "checkout" }), emptyPatchContext() as never), /no longer exists|was not found/);
+  assert.deepEqual(await figmaState(page), before);
+});
+
+test("Figma prototype AFTER_TIMEOUT only on top-level; multi-action WARNING; rollback", async () => {
+  const document = normalize({
+    canvases: [
+      { id: "screen", width: 300, height: 200, nodes: [{ id: "child", type: "FRAME", w: 20, h: 10 }] },
+      { id: "next", width: 100, height: 80, nodes: [] }
+    ]
+  });
+  const page = await importIntoMock(document);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(setOp("child", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  })), emptyPatchContext() as never), /AFTER_TIMEOUT.*top-level/);
+
+  await applyFigmaPatch(checkedPatch(setOp("screen", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 2 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  })), emptyPatchContext() as never);
+  assert.ok((mockById(page, "screen").reactions as unknown[]).length >= 1);
+
+  // Multi-action plan-limit WARNING (ON_CLICK on nested is fine)
+  const page2 = await importIntoMock(document);
+  const warned = await applyFigmaPatch(checkedPatch(setOp("child", {
+    prototype: [{ trigger: { type: "ON_CLICK" }, actions: [
+      { type: "NAVIGATE", destination: "next" },
+      { type: "URL", url: "https://example.com" }
+    ] }]
+  })), emptyPatchContext() as never);
+  assert.ok(warned.warnings.some((w) => /one action per reaction/i.test(w)), warned.warnings.join("; "));
+
+  // Rollback: top-level AFTER_TIMEOUT then a failing later op leaves reactions untouched
+  const page3 = await importIntoMock(document);
+  await applyFigmaPatch(checkedPatch(setOp("screen", {
+    prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 1 }, actions: [{ type: "NAVIGATE", destination: "next" }] }]
+  })), emptyPatchContext() as never);
+  const beforeFail = JSON.stringify(mockById(page3, "screen").reactions);
+  await assert.rejects(() => applyFigmaPatch(checkedPatch(
+    setOp("screen", { prototype: [{ trigger: { type: "AFTER_TIMEOUT", timeout: 9 }, actions: [{ type: "NAVIGATE", destination: "next" }] }] }),
+    setOp("screen", { text: "nope" })
+  ), emptyPatchContext() as never), /does not apply/);
+  assert.equal(JSON.stringify(mockById(page3, "screen").reactions), beforeFail, "rollback restores prior reactions");
+});
+
+test("lockstep: prototype set→export→set is idempotent (transition easing preserved)", async () => {
+  const document = normalize({
+    canvases: [
+      { id: "a", width: 100, height: 80, nodes: [] },
+      { id: "b", width: 100, height: 80, nodes: [] }
+    ]
+  });
+  const reaction = [{
+    trigger: { type: "ON_CLICK" },
+    actions: [{ type: "NAVIGATE", destination: "b", transition: { type: "SMART_ANIMATE", easing: "GENTLE", duration: 0.45 }, resetScrollPosition: true }]
+  }];
+  const once = applyCorePatch(document, checkedPatch(setOp("a", { prototype: reaction }))).document;
+  const exported = nodeById(once, "a").properties.prototype;
+  const twice = applyCorePatch(once, checkedPatch(setOp("a", { prototype: exported as unknown[] }))).document;
+  assert.deepEqual(nodeById(twice, "a").properties.prototype, exported);
+
+  const page = await importIntoMock(document);
+  (mockById(page, "a") as MockNode & { __allowMultiAction?: boolean }).__allowMultiAction = true;
+  await applyFigmaPatch(checkedPatch(setOp("a", { prototype: reaction })), emptyPatchContext() as never);
+  const first = JSON.stringify(mockById(page, "a").reactions);
+  await applyFigmaPatch(checkedPatch(setOp("a", { prototype: reaction })), emptyPatchContext() as never);
+  assert.equal(JSON.stringify(mockById(page, "a").reactions), first);
+});
+
+test("componentId remains rejected while prototype is patchable", async () => {
+  const document = normalize({
+    canvas: { id: "page", width: 100, height: 100 },
+    nodes: [{ id: "box", type: "FRAME", w: 20, h: 20 }]
+  });
+  const page = await importIntoMock(document);
+  const raw = { patch: { operations: [{ op: "SET", id: "box", set: { componentId: "x" }, normalized: {} }] } } as unknown as InternalPatchDocument;
+  await assert.rejects(() => applyFigmaPatch(raw, emptyPatchContext() as never), /cannot be patched/);
+  await applyFigmaPatch(checkedPatch(setOp("box", { prototype: [] })), emptyPatchContext() as never);
+});

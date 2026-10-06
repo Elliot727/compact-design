@@ -230,7 +230,10 @@ test("patch set semantics: guide and tool describe merge/replace/errors, and val
   const payload = JSON.parse(toolText(patched)) as { patched: boolean; issues: Array<{ path: string }> };
   assert.equal(payload.patched, false, "rejected before reaching the (absent) plugin");
   assert.ok(payload.issues.some((issue) => /txet/.test(issue.path) || /txet/.test(JSON.stringify(issue))));
-  const deferred = { patch: { operations: [{ op: "set", id: "title", set: { prototype: [] } }] } };
+  const deferred = { patch: { operations: [{ op: "set", id: "title", set: { componentId: "x" } }] } };
   const deferredResult = JSON.parse(toolText(await rpc("tools/call", { name: "figma_patch", arguments: { document: deferred } })));
   assert.equal(deferredResult.patched, false);
+  // prototype is now replace-patchable (validate accepts shape; apply needs a real target doc).
+  const proto = { patch: { operations: [{ op: "set", id: "title", set: { prototype: [] } }] } };
+  assert.equal(JSON.parse(toolText(await rpc("tools/call", { name: "validate", arguments: { document: proto } }))).valid, true);
 });

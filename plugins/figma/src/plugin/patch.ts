@@ -1,8 +1,9 @@
-import { buildDuplicateIdMapFromIds, collectSubtreeIds, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
+import { assertPrototypePatchRules, buildDuplicateIdMapFromIds, collectSubtreeIds, subtreeContainsType, patchSetBindingFields, patchSetTargetIssues, type InternalNode, type InternalPatchDocument, type JsonObject, type PatchOperation, type PatchSetKey, type PatchSetValues, type PatchTargetContext } from "@compact-design/core";
 import { applyGrids, applyLayoutPatch } from "./layout";
 import { componentPropertyMaps, createNode, mapComponentPropertyReferences, mapInstancePropertyOverrides, type ImportContext } from "./nodes";
 import { applyEffects, clearEffectWarnings, effectsFromData, effectWarnings, paints, paintFromData } from "./paints";
 import { applyComponentPropertiesFigma, applyVariantAxesFigma, applyVariantFigma, assertPendingVariantAxesCarried } from "./patch-definitions";
+import { buildReactions, prototypeRoot } from "./prototype";
 import { applyResourcePatch } from "./resources";
 import { clamp, finite } from "./value";
 
@@ -117,17 +118,74 @@ async function applyTextSet(node: TextNode, values: PatchSetValues): Promise<voi
   }
 }
 
-type ApplyCtx = { warnings: string[]; context: ImportContext; set: JsonObject; pendingVariantAxes?: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }> };
+type ApplyCtx = { warnings: string[]; context: ImportContext; set: JsonObject; nodes: Map<string, SceneNode>; pendingVariantAxes?: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }> };
 type SetHandler = (node: SceneNode, values: PatchSetValues, ctx: ApplyCtx) => void | Promise<void>;
-type SetPhase = "name" | "layout" | "child" | "geometry" | "appearance" | "text" | "shape" | "resources" | "component" | "rejected";
+type SetPhase = "name" | "layout" | "child" | "geometry" | "appearance" | "text" | "shape" | "resources" | "component" | "prototype" | "rejected";
 interface SetEntry { phase: SetPhase; apply?: SetHandler; }
 
-const PHASE_ORDER: SetPhase[] = ["name", "layout", "child", "geometry", "appearance", "shape", "text", "resources", "component"];
+const PHASE_ORDER: SetPhase[] = ["name", "layout", "child", "geometry", "appearance", "shape", "text", "resources", "component", "prototype"];
 
 const frameOnly = (key: PatchSetKey, node: SceneNode): FrameNode | ComponentNode => {
   if (node.type !== "FRAME" && node.type !== "COMPONENT") throw new Error(`'${key}' is not supported on Figma ${node.type} node '${node.name}'`);
   return node;
 };
+
+async function setReactionsWithPlanLimit(node: SceneNode, reactions: Reaction[], warnings: string[], label: string): Promise<void> {
+  if (!("setReactionsAsync" in node) || typeof (node as FrameNode).setReactionsAsync !== "function") {
+    throw new Error(`node '${label}' cannot accept prototype reactions`);
+  }
+  try {
+    await (node as FrameNode).setReactionsAsync(reactions);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/multiple actions|current plan/i.test(message) || !reactions.some((reaction) => (reaction.actions?.length || 0) > 1)) {
+      throw new Error(`Could not set prototype on '${label}': ${message}`);
+    }
+    const reduced = reactions.map((reaction) => {
+      const actions = reaction.actions || (reaction.action ? [reaction.action] : []);
+      const primary = actions.find((action) => action.type === "NODE" || action.type === "BACK" || action.type === "CLOSE" || action.type === "URL") || actions[0];
+      return { trigger: reaction.trigger, actions: primary ? [primary] : [] } as Reaction;
+    });
+    await (node as FrameNode).setReactionsAsync(reduced);
+    const omitted = reactions.reduce((total, reaction) => total + Math.max(0, (reaction.actions?.length || 0) - 1), 0);
+    warnings.push(`${label}: this Figma plan allows one action per reaction; applied the primary action and omitted ${omitted} additional action(s).`);
+  }
+}
+
+function isTopLevelSceneNode(node: SceneNode): boolean {
+  return !node.parent || node.parent.type === "PAGE" || node.parent.type === "DOCUMENT";
+}
+
+async function applyPrototypeFigma(node: SceneNode, values: PatchSetValues, ctx: ApplyCtx): Promise<void> {
+  const items = (Array.isArray(values.prototype) ? values.prototype : []) as JsonObject[];
+  const path = `node '${nodeLabel(node)}'`;
+  const sceneCanvasOf = (id: string): string | undefined => {
+    const target = ctx.nodes.get(id);
+    if (!target) return undefined;
+    return prototypeRoot(target).getPluginData("compactDesignId") || prototypeRoot(target).id;
+  };
+  const errors = assertPrototypePatchRules(
+    items,
+    {
+      has: (id) => ctx.nodes.has(id),
+      typeOf: (id) => ctx.nodes.get(id)?.type,
+      canvasOf: sceneCanvasOf,
+      isTopLevel: (id) => {
+        const target = ctx.nodes.get(id);
+        return target ? isTopLevelSceneNode(target) : false;
+      }
+    },
+    "set.prototype",
+    node.getPluginData("compactDesignId") || undefined,
+    isTopLevelSceneNode(node)
+  );
+  if (errors.length) throw new Error(errors[0]);
+
+  // Patch set keeps exact destinations (no prototypeRoot remapping — import stays lenient).
+  const reactions = await buildReactions(items, ctx.nodes, ctx.context.resources, node, { remapNavigateToRoot: false });
+  await setReactionsWithPlanLimit(node, reactions, ctx.warnings, path);
+}
+
 const rejected: SetEntry = { phase: "rejected" };
 function nodeLabel(node: SceneNode): string {
   return node.getPluginData("compactDesignId") || node.name;
@@ -309,7 +367,7 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   vectorPaths: scalar("vectorPaths", "vectorPaths", "shape", (values) => (values.vectorPaths || []).map((path) => ({ ...path, data: String(path.data || "").replace(/,/g, " ").replace(/\s+/g, " ").trim() }))),
   componentId: rejected, componentProperties: { phase: "component", apply: applyComponentPropertiesFigma }, instanceProperties: { phase: "component", apply: applyInstancePropertiesSet }, componentPropertyReferences: { phase: "component", apply: applyComponentPropertyReferencesSet }, variantAxes: { phase: "component", apply: applyVariantAxesFigma }, variant: { phase: "component", apply: applyVariantFigma },
   operation: scalar("operation", "booleanOperation", "shape"),
-  prototype: rejected,
+  prototype: { phase: "prototype", apply: applyPrototypeFigma },
   overflowDirection: scalar("overflowDirection", "overflowDirection", "layout"),
   numberOfFixedChildren: scalar("numberOfFixedChildren", "numberOfFixedChildren", "layout"),
   styleRefs: { phase: "resources", apply: applyBindingsStyleModes }, bindings: { phase: "resources", apply: applyBindingsStyleModes }, variableModes: { phase: "resources", apply: applyBindingsStyleModes }
@@ -327,10 +385,10 @@ function checkSet(node: SceneNode, operation: PatchOperation, operationIndex: nu
   }
 }
 
-async function applySet(node: SceneNode, operation: PatchOperation, operationIndex: number, context: ImportContext, warnings: string[], pendingVariantAxes: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }>): Promise<void> {
+async function applySet(node: SceneNode, operation: PatchOperation, operationIndex: number, context: ImportContext, warnings: string[], pendingVariantAxes: Map<string, { node: ComponentSetNode; axes: Record<string, string[]> }>, nodes: Map<string, SceneNode>): Promise<void> {
   checkSet(node, operation, operationIndex);
   const set = operation.set || {}; const values = operation.normalized!;
-  const ctx: ApplyCtx = { warnings, context, set, pendingVariantAxes };
+  const ctx: ApplyCtx = { warnings, context, set, nodes, pendingVariantAxes };
   // Detach conflicting bindings/styleRefs with WARNING (mirrors core).
   detachBoundScalars(node, set, warnings);
   const textStyleKeys = ["font", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent", "listSpacing", "textCase", "textDecoration", "hangingPunctuation", "hangingList"];
@@ -628,6 +686,37 @@ function preflight(document: InternalPatchDocument, nodes: Map<string, SceneNode
   }
 }
 
+async function assertNoDanglingPrototypeDestinations(nodes: Map<string, SceneNode>): Promise<void> {
+  const byFigmaId = new Map<string, SceneNode>();
+  for (const node of nodes.values()) byFigmaId.set(node.id, node);
+  for (const [compactId, node] of nodes) {
+    if (!("reactions" in node) || !Array.isArray((node as FrameNode).reactions)) continue;
+    // AFTER_TIMEOUT only allowed on top-level hosts after a patch
+    for (const reaction of (node as FrameNode).reactions) {
+      const triggerType = reaction.trigger && typeof reaction.trigger === "object" && "type" in reaction.trigger
+        ? String((reaction.trigger as { type: string }).type)
+        : "";
+      if (triggerType === "AFTER_TIMEOUT" && !isTopLevelSceneNode(node)) {
+        throw new Error(`AFTER_TIMEOUT on '${compactId}' requires a top-level target after the patch`);
+      }
+      const actions = reaction.actions || (reaction.action ? [reaction.action] : []);
+      for (const action of actions) {
+        if (!action || typeof action !== "object") continue;
+        const dest = (action as { destinationId?: string | null }).destinationId;
+        if (typeof dest !== "string" || !dest) continue;
+        const target = (byFigmaId.get(dest) || await figma.getNodeByIdAsync(dest)) as SceneNode | null;
+        if (!target || ("removed" in target && target.removed)) {
+          throw new Error(`Prototype destination on '${compactId}' no longer exists after the patch`);
+        }
+        const navigation = (action as { navigation?: string }).navigation;
+        if (navigation && ["NAVIGATE", "SWAP", "OVERLAY"].includes(String(navigation)) && !isTopLevelSceneNode(target)) {
+          throw new Error(`${navigation} destination on '${compactId}' must be a top-level frame after the patch`);
+        }
+      }
+    }
+  }
+}
+
 export async function applyPatch(document: InternalPatchDocument, context: ImportContext): Promise<{ affected: SceneNode[]; warnings: string[] }> {
   clearEffectWarnings();
   const nodes = indexNodes();
@@ -660,7 +749,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         const counterparts: Array<[SceneNode, SceneNode]> = [];
         pairSubtree(original, backup, counterparts);
         log.push({ kind: "replace", original, backup, parent, index, counterparts });
-        if (operation.op === "SET") { await applySet(original, operation, operationIndex, context, warnings, pendingVariantAxes); affected.push(original); }
+        if (operation.op === "SET") { await applySet(original, operation, operationIndex, context, warnings, pendingVariantAxes, nodes); affected.push(original); }
         else { original.remove(); nodes.delete(operation.id!); }
       }
       if (operation.op === "APPEND" || operation.op === "INSERT") {
@@ -759,6 +848,7 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
       }
     }
       assertPendingVariantAxesCarried(pendingVariantAxes);
+      await assertNoDanglingPrototypeDestinations(nodes);
   } catch (error) {
     await rollback(log, holder);
     throw error;
