@@ -1014,3 +1014,40 @@ test("invalid documents surface structured issues", () => {
     assert.ok(error.issues.length > 0);
   }
 });
+
+
+test("INSTANCE honours TEXT/BOOLEAN overrides via componentPropertyReferences", () => {
+  const result = render({
+    canvas: { id: "screen", width: 400, height: 100, fill: "#FFFFFF" },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 16, h: 16, fill: "#111111" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        w: 160,
+        h: 48,
+        fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true }
+        ],
+        children: [
+          { id: "label", type: "TEXT", w: 100, h: 20, text: "Continue", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } },
+          { id: "icon-slot", type: "RECTANGLE", w: 16, h: 16, fill: "#FFFFFF", componentPropertyReferences: { visible: "ShowIcon" } }
+        ]
+      },
+      {
+        id: "button-1",
+        type: "INSTANCE",
+        componentId: "button",
+        x: 200,
+        w: 160,
+        h: 48,
+        instanceProperties: { Label: "Start free", ShowIcon: false }
+      }
+    ]
+  });
+  assert.match(result.html, /Start free/);
+  // Master still renders icon-slot; the INSTANCE copy is hidden by ShowIcon:false.
+  assert.equal((result.html.match(/id="n-icon-slot"/g) || []).length, 1);
+});

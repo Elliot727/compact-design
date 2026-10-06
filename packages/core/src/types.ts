@@ -7,8 +7,11 @@ export interface LetterSpacing { unit: "PIXELS" | "PERCENT"; value: number; }
 export interface VectorPath { windingRule: "NONZERO" | "EVENODD" | "NONE"; data: string; }
 export interface VariableAlias { type: "VARIABLE_ALIAS"; id: string; }
 export interface Constraints { horizontal: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE"; vertical: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE"; }
-export type ComponentPropertyType = "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "VARIANT";
+/** Authorable component property types. VARIANT axes use variantAxes/variant on COMPONENT_SET instead; Figma SLOT is out of scope. */
+export type ComponentPropertyType = "BOOLEAN" | "TEXT" | "INSTANCE_SWAP";
 export interface ComponentPropertyOptions { preferredValues?: Array<{ type: "COMPONENT" | "COMPONENT_SET"; key: string }>; }
+/** Child-layer links to the nearest ancestor COMPONENT's componentProperties (Figma componentPropertyReferences). Values are authored property names. */
+export interface ComponentPropertyReferences { characters?: string; visible?: string; mainComponent?: string; }
 export type OverflowDirection = "NONE" | "HORIZONTAL" | "VERTICAL" | "BOTH";
 export type BlendMode = "PASS_THROUGH" | "NORMAL" | "DARKEN" | "MULTIPLY" | "LINEAR_BURN" | "COLOR_BURN" | "LIGHTEN" | "SCREEN" | "LINEAR_DODGE" | "COLOR_DODGE" | "OVERLAY" | "SOFT_LIGHT" | "HARD_LIGHT" | "DIFFERENCE" | "EXCLUSION" | "HUE" | "SATURATION" | "COLOR" | "LUMINOSITY";
 export type StrokeCap = "NONE" | "ROUND" | "SQUARE" | "LINE_ARROW" | "TRIANGLE_ARROW" | "DIAMOND_FILLED" | "CIRCLE_FILLED" | "TRIANGLE_FILLED" | "WASHI_TAPE_1" | "WASHI_TAPE_2" | "WASHI_TAPE_3" | "WASHI_TAPE_4" | "WASHI_TAPE_5" | "WASHI_TAPE_6";
@@ -49,7 +52,8 @@ export interface DesignProperties {
   variableModes?: Record<string, string>; breakpoint?: JsonObject; componentId?: string; variantAxes?: Record<string, string[]>; variant?: Record<string, string>;
   svg?: string; vectorPaths?: VectorPath[]; pointCount?: number; innerRadius?: number; startingAngle?: number; endingAngle?: number; innerRadiusRatio?: number;
   componentProperties?: Array<{ name: string; type: ComponentPropertyType; defaultValue: string | boolean; options?: ComponentPropertyOptions }>;
-  instanceProperties?: Record<string, string | boolean | VariableAlias>; operation?: "UNION" | "SUBTRACT" | "INTERSECT" | "EXCLUDE";
+  instanceProperties?: Record<string, string | boolean | VariableAlias>;
+  componentPropertyReferences?: ComponentPropertyReferences; operation?: "UNION" | "SUBTRACT" | "INTERSECT" | "EXCLUDE";
   overflowDirection?: OverflowDirection; numberOfFixedChildren?: number; layoutGrids?: JsonObject[];
   cornerRadius?: number; cornerRadii?: number[]; opacity?: number; blendMode?: BlendMode; visible?: boolean; locked?: boolean; isMask?: boolean; clipsContent?: boolean;
   constraints?: Constraints; layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL"; layoutSizingVertical?: "FIXED" | "HUG" | "FILL"; layoutAlign?: "INHERIT" | "STRETCH"; layoutGrow?: number; layoutPositioning?: "AUTO" | "ABSOLUTE";

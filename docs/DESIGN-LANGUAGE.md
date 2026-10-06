@@ -70,7 +70,7 @@ Patches are atomic in Figma. Every `set` is checked against the rules below befo
 | `runs`, `layoutGrids`, `vectorPaths`, `dashPattern`, `cornerRadii` | **Replace** the whole array. |
 | `x`, `y` | **Parent-relative**, the same as authoring and Figma. The node's whole subtree moves with it. |
 | every other key | **Scalar replace.** `align` maps to the canonical `alignment`. `lineHeight` numbers become percentages, as in authoring. |
-| `bindings`, `styleRefs`, `variableModes`, `prototype`, `componentId`, `componentProperties`, `instanceProperties`, `variantAxes`, `variant` | **Not patchable yet.** These are rejected with `PATCH_SET_UNSUPPORTED` (planned follow-up). Re-import the node, or remove and insert it. |
+| `bindings`, `styleRefs`, `variableModes`, `prototype`, `componentId`, `componentProperties`, `instanceProperties`, `componentPropertyReferences`, `variantAxes`, `variant` | **Not patchable yet.** These are rejected with `PATCH_SET_UNSUPPORTED` (planned follow-up). Re-import the node, or remove and insert it. |
 | `svg` | **Never patchable in place.** Remove the node and insert a new SVG node. |
 
 Target rules. Each is an error in both engines, never a silent no-op:
@@ -481,9 +481,51 @@ Define components earlier than instances:
 }
 ```
 
-Components accept `componentProperties`, whose entries contain `name`, `type`, `defaultValue`, and optional `options`. Supported Figma property types include `TEXT`, `BOOLEAN`, and `INSTANCE_SWAP`. Instances use `instanceProperties` to provide overrides.
+Components accept `componentProperties`, whose entries contain `name`, `type`, `defaultValue`, and optional `options`. Supported authorable types are `TEXT`, `BOOLEAN`, and `INSTANCE_SWAP` (VARIANT axes use `variantAxes` / `variant` on `COMPONENT_SET` instead). Instances use `instanceProperties` to provide overrides.
 
-Instance overrides may use the readable property name declared by the component. The importer resolves it to Figma's generated internal key, so `{ "instanceProperties": { "Label": "Start free" } }` works for a component property named `Label`.
+To make those properties actually drive child layers, set `componentPropertyReferences` on descendants of the COMPONENT (Figma's same field). Keys are the node fields they bind; values are the authored property names:
+
+- `characters` → a `TEXT` property (TEXT nodes only)
+- `visible` → a `BOOLEAN` property (any node)
+- `mainComponent` → an `INSTANCE_SWAP` property (INSTANCE nodes only)
+
+Referenced properties must exist on the nearest ancestor COMPONENT. Validation stops at a nested INSTANCE or another COMPONENT, so refs cannot cross into a nested instance.
+
+Linked button example:
+
+```json
+{
+  "nodes": [
+    { "id": "icon-star", "type": "COMPONENT", "w": 16, "h": 16, "fill": "#111111" },
+    {
+      "id": "button",
+      "type": "COMPONENT",
+      "w": 160,
+      "h": 48,
+      "componentProperties": [
+        { "name": "Label", "type": "TEXT", "defaultValue": "Continue" },
+        { "name": "ShowIcon", "type": "BOOLEAN", "defaultValue": true },
+        { "name": "Icon", "type": "INSTANCE_SWAP", "defaultValue": "icon-star" }
+      ],
+      "children": [
+        { "id": "button-label", "type": "TEXT", "w": 100, "h": 20, "text": "Continue", "componentPropertyReferences": { "characters": "Label" } },
+        { "id": "button-icon", "type": "INSTANCE", "componentId": "icon-star", "w": 16, "h": 16, "componentPropertyReferences": { "visible": "ShowIcon", "mainComponent": "Icon" } }
+      ]
+    },
+    {
+      "id": "button-1",
+      "type": "INSTANCE",
+      "componentId": "button",
+      "x": 200,
+      "w": 160,
+      "h": 48,
+      "instanceProperties": { "Label": "Start free", "ShowIcon": false }
+    }
+  ]
+}
+```
+
+Instance overrides may use the readable property name declared by the component. The importer resolves it to Figma's generated internal key (Figma appends `#id` suffixes), so `{ "instanceProperties": { "Label": "Start free" } }` works for a component property named `Label`. Export strips those suffixes back to authored names. Without `componentPropertyReferences`, `instanceProperties` change nothing on the canvas.
 
 Use `COMPONENT_SET` with only `COMPONENT` children to create variants. Name variant components using Figma's convention, such as `State=Default, Size=Large`.
 

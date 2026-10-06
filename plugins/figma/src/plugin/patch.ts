@@ -190,7 +190,7 @@ export const FIGMA_SET_ENTRIES: Readonly<Record<PatchSetKey, SetEntry>> = {
   innerRadiusRatio: { phase: "shape", apply: (node, values) => { const target = writable(node, "innerRadiusRatio", "arcData"); target.arcData = { ...(target.arcData as ArcData), innerRadius: clamp(values.innerRadiusRatio, 0, 1) }; } },
   svg: rejected,
   vectorPaths: scalar("vectorPaths", "vectorPaths", "shape", (values) => (values.vectorPaths || []).map((path) => ({ ...path, data: String(path.data || "").replace(/,/g, " ").replace(/\s+/g, " ").trim() }))),
-  componentId: rejected, componentProperties: rejected, instanceProperties: rejected, variantAxes: rejected, variant: rejected,
+  componentId: rejected, componentProperties: rejected, instanceProperties: rejected, componentPropertyReferences: rejected, variantAxes: rejected, variant: rejected,
   operation: scalar("operation", "booleanOperation", "shape"),
   prototype: rejected,
   overflowDirection: scalar("overflowDirection", "overflowDirection", "layout"),

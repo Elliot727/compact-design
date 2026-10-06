@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isVariableModeLimitError, variableModeLimitWarning } from "../src/plugin/mode-limit";
-import { compactEffects, compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, uniqueExportIds } from "../src/plugin/exporter";
+import { authoredComponentPropertyName, compactEffects, compactLayoutGrids, compactOverflow, compactStrokeAppearance, compactTextTypography, exportCanvasId, exportSelection, uniqueExportIds } from "../src/plugin/exporter";
 import { clearEffectWarnings, effectFromData, effectsFromData, effectWarnings } from "../src/plugin/paints";
 import {
   collectStyleIdsFromNode,
@@ -636,8 +636,82 @@ function typeDefaults(type: string): Record<string, unknown> {
     primaryAxisSizingMode: "AUTO", counterAxisSizingMode: "AUTO", primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", layoutWrap: "NO_WRAP",
     clipsContent: true, layoutGrids: [], overflowDirection: "NONE", numberOfFixedChildren: 0,
     setExplicitVariableModeForCollection(this: MockNode, collection: { name: string }, modeId: string) { (this.explicitModes as Record<string, string>)[collection.name] = modeId; },
-    explicitModes: {}
+    explicitModes: {},
+    componentPropertyReferences: null as { characters?: string; visible?: string; mainComponent?: string } | null
   });
+  if (type === "COMPONENT") Object.assign(base, {
+    componentPropertyDefinitions: {} as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[] }>,
+    _propSeq: 0,
+    addComponentProperty(this: MockNode, name: string, propertyType: string, defaultValue: string | boolean, options: { preferredValues?: unknown[] } = {}) {
+      const key = `${name}#${this._propSeq}:0`;
+      this._propSeq = Number(this._propSeq) + 1;
+      const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean; preferredValues?: unknown[] }>;
+      definitions[key] = { type: propertyType, defaultValue, ...(options.preferredValues ? { preferredValues: options.preferredValues } : {}) };
+      return key;
+    },
+    createInstance(this: MockNode) {
+      const main = this;
+      const instance = createMockNode("INSTANCE", this.name);
+      for (const child of this.children) instance.appendChild(child.clone());
+      // Store the main component id (not a live object) so clone() stays acyclic; resolve via figma.getNodeByIdAsync.
+      instance.mainComponentId = this.id;
+      const definitions = this.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean }>;
+      instance.componentProperties = Object.fromEntries(Object.entries(definitions).map(([key, def]) => [key, { type: def.type, value: def.defaultValue }]));
+      instance.getMainComponentAsync = async () => {
+        const api = (globalThis as { figma?: { getNodeByIdAsync?: (id: string) => Promise<MockNode | null> } }).figma;
+        if (api?.getNodeByIdAsync) return api.getNodeByIdAsync(String(instance.mainComponentId));
+        return main;
+      };
+      instance.setProperties = (overrides: Record<string, string | boolean>) => {
+        const props = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+        for (const [key, value] of Object.entries(overrides)) {
+          if (props[key]) props[key] = { ...props[key], value };
+          else props[key] = { type: typeof value === "boolean" ? "BOOLEAN" : "TEXT", value };
+        }
+        const applyOverrides = (mainChild: MockNode, instanceChild: MockNode) => {
+          const refs = mainChild.componentPropertyReferences as { characters?: string; visible?: string; mainComponent?: string } | null;
+          if (refs) {
+            if (refs.characters && typeof props[refs.characters]?.value === "string") instanceChild.characters = props[refs.characters].value;
+            if (refs.visible && typeof props[refs.visible]?.value === "boolean") instanceChild.visible = props[refs.visible].value;
+            if (refs.mainComponent && typeof props[refs.mainComponent]?.value === "string") instanceChild.swappedComponentId = props[refs.mainComponent].value;
+          }
+          for (let i = 0; i < mainChild.children.length; i++) {
+            if (instanceChild.children[i]) applyOverrides(mainChild.children[i], instanceChild.children[i]);
+          }
+        };
+        for (let i = 0; i < main.children.length; i++) {
+          if (instance.children[i]) applyOverrides(main.children[i], instance.children[i]);
+        }
+      };
+      const copyRefs = (mainChild: MockNode, instanceChild: MockNode) => {
+        instanceChild.componentPropertyReferences = mainChild.componentPropertyReferences
+          ? { ...(mainChild.componentPropertyReferences as object) }
+          : null;
+        for (let i = 0; i < mainChild.children.length; i++) {
+          if (instanceChild.children[i]) copyRefs(mainChild.children[i], instanceChild.children[i]);
+        }
+      };
+      for (let i = 0; i < main.children.length; i++) {
+        if (instance.children[i]) copyRefs(main.children[i], instance.children[i]);
+      }
+      return instance;
+    }
+  });
+  if (type === "INSTANCE") Object.assign(base, {
+    componentProperties: {} as Record<string, { type: string; value: string | boolean }>,
+    getMainComponentAsync: async () => null as MockNode | null,
+    setProperties(this: MockNode, overrides: Record<string, string | boolean>) {
+      const props = this.componentProperties as Record<string, { type: string; value: string | boolean }>;
+      for (const [key, value] of Object.entries(overrides)) {
+        if (props[key]) props[key] = { ...props[key], value };
+        else props[key] = { type: typeof value === "boolean" ? "BOOLEAN" : "TEXT", value };
+      }
+    }
+  });
+  // Non-frame nodes also need the refs field for TEXT/RECTANGLE/etc. children of components.
+  if (!FRAME_TYPES.has(type) && !NO_SCENE_PROPS.has(type)) {
+    base.componentPropertyReferences = null;
+  }
   if (["POLYGON", "STAR"].includes(type)) Object.assign(base, { pointCount: 5, cornerRadius: 0 });
   if (type === "STAR") base.innerRadius = 0.5;
   if (type === "ELLIPSE") Object.assign(base, { arcData: { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 }, strokeCap: "NONE" });
@@ -719,6 +793,12 @@ function createMockNode(type: string, name = type): MockNode {
       for (const [key, value] of Object.entries(this)) {
         if (["id", "parent", "children", "removed"].includes(key) || typeof value === "function") continue;
         copy[key] = cloneMockValue(value);
+      }
+      if (this.type === "INSTANCE" && copy.mainComponentId) {
+        copy.getMainComponentAsync = async () => {
+          const api = (globalThis as { figma?: { getNodeByIdAsync?: (id: string) => Promise<MockNode | null> } }).figma;
+          return api?.getNodeByIdAsync ? api.getNodeByIdAsync(String(copy.mainComponentId)) : null;
+        };
       }
       for (const child of this.children) copy.appendChild(child.clone());
       return copy;
@@ -1209,7 +1289,7 @@ test("every settable key applies in Figma or fails explicitly — no silent drop
     textAutoResize: ["text", "HEIGHT"], textTruncation: ["text", "ENDING"], maxLines: ["text", 2], runs: ["text", [{ text: "Ab" }, { text: "cd", fill: "#FF0000" }]],
     pointCount: ["polygon", 6], innerRadius: ["star", 0.3], startingAngle: ["ellipse", 1], endingAngle: ["ellipse", 2], innerRadiusRatio: ["ellipse", 0.4],
     svg: ["rect", "<svg/>"], vectorPaths: ["vector", [{ windingRule: "NONZERO", data: "M 0,0 L 1,1 Z" }]],
-    componentId: ["rect", "c"], componentProperties: ["rect", []], instanceProperties: ["rect", {}], variantAxes: ["rect", {}], variant: ["rect", {}],
+    componentId: ["rect", "c"], componentProperties: ["rect", []], instanceProperties: ["rect", {}], componentPropertyReferences: ["rect", { characters: "Label" }], variantAxes: ["rect", {}], variant: ["rect", {}],
     operation: ["bool", "SUBTRACT"], prototype: ["rect", []], overflowDirection: ["frame", "VERTICAL"], numberOfFixedChildren: ["stack", 1],
     styleRefs: ["rect", { fill: "x" }], bindings: ["rect", { fill: "x" }], variableModes: ["rect", { Theme: "Dark" }]
   };
@@ -1384,4 +1464,164 @@ test("e2e: a real multi-node document imports, takes a sequence of set patches, 
   assert.equal(((mockById(page, "theme-copy").fills as Array<{ boundVariables?: unknown }>)[0]).boundVariables, undefined, "and in Figma");
   assert.deepEqual(findCore("theme-title").properties.bindings, { fill: "ink" }, "unrelated bindings survive");
   assert.deepEqual(findCore("theme-card").properties.layout?.padding, { left: 32, top: 48, right: 32, bottom: 32 });
+});
+
+
+test("authoredComponentPropertyName strips Figma #id suffixes", () => {
+  assert.equal(authoredComponentPropertyName("Label#0:1"), "Label");
+  assert.equal(authoredComponentPropertyName("ShowIcon#2:3"), "ShowIcon");
+  assert.equal(authoredComponentPropertyName("Plain"), "Plain");
+});
+
+test("component property links: import maps authored names to generated keys and export round-trips", async () => {
+  const source = {
+    canvas: { id: "screen", width: 400, height: 200, fill: "#FFFFFF" },
+    nodes: [
+      { id: "icon-star", type: "COMPONENT", name: "Icon/Star", w: 16, h: 16, fill: "#111111" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        name: "Button",
+        w: 160,
+        h: 48,
+        fill: "#2563EB",
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon-star" }
+        ],
+        children: [
+          { id: "button-label", type: "TEXT", name: "Label", w: 100, h: 20, text: "Continue", fill: "#FFFFFF", componentPropertyReferences: { characters: "Label" } },
+          { id: "button-icon", type: "INSTANCE", name: "Icon", componentId: "icon-star", w: 16, h: 16, componentPropertyReferences: { visible: "ShowIcon", mainComponent: "Icon" } }
+        ]
+      },
+      {
+        id: "button-1",
+        type: "INSTANCE",
+        name: "Button Instance",
+        componentId: "button",
+        x: 200,
+        w: 160,
+        h: 48,
+        instanceProperties: { Label: "Start free", ShowIcon: false }
+      }
+    ]
+  };
+
+  const checked = validate(source);
+  assert.equal(checked.valid, true, JSON.stringify(checked.issues, null, 2));
+  const document = normalize(source);
+
+  const context = importContext();
+  const page = await importIntoMock(document, context);
+
+  const button = mockById(page, "button");
+  const definitions = button.componentPropertyDefinitions as Record<string, { type: string; defaultValue: string | boolean }>;
+  const keys = Object.keys(definitions);
+  assert.equal(keys.length, 3);
+  assert.ok(keys.every((key) => key.includes("#")), `expected generated keys with # suffixes, got ${keys.join(", ")}`);
+  assert.deepEqual(keys.map(authoredComponentPropertyName).sort(), ["Icon", "Label", "ShowIcon"]);
+  assert.equal(definitions[keys.find((key) => key.startsWith("Icon#"))!].defaultValue, mockById(page, "icon-star").id);
+
+  const label = mockById(page, "button-label");
+  const iconSlot = mockById(page, "button-icon");
+  const labelKey = keys.find((key) => key.startsWith("Label#"))!;
+  const showKey = keys.find((key) => key.startsWith("ShowIcon#"))!;
+  const iconKey = keys.find((key) => key.startsWith("Icon#"))!;
+  assert.deepEqual(label.componentPropertyReferences, { characters: labelKey });
+  assert.deepEqual(iconSlot.componentPropertyReferences, { visible: showKey, mainComponent: iconKey });
+
+  const instance = mockById(page, "button-1");
+  const instanceProps = instance.componentProperties as Record<string, { type: string; value: string | boolean }>;
+  assert.equal(instanceProps[labelKey]?.value, "Start free");
+  assert.equal(instanceProps[showKey]?.value, false);
+
+  // Export selection of the three roots and compare to input modulo normalization.
+  const roots = page.children.slice();
+  const { document: exported } = await exportSelection(roots as never);
+  const exportedNodes = (exported.nodes || (exported.canvases as Array<{ nodes: unknown[] }>)?.[0]?.nodes) as Array<Record<string, unknown>>;
+  // exportSelection wraps each root: COMPONENT/INSTANCE become canvas children.
+  // Flatten to top-level compact nodes for comparison.
+  const flat: Array<Record<string, unknown>> = [];
+  if (Array.isArray(exported.nodes)) {
+    // Single-canvas path: canvas was the first FRAME-like selection — our roots aren't FRAMEs so each is wrapped.
+  }
+  // Multi-root non-FRAME selection yields canvases[]
+  if (Array.isArray(exported.canvases)) {
+    for (const canvas of exported.canvases as Array<{ nodes: Array<Record<string, unknown>> }>) {
+      for (const node of canvas.nodes || []) flat.push(node);
+    }
+  } else if (Array.isArray(exported.nodes)) {
+    for (const node of exported.nodes as Array<Record<string, unknown>>) flat.push(node);
+  }
+
+  const byId = Object.fromEntries(flat.map((node) => [node.id, node]));
+  assert.ok(byId["button"], `exported ids: ${flat.map((node) => node.id).join(", ")}`);
+  assert.ok(byId["icon-star"]);
+  assert.ok(byId["button-1"]);
+
+  const exportedButton = byId["button"] as { componentProperties: Array<{ name: string; type: string; defaultValue: unknown }>; children: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    exportedButton.componentProperties.map((property) => ({ name: property.name, type: property.type })).sort((a, b) => a.name.localeCompare(b.name)),
+    [
+      { name: "Icon", type: "INSTANCE_SWAP" },
+      { name: "Label", type: "TEXT" },
+      { name: "ShowIcon", type: "BOOLEAN" }
+    ]
+  );
+  const iconProp = exportedButton.componentProperties.find((property) => property.name === "Icon")!;
+  assert.equal(iconProp.defaultValue, "icon-star");
+
+  const exportedLabel = exportedButton.children.find((child) => child.id === "button-label")!;
+  const exportedIcon = exportedButton.children.find((child) => child.id === "button-icon")!;
+  assert.deepEqual(exportedLabel.componentPropertyReferences, { characters: "Label" });
+  assert.deepEqual(exportedIcon.componentPropertyReferences, { visible: "ShowIcon", mainComponent: "Icon" });
+
+  const exportedInstance = byId["button-1"] as { componentId: string; instanceProperties: Record<string, unknown> };
+  assert.equal(exportedInstance.componentId, "button");
+  assert.equal(exportedInstance.instanceProperties.Label, "Start free");
+  assert.equal(exportedInstance.instanceProperties.ShowIcon, false);
+  assert.ok(!Object.keys(exportedInstance.instanceProperties).some((key) => key.includes("#")), "instanceProperties must use authored names");
+
+  // Re-validate the exported document shape (rebuild a compact doc from flats).
+  const roundTrip = validate({
+    canvas: { id: "screen", width: 400, height: 200, fill: "#FFFFFF" },
+    nodes: flat
+  });
+  assert.equal(roundTrip.valid, true, JSON.stringify(roundTrip.issues, null, 2));
+});
+
+test("Figma-native component with generated keys exports through the same authored model", async () => {
+  const icon = createMockNode("COMPONENT", "Icon");
+  icon.setPluginData("compactDesignId", "icon-star");
+  icon.resize(16, 16);
+  const button = createMockNode("COMPONENT", "Button");
+  button.setPluginData("compactDesignId", "button");
+  button.resize(160, 48);
+  const labelKey = (button as MockNode & { addComponentProperty: Function }).addComponentProperty("Label", "TEXT", "Continue");
+  const showKey = (button as MockNode & { addComponentProperty: Function }).addComponentProperty("ShowIcon", "BOOLEAN", true);
+  const label = createMockNode("TEXT", "Label");
+  label.setPluginData("compactDesignId", "button-label");
+  label.characters = "Continue";
+  label.componentPropertyReferences = { characters: labelKey };
+  button.appendChild(label);
+  const iconSlot = createMockNode("INSTANCE", "Icon");
+  iconSlot.setPluginData("compactDesignId", "button-icon");
+  iconSlot.getMainComponentAsync = async () => icon;
+  iconSlot.componentProperties = {};
+  iconSlot.componentPropertyReferences = { visible: showKey };
+  button.appendChild(iconSlot);
+  installFigmaMock([icon, button]);
+
+  const { document: exported } = await exportSelection([button] as never);
+  const nodes = Array.isArray(exported.canvases)
+    ? (exported.canvases as Array<{ nodes: Array<Record<string, unknown>> }>)[0].nodes
+    : (exported.nodes as Array<Record<string, unknown>>);
+  const exportedButton = nodes.find((node) => node.id === "button") || nodes[0];
+  assert.ok(exportedButton);
+  const props = exportedButton.componentProperties as Array<{ name: string; type: string }>;
+  assert.deepEqual(props.map((property) => property.name).sort(), ["Label", "ShowIcon"]);
+  const children = exportedButton.children as Array<Record<string, unknown>>;
+  assert.deepEqual(children.find((child) => child.id === "button-label")?.componentPropertyReferences, { characters: "Label" });
+  assert.deepEqual(children.find((child) => child.id === "button-icon")?.componentPropertyReferences, { visible: "ShowIcon" });
 });

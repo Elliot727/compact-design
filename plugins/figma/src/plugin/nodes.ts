@@ -72,7 +72,9 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   if (node.type === "COMPONENT") {
     const propertyKeys = new Map<string, string>();
     for (const property of p.componentProperties || []) {
-      const generatedKey = node.addComponentProperty(property.name, property.type, property.defaultValue, property.options || {});
+      const defaultValue = resolveComponentPropertyDefault(property, context);
+      const options = resolveComponentPropertyOptions(property.options);
+      const generatedKey = node.addComponentProperty(property.name, property.type, defaultValue, options);
       propertyKeys.set(property.name, generatedKey);
       propertyKeys.set(generatedKey, generatedKey);
     }
@@ -80,7 +82,11 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   }
   if (node.type === "INSTANCE" && p.instanceProperties) {
     const propertyKeys = p.componentId ? context.componentPropertyKeys.get(p.componentId) : undefined;
-    const overrides = Object.fromEntries(Object.entries(p.instanceProperties).map(([key, value]) => [propertyKeys?.get(key) || key, value])) as Record<string, string | boolean | VariableAlias>;
+    const overrides = Object.fromEntries(Object.entries(p.instanceProperties).map(([key, value]) => {
+      const mappedKey = propertyKeys?.get(key) || key;
+      const mappedValue = typeof value === "string" && context.sourceNodes.has(value) ? context.sourceNodes.get(value)!.id : value;
+      return [mappedKey, mappedValue];
+    })) as Record<string, string | boolean | VariableAlias>;
     node.setProperties(overrides);
   }
   await applyAppearance(node, p, node.type === "TEXT");
@@ -94,5 +100,50 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
     for (const child of data.children) await createNode(child, node, childOrigin, context);
     if ("numberOfFixedChildren" in node && typeof p.numberOfFixedChildren === "number" && Number.isFinite(p.numberOfFixedChildren)) node.numberOfFixedChildren = Math.max(0, Math.min(node.children.length, Math.round(p.numberOfFixedChildren)));
   }
+  // Second pass: bind child layers to component properties after children exist.
+  // Figma appends #id suffixes to TEXT/BOOLEAN/INSTANCE_SWAP keys from addComponentProperty.
+  if (node.type === "COMPONENT") {
+    const propertyKeys = context.componentPropertyKeys.get(data.id);
+    if (propertyKeys) {
+      for (const childData of data.children) {
+        const childScene = node.children.find((child) => child.getPluginData("compactDesignId") === childData.id);
+        if (childScene) applyComponentPropertyReferencesTree(childData, childScene, propertyKeys);
+      }
+    }
+  }
   return node;
+}
+
+function resolveComponentPropertyDefault(property: { type: string; defaultValue: string | boolean }, context: ImportContext): string | boolean | VariableAlias {
+  if (property.type === "INSTANCE_SWAP" && typeof property.defaultValue === "string") {
+    const target = context.sourceNodes.get(property.defaultValue);
+    if (target) return target.id;
+  }
+  return property.defaultValue;
+}
+
+function resolveComponentPropertyOptions(options: { preferredValues?: Array<{ type: "COMPONENT" | "COMPONENT_SET"; key: string }> } | undefined): ComponentPropertyOptions | undefined {
+  // preferredValues.key is a Figma publish key; pass through when already modeled.
+  return options;
+}
+
+/**
+ * Assign componentPropertyReferences on a COMPONENT descendant tree.
+ * Stops at nested COMPONENT (owns its own props) and INSTANCE (no authored sublayers).
+ */
+function applyComponentPropertyReferencesTree(data: InternalNode, scene: SceneNode, propertyKeys: Map<string, string>): void {
+  const refs = data.properties.componentPropertyReferences;
+  if (refs && typeof refs === "object") {
+    const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
+    if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
+    if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
+    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
+    if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
+  }
+  if (data.type === "COMPONENT" || data.type === "INSTANCE") return;
+  if (!("children" in scene) || !data.children.length) return;
+  for (const childData of data.children) {
+    const childScene = scene.children.find((child) => child.getPluginData("compactDesignId") === childData.id);
+    if (childScene) applyComponentPropertyReferencesTree(childData, childScene, propertyKeys);
+  }
 }

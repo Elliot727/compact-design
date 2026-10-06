@@ -77,6 +77,22 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
 { "prototype": [{ "trigger": { "type": "ON_CLICK" },
   "actions": [{ "type": "SET_VARIABLE_MODE", "collection": "Theme", "mode": "Dark" }] }] }
 
+
+## Components, property links, and instances
+Declare \`componentProperties\` on COMPONENT (\`TEXT\` | \`BOOLEAN\` | \`INSTANCE_SWAP\`; VARIANT axes use \`variantAxes\`/\`variant\`). Link children with \`componentPropertyReferences\`: \`characters\` (TEXT prop, TEXT nodes), \`visible\` (BOOLEAN, any node), \`mainComponent\` (INSTANCE_SWAP, INSTANCE nodes). Values are authored property names on the nearest ancestor COMPONENT (do not cross a nested INSTANCE/COMPONENT).
+{ "id": "button", "type": "COMPONENT", "w": 160, "h": 48,
+  "componentProperties": [
+    { "name": "Label", "type": "TEXT", "defaultValue": "Continue" },
+    { "name": "ShowIcon", "type": "BOOLEAN", "defaultValue": true },
+    { "name": "Icon", "type": "INSTANCE_SWAP", "defaultValue": "icon-star" }
+  ],
+  "children": [
+    { "type": "TEXT", "w": 100, "h": 20, "text": "Continue", "componentPropertyReferences": { "characters": "Label" } },
+    { "type": "INSTANCE", "componentId": "icon-star", "w": 16, "h": 16, "componentPropertyReferences": { "visible": "ShowIcon", "mainComponent": "Icon" } }
+  ] }
+{ "type": "INSTANCE", "componentId": "button", "w": 160, "h": 48, "instanceProperties": { "Label": "Start free", "ShowIcon": false } }
+Without \`componentPropertyReferences\`, instance overrides do not affect children. Import maps authored names to Figma \`#id\` keys; export strips them back.
+
 ## Patch
 {
   "patch": { "operations": [
@@ -95,7 +111,7 @@ Bind nodes to variables by id or name. \`fill\` / \`stroke\` bind the first pain
 - \`x\`/\`y\` are parent-relative and move the subtree. They are ERRORs under Auto Layout unless \`layoutPositioning: "ABSOLUTE"\`, and on children of a GROUP/BOOLEAN_OPERATION.
 - A partial \`layout\` on a frame without Auto Layout needs \`direction\`. \`counterAxisAlignItems: "STRETCH"\` is not patchable.
 - \`text\` + \`runs\`: text is the content and runs style ranges. runs alone: every run needs \`text\`. Replacing the content of text with per-range styling is an ERROR, so remove + insert it instead. On mixed-font text, send \`font.family\` and \`font.style\` together (\`font.size\` alone is fine).
-- Not patchable yet (ERROR): bindings, styleRefs, variableModes, prototype, componentId, componentProperties, instanceProperties, variantAxes, variant. \`svg\` can't be patched; remove + insert. Changing typography on a text-style-linked node, or a variable-bound field, is an ERROR.
+- Not patchable yet (ERROR): bindings, styleRefs, variableModes, prototype, componentId, componentProperties, instanceProperties, componentPropertyReferences, variantAxes, variant. \`svg\` can't be patched; remove + insert. Changing typography on a text-style-linked node, or a variable-bound field, is an ERROR.
 A failed patch rolls back completely.
 
 ## Workflow

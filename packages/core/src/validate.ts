@@ -1,5 +1,5 @@
 import { SUPPORTED_NODE_TYPES, SUPPORTED_PAINT_TYPES } from "./constants";
-import type { DesignPaint, InternalDocument, InternalNode, JsonObject } from "./types";
+import type { DesignPaint, DesignProperties, InternalDocument, InternalNode, JsonObject } from "./types";
 
 /** Validate a canonical document. Reports at most `limit` errors (default 30; pass Infinity for all). */
 export function validateDocument(document: InternalDocument, limit = 30): string[] {
@@ -52,10 +52,67 @@ export function validateDocument(document: InternalDocument, limit = 30): string
     if (value.opacity !== undefined && (!finite(value.opacity) || value.opacity < 0 || value.opacity > 1)) add(`${path}.opacity`, "must be 0–1");
   }
 
-  function walk(node: InternalNode, path: string): void {
+  type Ancestor = { type: string; id: string; componentProperties?: DesignProperties["componentProperties"] };
+  const componentPropsById = new Map<string, NonNullable<DesignProperties["componentProperties"]>>();
+
+  function owningComponentProperties(ancestors: Ancestor[]): NonNullable<DesignProperties["componentProperties"]> | null {
+    for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+      const ancestor = ancestors[index];
+      if (ancestor.type === "INSTANCE") return null;
+      if (ancestor.type === "COMPONENT") return ancestor.componentProperties || [];
+    }
+    return null;
+  }
+
+  function validateComponentPropertyReferences(node: InternalNode, path: string, ancestors: Ancestor[]): void {
+    const refs = node.properties.componentPropertyReferences;
+    if (refs === undefined) return;
+    if (!refs || typeof refs !== "object" || Array.isArray(refs)) return add(`${path}.componentPropertyReferences`, "must be an object");
+    const owning = owningComponentProperties(ancestors);
+    if (owning === null) return add(`${path}.componentPropertyReferences`, "must be on a descendant of a COMPONENT and must not cross a nested INSTANCE");
+    const byName = new Map(owning.map((property) => [property.name, property]));
+    const entries = refs as Record<string, unknown>;
+    for (const field of Object.keys(entries)) {
+      if (!["characters", "visible", "mainComponent"].includes(field)) add(`${path}.componentPropertyReferences.${field}`, "supported fields are characters, visible, and mainComponent");
+    }
+    const characters = entries.characters;
+    if (characters !== undefined) {
+      if (typeof characters !== "string" || !characters) add(`${path}.componentPropertyReferences.characters`, "must be a non-empty property name");
+      else if (node.type !== "TEXT") add(`${path}.componentPropertyReferences.characters`, "characters may only be set on TEXT nodes");
+      else {
+        const property = byName.get(characters);
+        if (!property) add(`${path}.componentPropertyReferences.characters`, `property '${characters}' is not defined on the owning COMPONENT`);
+        else if (property.type !== "TEXT") add(`${path}.componentPropertyReferences.characters`, `property '${characters}' has type ${property.type} but characters requires TEXT`);
+      }
+    }
+    const visible = entries.visible;
+    if (visible !== undefined) {
+      if (typeof visible !== "string" || !visible) add(`${path}.componentPropertyReferences.visible`, "must be a non-empty property name");
+      else {
+        const property = byName.get(visible);
+        if (!property) add(`${path}.componentPropertyReferences.visible`, `property '${visible}' is not defined on the owning COMPONENT`);
+        else if (property.type !== "BOOLEAN") add(`${path}.componentPropertyReferences.visible`, `property '${visible}' has type ${property.type} but visible requires BOOLEAN`);
+      }
+    }
+    const mainComponent = entries.mainComponent;
+    if (mainComponent !== undefined) {
+      if (typeof mainComponent !== "string" || !mainComponent) add(`${path}.componentPropertyReferences.mainComponent`, "must be a non-empty property name");
+      else if (node.type !== "INSTANCE") add(`${path}.componentPropertyReferences.mainComponent`, "mainComponent may only be set on INSTANCE nodes");
+      else {
+        const property = byName.get(mainComponent);
+        if (!property) add(`${path}.componentPropertyReferences.mainComponent`, `property '${mainComponent}' is not defined on the owning COMPONENT`);
+        else if (property.type !== "INSTANCE_SWAP") add(`${path}.componentPropertyReferences.mainComponent`, `property '${mainComponent}' has type ${property.type} but mainComponent requires INSTANCE_SWAP`);
+      }
+    }
+  }
+
+  function walk(node: InternalNode, path: string, ancestors: Ancestor[] = []): void {
     if (ids.has(node.id)) add(`${path}.id`, `duplicate ID '${node.id}'`); else ids.add(node.id);
     if (!SUPPORTED_NODE_TYPES.has(node.type)) add(`${path}.type`, `unsupported node type '${node.type}'`);
-    if (node.type === "COMPONENT") components.add(node.id);
+    if (node.type === "COMPONENT") {
+      components.add(node.id);
+      if (node.properties.componentProperties) componentPropsById.set(node.id, node.properties.componentProperties);
+    }
     const props = node.properties;
     if (!finite(props.position?.x) || !finite(props.position?.y)) add(`${path}.position`, "x and y must be finite numbers");
     if (!finite(props.size?.width) || props.size.width <= 0 || !finite(props.size?.height) || props.size.height <= 0) add(`${path}.size`, "w and h must be positive finite numbers");
@@ -81,12 +138,30 @@ export function validateDocument(document: InternalDocument, limit = 30): string
     }
     if (props.prototype !== undefined) Array.isArray(props.prototype) ? validatePrototype(props.prototype, `${path}.prototype`) : add(`${path}.prototype`, "must be an array of reactions");
     if (["GROUP", "BOOLEAN_OPERATION"].includes(node.type) && !node.children.length) add(`${path}.children`, `${node.type} requires children`);
-    node.children.forEach((child, index) => walk(child, `${path}.children[${index}]`));
+    validateComponentPropertyReferences(node, path, ancestors);
+    const nextAncestors: Ancestor[] = [...ancestors, { type: node.type, id: node.id, componentProperties: props.componentProperties }];
+    node.children.forEach((child, index) => walk(child, `${path}.children[${index}]`, nextAncestors));
   }
 
   document.nodes.forEach((node, index) => walk(node, `nodes[${index}]`));
   function references(node: InternalNode, path: string): void {
     if (node.type === "INSTANCE" && (!node.properties.componentId || !components.has(node.properties.componentId))) add(`${path}.componentId`, `component '${node.properties.componentId || ""}' is not defined in this import`);
+    const overrides = node.properties.instanceProperties;
+    if (node.type === "INSTANCE" && overrides && typeof node.properties.componentId === "string") {
+      const declared = componentPropsById.get(node.properties.componentId);
+      if (declared) {
+        const byName = new Map(declared.map((property) => [property.name, property]));
+        for (const [key, value] of Object.entries(overrides)) {
+          const property = byName.get(key);
+          if (!property) {
+            add(`${path}.instanceProperties.${key}`, `property '${key}' is not defined on component '${node.properties.componentId}'`);
+            continue;
+          }
+          if (property.type === "BOOLEAN" && typeof value !== "boolean") add(`${path}.instanceProperties.${key}`, `property '${key}' expects a boolean`);
+          else if ((property.type === "TEXT" || property.type === "INSTANCE_SWAP") && typeof value !== "string" && !(value && typeof value === "object" && (value as { type?: string }).type === "VARIABLE_ALIAS")) add(`${path}.instanceProperties.${key}`, `property '${key}' expects a string`);
+        }
+      }
+    }
     node.children.forEach((child, index) => references(child, `${path}.children[${index}]`));
   }
   document.nodes.forEach((node, index) => references(node, `nodes[${index}]`));

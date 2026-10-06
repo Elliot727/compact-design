@@ -567,6 +567,16 @@
         "options": { "type": "object" }
       }
     },
+    "componentPropertyReferences": {
+      "type": "object",
+      "description": "Links this child layer to component properties on its nearest ancestor COMPONENT (Figma componentPropertyReferences). Values are the authored property names from that COMPONENT's componentProperties. characters → TEXT (TEXT nodes only); visible → BOOLEAN (any node); mainComponent → INSTANCE_SWAP (INSTANCE nodes only).",
+      "additionalProperties": false,
+      "properties": {
+        "characters": { "type": "string", "minLength": 1 },
+        "visible": { "type": "string", "minLength": 1 },
+        "mainComponent": { "type": "string", "minLength": 1 }
+      }
+    },
     "vectorPath": {
       "type": "object",
       "additionalProperties": false,
@@ -715,6 +725,7 @@
           "items": { "$ref": "#/$defs/componentProperty" }
         },
         "instanceProperties": { "type": "object" },
+        "componentPropertyReferences": { "$ref": "#/$defs/componentPropertyReferences" },
         "variantAxes": {
           "type": "object",
           "additionalProperties": {
@@ -1032,6 +1043,7 @@
         "componentId": { "type": "string", "minLength": 1, "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
         "componentProperties": { "type": "array", "items": { "$ref": "#/$defs/componentProperty" }, "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
         "instanceProperties": { "type": "object", "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
+        "componentPropertyReferences": { "$ref": "#/$defs/componentPropertyReferences", "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
         "variantAxes": { "type": "object", "additionalProperties": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true }, "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
         "variant": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Recognised but not patchable yet: core and the Figma plugin reject it with PATCH_SET_UNSUPPORTED. Re-import, or remove and insert the node." },
         "operation": { "enum": ["UNION", "SUBTRACT", "INTERSECT", "EXCLUDE"] },

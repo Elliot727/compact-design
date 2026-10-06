@@ -706,7 +706,7 @@ test("PATCH_SET_KEYS is the single source of truth and matches schema node props
   }
   assert.equal(specSchema.$defs.layoutPatch.required, undefined);
   assert.deepEqual(specSchema.$defs.patchOperation.oneOf[0].properties.set, { $ref: "#/$defs/patchSet" });
-  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "instanceProperties", "variantAxes", "variant", "prototype", "styleRefs", "bindings", "variableModes"]);
+  assert.deepEqual([...PATCH_SET_DEFERRED_KEYS], ["componentId", "componentProperties", "instanceProperties", "componentPropertyReferences", "variantAxes", "variant", "prototype", "styleRefs", "bindings", "variableModes"]);
 });
 
 test("a typo set key fails in the schema and in core", () => {
@@ -1018,4 +1018,124 @@ test("e2e: the showcase document goes through a sequence of set patches, validat
   assert.deepEqual(replay, current);
   // A patched document is a valid input for further patches.
   assert.equal(validatePatch(current, patchOf(setOp("main", { opacity: 1 }))).valid, true);
+});
+
+
+test("componentPropertyReferences links children to owning COMPONENT properties", () => {
+  const source = {
+    canvas: { width: 400, height: 200 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 16, h: 16, fill: "#111111" },
+      {
+        id: "button",
+        type: "COMPONENT",
+        w: 160,
+        h: 48,
+        componentProperties: [
+          { name: "Label", type: "TEXT", defaultValue: "Continue" },
+          { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+          { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon" }
+        ],
+        children: [
+          { id: "label", type: "TEXT", w: 100, h: 20, text: "Continue", componentPropertyReferences: { characters: "Label" } },
+          { id: "icon-slot", type: "INSTANCE", componentId: "icon", w: 16, h: 16, componentPropertyReferences: { visible: "ShowIcon", mainComponent: "Icon" } }
+        ]
+      },
+      { id: "button-1", type: "INSTANCE", componentId: "button", w: 160, h: 48, instanceProperties: { Label: "Start free", ShowIcon: false } }
+    ]
+  };
+  const result = validate(source);
+  assert.equal(result.valid, true, JSON.stringify(result.issues, null, 2));
+  const document = normalize(source);
+  const canvasChildren = document.nodes[0].children;
+  const button = canvasChildren.find((node) => node.id === "button")!;
+  const instance = canvasChildren.find((node) => node.id === "button-1")!;
+  assert.deepEqual(button.children[0].properties.componentPropertyReferences, { characters: "Label" });
+  assert.deepEqual(button.children[1].properties.componentPropertyReferences, { visible: "ShowIcon", mainComponent: "Icon" });
+  assert.deepEqual(instance.properties.instanceProperties, { Label: "Start free", ShowIcon: false });
+});
+
+test("rejects componentPropertyReferences with wrong type, missing prop, wrong node type, or crossing INSTANCE", () => {
+  const baseProps = [
+    { name: "Label", type: "TEXT", defaultValue: "Hi" },
+    { name: "ShowIcon", type: "BOOLEAN", defaultValue: true },
+    { name: "Icon", type: "INSTANCE_SWAP", defaultValue: "icon" }
+  ];
+  const wrongType = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: baseProps,
+      children: [{ id: "label", type: "TEXT", w: 20, h: 10, text: "Hi", componentPropertyReferences: { characters: "ShowIcon" } }]
+    }]
+  });
+  assert.equal(wrongType.valid, false);
+  assert.ok(wrongType.issues.some((issue) => /characters/.test(issue.path) && /TEXT/.test(issue.message)));
+
+  const missing = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: baseProps,
+      children: [{ id: "label", type: "TEXT", w: 20, h: 10, text: "Hi", componentPropertyReferences: { characters: "Missing" } }]
+    }]
+  });
+  assert.equal(missing.valid, false);
+  assert.ok(missing.issues.some((issue) => /Missing/.test(issue.message)));
+
+  const wrongNode = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: baseProps,
+      children: [{ id: "box", type: "RECTANGLE", w: 20, h: 10, componentPropertyReferences: { characters: "Label" } }]
+    }]
+  });
+  assert.equal(wrongNode.valid, false);
+  assert.ok(wrongNode.issues.some((issue) => /TEXT nodes/.test(issue.message)));
+
+  const crossing = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "icon", type: "COMPONENT", w: 8, h: 8 },
+      {
+        id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: baseProps,
+        children: [{
+          id: "slot", type: "INSTANCE", componentId: "icon", w: 8, h: 8,
+          children: [{ id: "nested-text", type: "TEXT", w: 8, h: 8, text: "x", componentPropertyReferences: { characters: "Label" } }]
+        }]
+      }
+    ]
+  });
+  assert.equal(crossing.valid, false);
+  assert.ok(crossing.issues.some((issue) => /nested INSTANCE/.test(issue.message)));
+
+  const mainOnText = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [{
+      id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: baseProps,
+      children: [{ id: "label", type: "TEXT", w: 20, h: 10, text: "Hi", componentPropertyReferences: { mainComponent: "Icon" } }]
+    }]
+  });
+  assert.equal(mainOnText.valid, false);
+  assert.ok(mainOnText.issues.some((issue) => /INSTANCE nodes/.test(issue.message)));
+});
+
+test("rejects instanceProperties keys/types that do not match the main component", () => {
+  const missingKey = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: [{ name: "Label", type: "TEXT", defaultValue: "Hi" }] },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40, instanceProperties: { Title: "Nope" } }
+    ]
+  });
+  assert.equal(missingKey.valid, false);
+  assert.ok(missingKey.issues.some((issue) => /Title/.test(issue.message)));
+
+  const wrongValue = validate({
+    canvas: { width: 100, height: 100 },
+    nodes: [
+      { id: "button", type: "COMPONENT", w: 40, h: 40, componentProperties: [{ name: "ShowIcon", type: "BOOLEAN", defaultValue: true }] },
+      { id: "copy", type: "INSTANCE", componentId: "button", w: 40, h: 40, instanceProperties: { ShowIcon: "yes" } }
+    ]
+  });
+  assert.equal(wrongValue.valid, false);
+  assert.ok(wrongValue.issues.some((issue) => /boolean/.test(issue.message)));
 });
