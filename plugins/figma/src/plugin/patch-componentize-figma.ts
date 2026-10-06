@@ -1,13 +1,20 @@
 /**
  * Figma-side helpers for patch `componentize`.
- * Mirrors packages/core/src/patch-componentize.ts structuralDiff / matchLayer
- * against live SceneNodes so both engines reject the same mismatches.
+ * Mirrors packages/core/src/patch-componentize.ts — same COMPONENTIZE_DIFF_EXEMPT
+ * fail-closed contract against live SceneNodes.
  */
 
-import type { ComponentPropertyType } from "@compact-design/core";
+import {
+  COMPONENTIZE_DIFF_EXEMPT,
+  type ComponentPropertyType
+} from "@compact-design/core";
 
 export type ComponentizePropertyDecl = { type: ComponentPropertyType; layer: string };
 export type ComponentizeProperties = Record<string, ComponentizePropertyDecl>;
+
+const ROOT_EXEMPT_PROPS: ReadonlySet<string> = new Set(
+  COMPONENTIZE_DIFF_EXEMPT.filter((e) => e.rootOnly && e.key !== "name").map((e) => e.key as string)
+);
 
 function stableStringify(value: unknown): string {
   if (value === undefined) return "undefined";
@@ -107,27 +114,9 @@ export async function sceneReadPropertyValue(node: SceneNode, type: ComponentPro
 }
 
 function ignoredFieldForProperty(type: ComponentPropertyType): string {
-  if (type === "TEXT") return "characters";
+  if (type === "TEXT") return "text";
   if (type === "BOOLEAN") return "visible";
-  return "mainComponent";
-}
-
-function sceneBoundVariables(node: SceneNode): unknown {
-  if (!("boundVariables" in node) || !node.boundVariables) return {};
-  return node.boundVariables;
-}
-
-function sceneStyleRefs(node: SceneNode): Record<string, string> {
-  const refs: Record<string, string> = {};
-  if ("fillStyleId" in node && typeof node.fillStyleId === "string" && node.fillStyleId) refs.fill = node.fillStyleId;
-  if ("strokeStyleId" in node && typeof node.strokeStyleId === "string" && node.strokeStyleId) refs.stroke = node.strokeStyleId;
-  if ("textStyleId" in node && typeof node.textStyleId === "string" && node.textStyleId) refs.text = node.textStyleId;
-  return refs;
-}
-
-function sceneReactions(node: SceneNode): unknown {
-  if (!("reactions" in node) || !Array.isArray((node as FrameNode).reactions)) return [];
-  return (node as FrameNode).reactions;
+  return "componentId";
 }
 
 function sceneFills(node: SceneNode): unknown {
@@ -148,9 +137,115 @@ function sceneEffects(node: SceneNode): unknown {
 }
 
 /**
- * Strict structural diff on SceneNodes — same contract as core structuralDiff.
- * Always compares size (Gate: w/h must match), bindings, styleRefs, effects, prototype.
- * On the copy root only, name/x/y/layout-child props/variableModes/visible may differ.
+ * Build a DesignProperties-shaped bag from a SceneNode for fail-closed diff.
+ * Keys align with core InternalNode.properties so COMPONENTIZE_DIFF_EXEMPT matches.
+ */
+function scenePropertiesBag(node: SceneNode): Record<string, unknown> {
+  const bag: Record<string, unknown> = {
+    position: { x: node.x, y: node.y },
+    size: { width: node.width, height: node.height },
+    rotation: "rotation" in node ? ((node as LayoutMixin).rotation || 0) : 0,
+    styles: {
+      fills: sceneFills(node),
+      strokes: sceneStrokes(node),
+      effects: sceneEffects(node)
+    },
+    opacity: "opacity" in node ? node.opacity : 1,
+    blendMode: "blendMode" in node ? node.blendMode : "PASS_THROUGH",
+    visible: node.visible !== false,
+    locked: "locked" in node ? node.locked : false,
+    isMask: "isMask" in node ? node.isMask : false,
+    bindings: ("boundVariables" in node && node.boundVariables) ? node.boundVariables : {},
+    styleRefs: (() => {
+      const refs: Record<string, string> = {};
+      if ("fillStyleId" in node && typeof node.fillStyleId === "string" && node.fillStyleId) refs.fill = node.fillStyleId;
+      if ("strokeStyleId" in node && typeof node.strokeStyleId === "string" && node.strokeStyleId) refs.stroke = node.strokeStyleId;
+      if ("textStyleId" in node && typeof node.textStyleId === "string" && node.textStyleId) refs.text = node.textStyleId;
+      return refs;
+    })(),
+    prototype: ("reactions" in node && Array.isArray((node as FrameNode).reactions)) ? (node as FrameNode).reactions : []
+  };
+
+  if ("cornerRadius" in node) bag.cornerRadius = (node as RectangleNode).cornerRadius;
+  if ("clipsContent" in node) bag.clipsContent = (node as FrameNode).clipsContent;
+  if ("strokeWeight" in node) bag.strokeWeight = (node as GeometryMixin).strokeWeight;
+  if ("strokeAlign" in node) bag.strokeAlign = (node as GeometryMixin).strokeAlign;
+  if ("strokeCap" in node && (node as GeometryMixin).strokeCap !== figma.mixed) bag.strokeCap = (node as GeometryMixin).strokeCap;
+  if ("strokeJoin" in node && (node as GeometryMixin).strokeJoin !== figma.mixed) bag.strokeJoin = (node as GeometryMixin).strokeJoin;
+  if ("dashPattern" in node) bag.dashPattern = (node as GeometryMixin).dashPattern;
+  if ("constraints" in node) bag.constraints = (node as ConstraintMixin).constraints;
+  if ("layoutAlign" in node) bag.layoutAlign = (node as FrameNode).layoutAlign;
+  if ("layoutGrow" in node) bag.layoutGrow = (node as FrameNode).layoutGrow;
+  if ("layoutPositioning" in node) bag.layoutPositioning = (node as FrameNode).layoutPositioning;
+  if ("layoutSizingHorizontal" in node) bag.layoutSizingHorizontal = (node as FrameNode).layoutSizingHorizontal;
+  if ("layoutSizingVertical" in node) bag.layoutSizingVertical = (node as FrameNode).layoutSizingVertical;
+  if ("minWidth" in node) bag.minWidth = (node as FrameNode).minWidth;
+  if ("maxWidth" in node) bag.maxWidth = (node as FrameNode).maxWidth;
+  if ("minHeight" in node) bag.minHeight = (node as FrameNode).minHeight;
+  if ("maxHeight" in node) bag.maxHeight = (node as FrameNode).maxHeight;
+  if ("overflowDirection" in node) bag.overflowDirection = (node as FrameNode).overflowDirection;
+  if ("layoutGrids" in node) bag.layoutGrids = (node as FrameNode).layoutGrids;
+  if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
+    const frame = node as FrameNode;
+    bag.layout = {
+      direction: frame.layoutMode,
+      itemSpacing: frame.itemSpacing,
+      counterAxisSpacing: frame.counterAxisSpacing,
+      padding: { left: frame.paddingLeft, top: frame.paddingTop, right: frame.paddingRight, bottom: frame.paddingBottom },
+      primaryAxisAlignItems: frame.primaryAxisAlignItems,
+      counterAxisAlignItems: frame.counterAxisAlignItems,
+      primaryAxisSizingMode: frame.primaryAxisSizingMode,
+      counterAxisSizingMode: frame.counterAxisSizingMode,
+      wrap: frame.layoutWrap === "WRAP"
+    };
+  }
+  if ("explicitVariableModes" in node && node.explicitVariableModes && Object.keys(node.explicitVariableModes as object).length) {
+    bag.variableModes = node.explicitVariableModes;
+  }
+  if (node.type === "INSTANCE") {
+    bag.componentId = (node as InstanceNode & { mainComponentId?: string }).mainComponentId;
+  }
+  if (node.type === "TEXT") {
+    const text = node as TextNode;
+    bag.text = text.characters;
+    bag.font = text.fontName === figma.mixed ? undefined : text.fontName;
+    bag.fontSize = text.fontSize === figma.mixed ? undefined : text.fontSize;
+    // Mirror DesignProperties: hang font size under font when possible — keep parallel scalar for diff stability.
+    if (typeof text.fontSize === "number") {
+      const fn = text.fontName === figma.mixed ? { family: "Inter", style: "Regular" } : text.fontName as FontName;
+      bag.font = { family: fn.family, style: fn.style, size: text.fontSize };
+    }
+    bag.lineHeight = text.lineHeight === figma.mixed ? undefined : text.lineHeight;
+    bag.letterSpacing = text.letterSpacing === figma.mixed ? undefined : text.letterSpacing;
+    bag.alignment = text.textAlignHorizontal;
+    bag.verticalAlignment = text.textAlignVertical;
+    bag.textDecoration = text.textDecoration === figma.mixed ? undefined : text.textDecoration;
+    bag.textCase = text.textCase === figma.mixed ? undefined : text.textCase;
+    bag.paragraphSpacing = text.paragraphSpacing;
+    bag.paragraphIndent = text.paragraphIndent;
+    bag.listSpacing = text.listSpacing;
+    bag.hangingPunctuation = text.hangingPunctuation;
+    bag.hangingList = text.hangingList;
+    bag.textAutoResize = text.textAutoResize;
+    bag.textTruncation = text.textTruncation;
+    bag.maxLines = text.maxLines;
+  }
+  return bag;
+}
+
+function reportKey(key: string): string {
+  if (key === "alignment") return "align";
+  return key;
+}
+
+function stylesReportKey(key: string): string {
+  if (key === "fills") return "fill";
+  if (key === "strokes") return "stroke";
+  return key;
+}
+
+/**
+ * Strict structural diff on SceneNodes — fail-closed, same exempt set as core.
  */
 export function sceneStructuralDiff(
   source: SceneNode,
@@ -164,57 +259,46 @@ export function sceneStructuralDiff(
   const label = (key: string) => (path ? `${path}.${key}` : key);
 
   if (source.type !== copy.type) return label("type");
+  if (!isRoot && source.name !== copy.name) return label("name");
 
   const ignored = new Set<string>();
   for (const decl of Object.values(ignore.properties)) {
     if (decl.layer === compactId(source)) ignored.add(ignoredFieldForProperty(decl.type));
   }
 
-  // Gate: w/h must equal on every node including root.
-  if (!eq({ width: source.width, height: source.height }, { width: copy.width, height: copy.height })) return label("size");
-
+  const sp = scenePropertiesBag(source);
+  const cp = scenePropertiesBag(copy);
+  // Root-relative position for non-root (mirrors core abs − rootOrigin).
   if (!isRoot) {
-    if (!eq(rel.source, rel.copy)) return label("position");
+    sp.position = { x: rel.source.x, y: rel.source.y };
+    cp.position = { x: rel.copy.x, y: rel.copy.y };
   }
 
-  if ("rotation" in source && "rotation" in copy) {
-    if (!eq((source as LayoutMixin).rotation || 0, (copy as LayoutMixin).rotation || 0)) return label("rotation");
-  }
+  const keys = new Set([...Object.keys(sp), ...Object.keys(cp)]);
+  for (const key of [...keys].sort()) {
+    if (ignored.has(key)) continue;
+    if (isRoot && ROOT_EXEMPT_PROPS.has(key)) continue;
 
-  if (!eq(sceneFills(source), sceneFills(copy))) return label("fill");
-  if (!eq(sceneStrokes(source), sceneStrokes(copy))) return label("stroke");
-  if (!eq(sceneEffects(source), sceneEffects(copy))) return label("effects");
-
-  if (source.type === "TEXT" && copy.type === "TEXT") {
-    if (!ignored.has("characters") && !eq(source.characters, copy.characters)) return label("text");
-    if (!eq(source.fontName, copy.fontName)) return label("font");
-    if (!eq(source.fontSize, copy.fontSize)) return label("font");
-    if (!eq(source.lineHeight, copy.lineHeight)) return label("lineHeight");
-    if (!eq(source.letterSpacing, copy.letterSpacing)) return label("letterSpacing");
-    if (!eq(source.textAlignHorizontal, copy.textAlignHorizontal)) return label("align");
-  }
-
-  if (!ignored.has("visible") && !isRoot && !eq(source.visible !== false, copy.visible !== false)) return label("visible");
-
-  if (source.type === "INSTANCE" && copy.type === "INSTANCE") {
-    if (!ignored.has("mainComponent")) {
-      const sMain = (source as InstanceNode & { mainComponentId?: string }).mainComponentId;
-      const cMain = (copy as InstanceNode & { mainComponentId?: string }).mainComponentId;
-      if (!eq(sMain, cMain)) return label("componentId");
+    if (key === "position") {
+      if (isRoot) continue;
+      if (!eq(sp.position, cp.position)) return label("position");
+      continue;
     }
+
+    if (key === "styles") {
+      const sStyles = (sp.styles || {}) as Record<string, unknown>;
+      const cStyles = (cp.styles || {}) as Record<string, unknown>;
+      const styleKeys = new Set([...Object.keys(sStyles), ...Object.keys(cStyles)]);
+      for (const sk of [...styleKeys].sort()) {
+        const left = sStyles[sk] ?? (sk === "fills" || sk === "strokes" || sk === "effects" ? [] : undefined);
+        const right = cStyles[sk] ?? (sk === "fills" || sk === "strokes" || sk === "effects" ? [] : undefined);
+        if (!eq(left, right)) return label(stylesReportKey(sk));
+      }
+      continue;
+    }
+
+    if (!eq(sp[key], cp[key])) return label(reportKey(key));
   }
-
-  // Gate: bindings, styleRefs, prototype must match.
-  if (!eq(sceneBoundVariables(source), sceneBoundVariables(copy))) return label("bindings");
-  if (!eq(sceneStyleRefs(source), sceneStyleRefs(copy))) return label("styleRefs");
-  if (!eq(sceneReactions(source), sceneReactions(copy))) return label("prototype");
-
-  if (!isRoot && source.name !== copy.name) return label("name");
-
-  if ("opacity" in source && "opacity" in copy && !eq(source.opacity, copy.opacity)) return label("opacity");
-  if ("blendMode" in source && "blendMode" in copy && !eq(source.blendMode, copy.blendMode)) return label("blendMode");
-  if ("cornerRadius" in source && "cornerRadius" in copy && !eq((source as RectangleNode).cornerRadius, (copy as RectangleNode).cornerRadius)) return label("cornerRadius");
-  if ("clipsContent" in source && "clipsContent" in copy && !eq((source as FrameNode).clipsContent, (copy as FrameNode).clipsContent)) return label("clipsContent");
 
   const sourceKids = "children" in source ? source.children : [];
   const copyKids = "children" in copy ? copy.children : [];
@@ -222,7 +306,6 @@ export function sceneStructuralDiff(
   for (let i = 0; i < sourceKids.length; i++) {
     const childS = sourceKids[i];
     const childC = copyKids[i];
-    // Accumulate parent-relative coords to root-relative (mirrors core abs − rootOrigin).
     const nextRel = {
       source: { x: rel.source.x + childS.x, y: rel.source.y + childS.y },
       copy: { x: rel.copy.x + childC.x, y: rel.copy.y + childC.y }

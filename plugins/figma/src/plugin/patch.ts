@@ -1205,11 +1205,12 @@ export async function applyPatch(document: InternalPatchDocument, context: Impor
         // Eager: outside refs to copy inner ids
         for (const instId of instanceIds) {
           const copy = resolveNode(nodes, instId)!;
-          const innerIds = sceneCollectIds(copy);
+          const copyIds = sceneCollectIds(copy);
+          const innerIds = new Set(copyIds);
           innerIds.delete(instId);
           for (const [cid, scene] of nodes) {
             if (innerIds.has(cid) || cid === instId) continue;
-            if (sceneCollectIds(copy).has(cid)) continue;
+            if (copyIds.has(cid)) continue;
             if (!("reactions" in scene) || !Array.isArray((scene as FrameNode).reactions)) continue;
             for (const reaction of (scene as FrameNode).reactions) {
               const actions = reaction.actions || (reaction.action ? [reaction.action] : []);

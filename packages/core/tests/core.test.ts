@@ -6,7 +6,7 @@ import { parseDocument } from "../src/parser";
 import { isPatchDocument, normalizeDocument, normalizePatchDocument } from "../src/normalize";
 import { validateDocument } from "../src/validate";
 import { lintDocument, validationIssues } from "../src/lint";
-import { applyPatch, lint, matchStyle, matchVariable, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, remapDelimitedIds, remapIssueKeyThroughDuplicate, schema, validate, validatePatch } from "../src/index";
+import { applyPatch, COMPONENTIZE_DIFF_EXEMPT, COMPONENTIZE_DIFF_EXEMPT_PATCH_KEYS, lint, matchStyle, matchVariable, normalize, normalizePatch, PATCH_SET_APPLIES_TO, PATCH_SET_DEFERRED_KEYS, PATCH_SET_EXCLUDED_NODE_KEYS, PATCH_SET_KEYS, PATCH_SET_SEMANTICS, PatchError, remapDelimitedIds, remapIssueKeyThroughDuplicate, schema, validate, validatePatch, type PatchSetKey } from "../src/index";
 import type { InternalDocument, InternalNode } from "../src/types";
 import { indexDocument } from "../src/references";
 
@@ -2377,11 +2377,11 @@ test("componentize rejects bindings-only mismatch in both engines contract", () 
     canvas: { id: "page", width: 400, height: 200 },
     variables: [{ name: "Tokens", modes: ["Default"], items: [{ id: "gap", name: "gap", type: "FLOAT", values: { Default: 8 } }] }],
     nodes: [
-      { id: "a", type: "FRAME", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
-        { id: "a-leaf", type: "RECTANGLE", x: 4, y: 4, w: 20, h: 20, fill: "#111111", bindings: { opacity: "gap" } }
+      { id: "a", type: "FRAME", name: "A", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111", bindings: { opacity: "gap" } }
       ] },
-      { id: "b", type: "FRAME", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
-        { id: "b-leaf", type: "RECTANGLE", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
+      { id: "b", type: "FRAME", name: "B", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 20, h: 20, fill: "#111111" }
       ] }
     ]
   });
@@ -2439,4 +2439,152 @@ test("componentize under AL parent keeps slot; promote-only then duplicate", () 
   assert.equal(nodeById(after, "card").type, "COMPONENT");
   assert.deepEqual(nodeById(after, "row").children.map((c) => c.id), ["card", "spacer"]);
   assert.equal(nodeById(after, "card-t").properties.componentPropertyReferences?.characters, "Title");
+});
+
+test("componentize strict diff rejects hangingPunctuation-only and hangingList-only copies", () => {
+  const base = {
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+      ] },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [], hangingPunctuation: true }
+      ] }
+    ]
+  };
+  rejects(normalize(base), /differs at children\[0\]\.hangingPunctuation/, { op: "componentize", id: "a", instances: ["b"] });
+
+  const baseList = JSON.parse(JSON.stringify(base));
+  delete baseList.nodes[1].children[0].hangingPunctuation;
+  baseList.nodes[1].children[0].hangingList = true;
+  rejects(normalize(baseList), /differs at children\[0\]\.hangingList/, { op: "componentize", id: "a", instances: ["b"] });
+});
+
+test("componentize fail-closed coverage: every non-exempt PATCH_SET_KEYS difference is rejected", () => {
+  const exempt = new Set(COMPONENTIZE_DIFF_EXEMPT_PATCH_KEYS);
+  assert.ok(exempt.has("name") && exempt.has("x") && exempt.has("y"));
+  assert.equal(COMPONENTIZE_DIFF_EXEMPT.length > 0, true);
+
+  const textOnly = new Set(["text", "font", "lineHeight", "letterSpacing", "align", "verticalAlignment", "textDecoration", "textCase", "paragraphSpacing", "paragraphIndent", "listSpacing", "hangingPunctuation", "hangingList", "textAutoResize", "textTruncation", "maxLines", "runs"]);
+  const hostTypeFor = (key: PatchSetKey): string | null => {
+    const applies = PATCH_SET_APPLIES_TO[key];
+    if (applies === null) return "RECTANGLE";
+    const preferred = textOnly.has(key)
+      ? ["TEXT", "RECTANGLE", "FRAME", "ELLIPSE", "POLYGON", "STAR", "VECTOR", "LINE"]
+      : ["RECTANGLE", "FRAME", "ELLIPSE", "POLYGON", "STAR", "VECTOR", "LINE", "TEXT"];
+    for (const t of preferred) {
+      if (applies.includes(t)) return t;
+    }
+    return null;
+  };
+
+  const diffValue = (key: PatchSetKey, host: string): unknown => {
+    const sample: Partial<Record<PatchSetKey, unknown>> = {
+      w: 77, h: 66, rotation: 11,
+      fill: "#FF00AA", fills: ["#FF00AA"], stroke: "#00AAFF", strokes: ["#00AAFF"],
+      strokeWeight: 3, strokeTopWeight: 2, strokeRightWeight: 2, strokeBottomWeight: 2, strokeLeftWeight: 2,
+      strokeAlign: "OUTSIDE", strokeCap: "ROUND", strokeJoin: "ROUND", dashPattern: [2, 2],
+      cornerRadius: 5, cornerRadii: [1, 2, 3, 4], opacity: 0.42, blendMode: "MULTIPLY",
+      locked: true, isMask: true, clipsContent: false,
+      effects: [{ type: "LAYER_BLUR", blur: 3 }], elevation: "LOW", shadow: { y: 2, blur: 4 },
+      layout: { direction: "VERTICAL", itemSpacing: 9 },
+      layoutGrids: [{ pattern: "GRID", sectionSize: 8 }],
+      minWidth: 11, maxWidth: 200, minHeight: 7, maxHeight: 150,
+      text: "DIFF", font: { family: "Roboto", style: "Bold", size: 18 },
+      lineHeight: 1.5, letterSpacing: { unit: "PIXELS", value: 2 }, align: "CENTER", verticalAlignment: "BOTTOM",
+      textDecoration: "UNDERLINE", textCase: "UPPER",
+      paragraphSpacing: 5, paragraphIndent: 3, listSpacing: 4,
+      hangingPunctuation: true, hangingList: true,
+      textAutoResize: "HEIGHT", textTruncation: "ENDING", maxLines: 2,
+      runs: [{ text: "Di" }, { text: "ff", fill: "#FF0000" }],
+      pointCount: 6, innerRadius: 0.3, startingAngle: 0.5, endingAngle: 2, innerRadiusRatio: 0.4,
+      vectorPaths: [{ windingRule: "NONZERO", data: "M 0 0 L 10 10 Z" }],
+      overflowDirection: "VERTICAL", numberOfFixedChildren: 1,
+      prototype: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "URL", url: "https://example.com" }] }],
+      styleRefs: { fill: "Ink" }, bindings: { opacity: "gap" },
+      // intentionally not covering exempt / component-only / deferred here
+    };
+    if (key in sample) return sample[key];
+    // Fallback scalars
+    if (host === "TEXT") return true;
+    return 3;
+  };
+
+  const expectedSegment = (key: PatchSetKey): string => {
+    if (key === "w" || key === "h") return "size";
+    if (key === "x" || key === "y") return "position";
+    if (key === "fill" || key === "fills") return "fill";
+    if (key === "stroke" || key === "strokes") return "stroke";
+    if (key === "effects" || key === "elevation" || key === "shadow") return "effects";
+    return key;
+  };
+
+  const baseChild = (id: string, host: string): Record<string, unknown> => {
+    const common = { id, name: "Leaf", x: 4, y: 4, w: 40, h: 24 };
+    if (host === "TEXT") return { ...common, type: "TEXT", text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] };
+    if (host === "FRAME") return { ...common, type: "FRAME", fill: "#EEEEEE", children: [] };
+    if (host === "ELLIPSE") return { ...common, type: "ELLIPSE", fill: "#111111" };
+    if (host === "POLYGON") return { ...common, type: "POLYGON", fill: "#111111", pointCount: 5 };
+    if (host === "STAR") return { ...common, type: "STAR", fill: "#111111", pointCount: 5, innerRadius: 0.5 };
+    if (host === "VECTOR") return { ...common, type: "VECTOR", vectorPaths: [{ windingRule: "NONZERO", data: "M 0 0 L 1 1 Z" }] };
+    if (host === "LINE") return { ...common, type: "LINE", w: 40, h: 0 };
+    return { ...common, type: "RECTANGLE", fill: "#111111" };
+  };
+
+  let covered = 0;
+  const skipped: string[] = [];
+  for (const key of PATCH_SET_KEYS) {
+    if (exempt.has(key)) { skipped.push(`${key}:exempt`); continue; }
+    if (PATCH_SET_SEMANTICS[key] === "deferred" || PATCH_SET_SEMANTICS[key] === "immutable") {
+      skipped.push(`${key}:semantics`);
+      continue;
+    }
+    // Component-definition keys can't appear as the sole diff on a FRAME-copy subtree's inner layer in this fixture.
+    if (["componentProperties", "instanceProperties", "componentPropertyReferences", "variantAxes", "variant", "operation", "componentId", "svg"].includes(key)) {
+      skipped.push(`${key}:host`);
+      continue;
+    }
+    const host = hostTypeFor(key);
+    if (!host) { skipped.push(`${key}:no-host`); continue; }
+
+    // bindings/styleRefs need tokens — use a dedicated minimal pair without token deps for most keys;
+    // for bindings/styleRefs, skip if we can't resolve without variables (covered by dedicated bindings test).
+    if (key === "bindings" || key === "styleRefs") {
+      skipped.push(`${key}:tokens`);
+      continue;
+    }
+
+    const value = diffValue(key, host);
+    const sourceChild = baseChild("a-leaf", host);
+    const copyChild: Record<string, unknown> = { ...baseChild("b-leaf", host), [key]: value };
+    // Authoring: `fills` wins over `fill` in normalize — drop the other form so the key under test sticks.
+    if (key === "fill") delete copyChild.fills;
+    if (key === "fills") delete copyChild.fill;
+    if (key === "stroke") delete copyChild.strokes;
+    if (key === "strokes") delete copyChild.stroke;
+    // strokeCap only on LINE/VECTOR/ELLIPSE — ensure host matches
+    if (key === "strokeCap" && host === "RECTANGLE") {
+      skipped.push(`${key}:applies`);
+      continue;
+    }
+
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [sourceChild] },
+        { id: "b", type: "FRAME", name: "Card", x: 120, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [copyChild] }
+      ]
+    });
+    const segment = expectedSegment(key);
+    const pattern = new RegExp(`differs at children\\[0\\]\\.${segment}\\b`);
+    const result = validatePatch(document, patchOf({ op: "componentize", id: "a", instances: ["b"] }));
+    assert.equal(result.valid, false, `key=${key} should reject; issues=${result.issues.map((i) => i.message).join("; ")}`);
+    assert.match(result.issues.map((i) => i.message).join("\n"), pattern, `key=${key} expected ${pattern}`);
+    covered++;
+  }
+  assert.ok(covered >= 40, `expected broad coverage, covered=${covered}, skipped=${skipped.join(",")}`);
+  // Explicitly ensure the Gate repro keys were in the loop (not exempt).
+  assert.equal(exempt.has("hangingPunctuation"), false);
+  assert.equal(exempt.has("hangingList"), false);
 });

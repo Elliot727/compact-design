@@ -3779,3 +3779,59 @@ test("lockstep componentize: #id property keys round-trip on instance overrides"
   const props = (inst as MockNode & { _componentProperties: Record<string, { value: string | boolean }> })._componentProperties;
   assert.ok(Object.keys(props).some((k) => k.startsWith("Title#") || k === "Title"));
 });
+
+test("lockstep componentize: hangingPunctuation / hangingList-only copies rejected in both engines", async () => {
+  const withHang = (hang: { hangingPunctuation?: boolean; hangingList?: boolean }) => normalize({
+    canvas: { id: "page", width: 400, height: 200 },
+    nodes: [
+      { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "a-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+      ] },
+      { id: "b", type: "FRAME", name: "Card", x: 100, y: 0, w: 80, h: 40, fill: "#FFFFFF", children: [
+        { id: "b-t", type: "TEXT", name: "Title", x: 4, y: 4, w: 60, h: 20, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [], ...hang }
+      ] }
+    ]
+  });
+  for (const [key, hang] of [["hangingPunctuation", { hangingPunctuation: true }], ["hangingList", { hangingList: true }]] as const) {
+    const document = withHang(hang);
+    assert.throws(() => applyCorePatch(document, checkedPatch({ op: "componentize", id: "a", instances: ["b"] })), new RegExp(`differs at children\\[0\\]\\.${key}`));
+    const page = await importIntoMock(withHang({}));
+    // Stamp the differing field on the copy's text only (import omits false defaults).
+    (mockById(page, "b-t") as MockNode)[key] = true;
+    const before = await figmaState(page);
+    await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), new RegExp(`differs at children\\[0\\]\\.${key}`));
+    assert.deepEqual(await figmaState(page), before);
+  }
+});
+
+test("lockstep componentize: fail-closed representative PATCH_SET_KEYS subset", async () => {
+  // Representative non-exempt keys — full PATCH_SET_KEYS walk lives in core; Figma mirrors the contract.
+  const cases: Array<{ key: string; apply: (leaf: MockNode) => void; pattern: RegExp }> = [
+    { key: "opacity", apply: (leaf) => { leaf.opacity = 0.42; }, pattern: /differs at children\[0\]\.opacity/ },
+    { key: "rotation", apply: (leaf) => { leaf.rotation = 15; }, pattern: /differs at children\[0\]\.rotation/ },
+    { key: "hangingPunctuation", apply: (leaf) => { leaf.hangingPunctuation = true; }, pattern: /differs at children\[0\]\.hangingPunctuation/ },
+    { key: "cornerRadius", apply: (leaf) => { leaf.cornerRadius = 8; }, pattern: /differs at children\[0\]\.cornerRadius/ },
+    { key: "w", apply: (leaf) => { leaf.resize(77, leaf.height); }, pattern: /differs at children\[0\]\.size/ }
+  ];
+  for (const { key, apply, pattern } of cases) {
+    const isText = key === "hangingPunctuation";
+    const document = normalize({
+      canvas: { id: "page", width: 400, height: 200 },
+      nodes: [
+        { id: "a", type: "FRAME", name: "Card", x: 0, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [
+          isText
+            ? { id: "a-leaf", type: "TEXT", name: "Leaf", x: 4, y: 4, w: 40, h: 24, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+            : { id: "a-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] },
+        { id: "b", type: "FRAME", name: "Card", x: 120, y: 0, w: 100, h: 60, fill: "#FFFFFF", children: [
+          isText
+            ? { id: "b-leaf", type: "TEXT", name: "Leaf", x: 4, y: 4, w: 40, h: 24, text: "Hi", font: { family: "Inter", style: "Regular", size: 12 }, fills: [] }
+            : { id: "b-leaf", type: "RECTANGLE", name: "Leaf", x: 4, y: 4, w: 40, h: 24, fill: "#111111" }
+        ] }
+      ]
+    });
+    const page = await importIntoMock(document);
+    apply(mockById(page, "b-leaf"));
+    await assert.rejects(() => applyFigmaPatch(checkedPatch({ op: "componentize", id: "a", instances: ["b"] }), emptyPatchContext() as never), pattern, key);
+  }
+});

@@ -580,12 +580,13 @@ function applyOperation(operation: PatchOperation, operationIndex: number, index
     // Eager: outside references to copy inner ids (root survives)
     for (const instId of instanceIds) {
       const instRef = index.get(instId)!;
-      const innerIds = collectIds(instRef.node);
+      const copyIds = collectIds(instRef.node);
+      const innerIds = new Set(copyIds);
       innerIds.delete(instId); // root keeps its id
       for (const [id, ref] of index) {
         if (innerIds.has(id) || id === instId) continue;
         // Skip nodes inside this copy
-        if (collectIds(instRef.node).has(id)) continue;
+        if (copyIds.has(id)) continue;
         const proto = ref.node.properties.prototype;
         if (Array.isArray(proto)) {
           forEachPrototypeDestination(proto, (_a, _t, destination, actionPath) => {
