@@ -1,6 +1,6 @@
 {
   "name": "@compact-design/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reusable parser, normalizer, validator, patch engine, and linter for Compact Design JSON.",
   "license": "MPL-2.0",
   "type": "module",

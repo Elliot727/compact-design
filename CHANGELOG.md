@@ -2,29 +2,31 @@
 
 ## Unreleased
 
-- feat(core,figma,mcp): enable patch `set` for `prototype` (full replace; `[]` clears). Destinations checked eagerly and at end of patch. NAVIGATE/SWAP/OVERLAY destinations must be top-level frames (no remapping in set; import stays lenient). AFTER_TIMEOUT only on a top-level target. CHANGE_TO→COMPONENT; SCROLL_TO same canvas. Figma `setReactionsAsync` + plan-limit WARNING. `componentId` stays deferred.
-- **Breaking:** `validateDocument` now rejects any document (authored or patched) whose prototype destinations are missing or violate CHANGE_TO/SCROLL_TO rules. Previously those were lint-only (`BROKEN_PROTOTYPE_DESTINATION`).
-- feat(core,figma,mcp): add patch `duplicate` op — clone a subtree with required `id` + `idSuffix`, optional `ids`/`parent`/`index`. Lockstep core/Figma: same-patch visibility for created ids (incl. every duplicated layer), plugin-data rewrite on clone, prototype re-point inside the subtree, create-log rollback, and pre-existing-issue exemption via id-map. Rejects COMPONENT/COMPONENT_SET sources, INSTANCE parents, collisions, and `ids` keys outside the source subtree. Prefer `duplicate` for screens/states/one-offs; COMPONENT/INSTANCE for repeats.
-- feat(core,figma,mcp): enable patch `set` for `componentProperties`, `variantAxes`, and `variant` in lockstep. `componentProperties` is a name-keyed upsert on COMPONENT (null deletes; type immutable; Figma add/edit/delete only). `variantAxes` shallow-merges on COMPONENT_SET with **explicit** renames (`{ rename, options, renameOptions }`); plain option arrays never rename. Every declared option must be carried by a child (Figma derives options from child names). Renames rewrite instance VARIANT overrides only for instances of the patched set. `variant`/`variant: null` clearing is rejected. COMPONENT rollback loads all pages before `findAllWithCriteria`. Still deferred: `prototype`, `componentId`.
-- **Breaking:** `validateDocument` now rejects any authored document (not only patched ones) that declares a `variantAxes` option no child COMPONENT carries. Figma derives variant options from child names; Compact keeps the same rule so core and Figma stay in lockstep.
+## 0.3.0 — 2026-10-06
 
+Published packages: `@compact-design/core`, `@compact-design/html`, `@compact-design/mcp` (Figma plugin is not on npm).
 
-- fix(figma): patch rollback re-links COMPONENT instances via `getMainComponentAsync` (no sync `mainComponent` under dynamic-page); per-key `instanceProperties: null` resets to the component defaultValue in lockstep with core; fill/stroke bindings require a SOLID first paint (clear error).
+### Breaking (pre-1.0)
 
-- feat(core,figma,mcp): enable patch `set` for `bindings`, `styleRefs`, `variableModes`, `instanceProperties`, and `componentPropertyReferences` (shallow-merge; `null` clears a field or the whole map). Core and Figma apply in lockstep with full rollback; INSTANCE_SWAP values use the type-aware remap path; setting raw fill/font on a bound/styled node detaches with a WARNING. Still deferred at the time: `prototype`, `componentId` (destination/main remapping), `componentProperties`/`variantAxes`/`variant` (enabled in the feat above).
+- **#36 / insert & move** (`14b6adb`): patch ops `insert` and `move`. **Breaking:** appending into an INSTANCE now errors.
+- **#37 / typed merging patch set** (`4706053`, `3c4e8ea`): typed, merging `set` with deep-merge for layout/font/constraints and replace for paint/effect/run arrays. **Breaking:** patch `set` x/y is now **parent-relative** (was absolute in core); unknown `set` keys fail (schema `additionalProperties: false`). Post-patch validation reports only issues the patch introduces.
+- **#38 / componentPropertyReferences** (`e2bce8f`): link component properties to child layers (TEXT/BOOLEAN/INSTANCE_SWAP). **Breaking:** `VARIANT` removed from `ComponentPropertyType`; a linked INSTANCE exports without children (structure comes from the main component).
+- **#40 / componentProperties, variantAxes, variant** (`858b46e`): name-keyed upsert / explicit renames / merge. **Breaking:** `validateDocument` rejects `variantAxes` options no child COMPONENT carries; renames are explicit (`{ rename, options, renameOptions }` — plain option arrays never rename); `variant: null` on a set child is rejected.
+- **#42 / prototype set** (`af53f94`): full-replace `set.prototype` (`[]` clears). **Breaking:** `validateDocument` rejects missing or invalid prototype destinations (was lint-only); patches that remove a linked destination fail; `set.prototype` requires **top-level** destinations for NAVIGATE/SWAP/OVERLAY, and AFTER_TIMEOUT only on top-level nodes (import stays lenient).
 
-- feat(core,figma,html,mcp): link component properties to child layers via `componentPropertyReferences` (TEXT `characters`, BOOLEAN `visible`, INSTANCE_SWAP `mainComponent`). Validates against the nearest ancestor COMPONENT; Figma import/export round-trips authored names ↔ generated `#id` keys; HTML honours TEXT/BOOLEAN overrides when refs are present. VARIANT stays on `variantAxes`/`variant` (removed from authorable `componentProperties` types). Patching of `componentProperties`/`variantAxes`/`variant` is enabled in the Unreleased feat above.
-- fix(figma): only remap INSTANCE_SWAP instance/default values from compact ids to Figma ids (TEXT overrides that match a node id stay text). Core validates INSTANCE_SWAP targets are COMPONENT ids; Figma throws a clear missing-component error instead of passing a raw id through.
-- Export of a linked INSTANCE no longer includes its children (structure comes from the main component), matching import which already ignored them.
+### Features
 
-**Breaking (pre-1.0): patch `set` now has a typed contract.**
+- **#39** (`59d44aa`): patch `set` for `bindings`, `styleRefs`, `variableModes`, `instanceProperties`, and `componentPropertyReferences` (shallow-merge; `null` clears a field or the whole map). Lockstep core/Figma with full rollback.
+- **#41** (`f621ef9`): patch `duplicate` op — clone a subtree with required `id` + `idSuffix`, optional `ids`/`parent`/`index`. Prefer `duplicate` for screens/states/one-offs; COMPONENT/INSTANCE for repeats.
+- **#42** also: CHANGE_TO→COMPONENT; SCROLL_TO same canvas; Figma `setReactionsAsync` + plan-limit WARNING. `componentId` stays deferred.
+- **#40** also: Figma add/edit/delete for `componentProperties`; variantAxes renames rewrite instance VARIANT overrides only for instances of the patched set.
+- **#38** also: Figma import/export round-trips authored names ↔ generated `#id` keys; HTML honours TEXT/BOOLEAN overrides when refs are present.
+- **#35** (`f47778d`): docs(mcp) — text typography controls and `numberOfFixedChildren` in LANGUAGE_GUIDE.
 
-- Unknown `set` keys now fail. The schema's new `$defs.patchSet` (`additionalProperties: false`), `normalizePatch`, `validatePatch`, and the Figma plugin all reject them. Previously, typos validated and then did nothing. `validate()` no longer reports every patch document as valid.
-- **Existing patches that use absolute x/y will now land in a different place.** Patch `set` x/y are now parent-relative in core, as authoring and the Figma plugin already were. Before this change, core treated them as absolute canvas coordinates. `insert`/`append` node coordinates are parent-relative in core too, and `move` now keeps a node's parent-relative offset in core, as Figma does. Rewrite such patches with coordinates relative to the target's parent.
-- `layout`, `layout.padding`, `font`, and `constraints` deep-merge. Paint, effect, run, grid, path, dash, and corner-radii arrays replace. `{ "font": { "size": 32 } }` no longer resets the family to Arial, and a partial layout no longer wipes padding or alignment. A set adds no defaults (no TEXT fill injection).
-- Keys that cannot be applied are errors in both core and Figma: deferred keys (`prototype`, `componentId`), `svg`, keys that do not apply to the target type, and Auto Layout or text-styling conflicts (see DESIGN-LANGUAGE.md). `bindings`/`styleRefs`/`variableModes`/`instanceProperties`/`componentPropertyReferences` are now patchable (see Unreleased feat above). Previously, Figma silently ignored about half of the node keys.
-- New core exports: `PATCH_SET_KEYS`, `PATCH_SET_SEMANTICS`, `PATCH_SET_APPLIES_TO`, `patchSetTargetIssues`, `validatePatch(document, patch)`, `newDocumentIssues(before, after)`, and `PatchError`. `applyPatch` now validates the patched document and throws `PatchError`. `PatchOperation.normalized` is now a type-agnostic `PatchSetValues` with only the authored keys. Only issues the patch introduces fail it. Issues already in the input document, compared by node id and property path rather than array index, never block a patch.
-- Figma: patch rollback now replays an ordered undo log with backups kept in a hidden holder frame. This fixes stale backups when a `set` follows a `move` of the same node, or when an ancestor is set after its children. After updating, reload the Figma plugin from `plugins/figma/manifest.json`.
+### Fixes
+
+- fix(figma): patch rollback re-links COMPONENT instances via `getMainComponentAsync`; per-key `instanceProperties: null` resets to the component defaultValue; fill/stroke bindings require a SOLID first paint.
+- fix(figma): only remap INSTANCE_SWAP instance/default values from compact ids to Figma ids (TEXT overrides that match a node id stay text).
 
 ## 0.2.0 — 2026-10-06
 
