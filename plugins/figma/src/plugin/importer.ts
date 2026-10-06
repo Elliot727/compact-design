@@ -36,7 +36,7 @@ export async function importDocument(document: InternalDocument, mode: ImportMod
   const resources = await createResources(document);
   const context = {
     sourceNodes: new Map<string, SceneNode>(),
-    componentPropertyKeys: new Map<string, Map<string, string>>(),
+    componentPropertyKeys: new Map<string, Map<string, string>>(), componentPropertyTypes: new Map<string, Map<string, string>>(),
     resources,
     createdNodes: [] as SceneNode[]
   };

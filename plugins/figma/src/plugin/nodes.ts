@@ -8,6 +8,8 @@ import { clamp, finite } from "./value";
 export interface ImportContext {
   sourceNodes: Map<string, SceneNode>;
   componentPropertyKeys: Map<string, Map<string, string>>;
+  /** Authored property name (and generated key) → type, keyed by COMPONENT compact id. */
+  componentPropertyTypes: Map<string, Map<string, string>>;
   resources: Resources;
   createdNodes: SceneNode[];
 }
@@ -71,16 +73,31 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
   if (node.type === "TEXT") await applyText(node, p);
   if (node.type === "COMPONENT") {
     const propertyKeys = new Map<string, string>();
+    const propertyTypes = new Map<string, string>();
     for (const property of p.componentProperties || []) {
-      const generatedKey = node.addComponentProperty(property.name, property.type, property.defaultValue, property.options || {});
+      const defaultValue = resolveInstanceSwapTarget(property.name, property.type, property.defaultValue, context);
+      const generatedKey = node.addComponentProperty(property.name, property.type, defaultValue, property.options || {});
       propertyKeys.set(property.name, generatedKey);
       propertyKeys.set(generatedKey, generatedKey);
+      propertyTypes.set(property.name, property.type);
+      propertyTypes.set(generatedKey, property.type);
     }
     context.componentPropertyKeys.set(data.id, propertyKeys);
+    context.componentPropertyTypes.set(data.id, propertyTypes);
   }
   if (node.type === "INSTANCE" && p.instanceProperties) {
     const propertyKeys = p.componentId ? context.componentPropertyKeys.get(p.componentId) : undefined;
-    const overrides = Object.fromEntries(Object.entries(p.instanceProperties).map(([key, value]) => [propertyKeys?.get(key) || key, value])) as Record<string, string | boolean | VariableAlias>;
+    const propertyTypes = p.componentId ? context.componentPropertyTypes.get(p.componentId) : undefined;
+    const overrides = Object.fromEntries(Object.entries(p.instanceProperties).map(([key, value]) => {
+      const mappedKey = propertyKeys?.get(key) || key;
+      const propType = propertyTypes?.get(key) || propertyTypes?.get(mappedKey);
+      // Only INSTANCE_SWAP values are compact component ids; TEXT/BOOLEAN pass through unchanged
+      // (a TEXT value may legitimately equal a node id).
+      const mappedValue = propType === "INSTANCE_SWAP"
+        ? resolveInstanceSwapTarget(key, "INSTANCE_SWAP", value, context)
+        : value;
+      return [mappedKey, mappedValue];
+    })) as Record<string, string | boolean | VariableAlias>;
     node.setProperties(overrides);
   }
   await applyAppearance(node, p, node.type === "TEXT");
@@ -94,5 +111,48 @@ export async function createNode(data: InternalNode, parent: BaseNode & Children
     for (const child of data.children) await createNode(child, node, childOrigin, context);
     if ("numberOfFixedChildren" in node && typeof p.numberOfFixedChildren === "number" && Number.isFinite(p.numberOfFixedChildren)) node.numberOfFixedChildren = Math.max(0, Math.min(node.children.length, Math.round(p.numberOfFixedChildren)));
   }
+  // Second pass: bind child layers to component properties after children exist.
+  // Figma appends #id suffixes to TEXT/BOOLEAN/INSTANCE_SWAP keys from addComponentProperty.
+  if (node.type === "COMPONENT") {
+    const propertyKeys = context.componentPropertyKeys.get(data.id);
+    if (propertyKeys) {
+      for (const childData of data.children) {
+        const childScene = node.children.find((child) => child.getPluginData("compactDesignId") === childData.id);
+        if (childScene) applyComponentPropertyReferencesTree(childData, childScene, propertyKeys);
+      }
+    }
+  }
   return node;
+}
+
+/** Map an INSTANCE_SWAP compact id to a Figma COMPONENT id, or throw a clear error. Non-swap values pass through. */
+function resolveInstanceSwapTarget(propertyName: string, propertyType: string, value: string | boolean | VariableAlias, context: ImportContext): string | boolean | VariableAlias {
+  if (propertyType !== "INSTANCE_SWAP") return value;
+  if (typeof value !== "string") return value;
+  const target = context.sourceNodes.get(value);
+  if (!target || target.type !== "COMPONENT") {
+    throw new Error(`component property '${propertyName}' references missing component '${value}'`);
+  }
+  return target.id;
+}
+
+/**
+ * Assign componentPropertyReferences on a COMPONENT descendant tree.
+ * Stops at nested COMPONENT (owns its own props) and INSTANCE (no authored sublayers).
+ */
+function applyComponentPropertyReferencesTree(data: InternalNode, scene: SceneNode, propertyKeys: Map<string, string>): void {
+  const refs = data.properties.componentPropertyReferences;
+  if (refs && typeof refs === "object") {
+    const mapped: { characters?: string; visible?: string; mainComponent?: string } = {};
+    if (typeof refs.characters === "string") mapped.characters = propertyKeys.get(refs.characters) || refs.characters;
+    if (typeof refs.visible === "string") mapped.visible = propertyKeys.get(refs.visible) || refs.visible;
+    if (typeof refs.mainComponent === "string") mapped.mainComponent = propertyKeys.get(refs.mainComponent) || refs.mainComponent;
+    if (Object.keys(mapped).length) scene.componentPropertyReferences = mapped;
+  }
+  if (data.type === "COMPONENT" || data.type === "INSTANCE") return;
+  if (!("children" in scene) || !data.children.length) return;
+  for (const childData of data.children) {
+    const childScene = scene.children.find((child) => child.getPluginData("compactDesignId") === childData.id);
+    if (childScene) applyComponentPropertyReferencesTree(childData, childScene, propertyKeys);
+  }
 }

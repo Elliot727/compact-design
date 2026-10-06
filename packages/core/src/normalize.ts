@@ -157,7 +157,7 @@ const passthrough = [
   "strokeCap", "strokeJoin", "dashPattern", "constraints", "layoutSizingHorizontal", "layoutSizingVertical",
   "layoutAlign", "layoutGrow", "layoutPositioning", "minWidth", "maxWidth", "minHeight", "maxHeight", "layout",
   "layoutGrids", "svg", "vectorPaths", "componentId", "operation", "styleRefs", "bindings", "pointCount",
-  "innerRadius", "startingAngle", "endingAngle", "innerRadiusRatio", "componentProperties", "instanceProperties", "prototype", "variantAxes", "variant",
+  "innerRadius", "startingAngle", "endingAngle", "innerRadiusRatio", "componentProperties", "instanceProperties", "componentPropertyReferences", "prototype", "variantAxes", "variant",
   "overflowDirection", "numberOfFixedChildren", "variableModes"
 ];
 

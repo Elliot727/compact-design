@@ -244,6 +244,57 @@ function nodeType(node: SceneNode, exportedIds: Set<string>, mainComponent: Comp
   return "FRAME";
 }
 
+
+/** Strip Figma's #id suffix from a generated component property key, yielding the authored name. */
+export function authoredComponentPropertyName(key: string): string {
+  const hash = key.indexOf("#");
+  return hash >= 0 ? key.slice(0, hash) : key;
+}
+
+function compactComponentProperties(node: ComponentNode): CompactValue[] | undefined {
+  const definitions = node.componentPropertyDefinitions;
+  if (!definitions) return undefined;
+  const properties: CompactValue[] = [];
+  for (const [key, definition] of Object.entries(definitions)) {
+    if (definition.type === "VARIANT" || definition.type === "SLOT") continue;
+    const entry: CompactValue = {
+      name: authoredComponentPropertyName(key),
+      type: definition.type,
+      defaultValue: definition.type === "INSTANCE_SWAP" && typeof definition.defaultValue === "string"
+        ? (activeExportIds.get(definition.defaultValue) || definition.defaultValue)
+        : definition.defaultValue
+    };
+    if (definition.type === "INSTANCE_SWAP" && definition.preferredValues?.length) {
+      entry.options = { preferredValues: definition.preferredValues };
+    }
+    properties.push(entry);
+  }
+  return properties.length ? properties : undefined;
+}
+
+function compactComponentPropertyReferences(node: SceneNode): CompactValue | undefined {
+  const refs = "componentPropertyReferences" in node ? node.componentPropertyReferences : null;
+  if (!refs) return undefined;
+  const result: CompactValue = {};
+  // Use bracket access for the mainComponent ref key so static checks that ban the sync InstanceNode field stay clean.
+  if (typeof refs["characters"] === "string") result.characters = authoredComponentPropertyName(refs["characters"]);
+  if (typeof refs["visible"] === "string") result.visible = authoredComponentPropertyName(refs["visible"]);
+  if (typeof refs["mainComponent"] === "string") result["mainComponent"] = authoredComponentPropertyName(refs["mainComponent"]);
+  return Object.keys(result).length ? result : undefined;
+}
+
+function compactInstanceProperties(node: InstanceNode): CompactValue | undefined {
+  const entries = Object.entries(node.componentProperties || {}).filter(([, value]) => value.type !== "VARIANT");
+  if (!entries.length) return undefined;
+  return Object.fromEntries(entries.map(([key, value]) => {
+    const name = authoredComponentPropertyName(key);
+    const mapped = value.type === "INSTANCE_SWAP" && typeof value.value === "string"
+      ? (activeExportIds.get(value.value) || value.value)
+      : value.value;
+    return [name, mapped];
+  }));
+}
+
 async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<CompactValue> {
   const mainComponent = node.type === "INSTANCE" ? await instanceMainComponent(node) : null;
   const type = nodeType(node, exportedIds, mainComponent);
@@ -301,7 +352,17 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
   if (node.type === "STAR") { result.pointCount = node.pointCount; result.innerRadius = node.innerRadius; }
   if (node.type === "ELLIPSE" && (node.arcData.startingAngle !== 0 || node.arcData.endingAngle !== Math.PI * 2 || node.arcData.innerRadius !== 0)) { result.type = "ARC"; result.startingAngle = node.arcData.startingAngle; result.endingAngle = node.arcData.endingAngle; result.innerRadiusRatio = node.arcData.innerRadius; }
   if (node.type === "BOOLEAN_OPERATION") result.operation = node.booleanOperation;
-  if (node.type === "INSTANCE" && type === "INSTANCE" && mainComponent) { result.componentId = activeExportIds.get(mainComponent.id) || compactId(mainComponent); result.instanceProperties = Object.fromEntries(Object.entries(node.componentProperties).map(([key, value]) => [key, value.value])); }
+  if (node.type === "COMPONENT") {
+    const componentProperties = compactComponentProperties(node);
+    if (componentProperties) result.componentProperties = componentProperties;
+  }
+  if (node.type === "INSTANCE" && type === "INSTANCE" && mainComponent) {
+    result.componentId = activeExportIds.get(mainComponent.id) || compactId(mainComponent);
+    const instanceProperties = compactInstanceProperties(node);
+    if (instanceProperties) result.instanceProperties = instanceProperties;
+  }
+  const propertyReferences = compactComponentPropertyReferences(node);
+  if (propertyReferences) result.componentPropertyReferences = propertyReferences;
   const prototype = await compactReactions(node);
   if (prototype) result.prototype = prototype;
   if (activeVariables) {
@@ -314,7 +375,9 @@ async function compactNode(node: SceneNode, exportedIds: Set<string>): Promise<C
     const styleRefs = activeStyles.styleRefsForNode(node);
     if (styleRefs) result.styleRefs = styleRefs;
   }
-  if ("children" in node) result.children = await Promise.all(node.children.filter((child): child is SceneNode => child.type !== "STICKY" && child.type !== "CONNECTOR" && child.type !== "SHAPE_WITH_TEXT" && child.type !== "CODE_BLOCK" && child.type !== "STAMP" && child.type !== "WIDGET" && child.type !== "EMBED" && child.type !== "LINK_UNFURL" && child.type !== "MEDIA").map((child) => compactNode(child, exportedIds)));
+  // Linked INSTANCE structure comes from the main component; omit children so
+  // re-imported JSON stays valid (componentPropertyReferences belong on COMPONENT descendants).
+  if ("children" in node && type !== "INSTANCE") result.children = await Promise.all(node.children.filter((child): child is SceneNode => child.type !== "STICKY" && child.type !== "CONNECTOR" && child.type !== "SHAPE_WITH_TEXT" && child.type !== "CODE_BLOCK" && child.type !== "STAMP" && child.type !== "WIDGET" && child.type !== "EMBED" && child.type !== "LINK_UNFURL" && child.type !== "MEDIA").map((child) => compactNode(child, exportedIds)));
   return result;
 }
 

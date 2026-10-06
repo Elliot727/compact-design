@@ -20,7 +20,7 @@ export const PATCH_SET_KEYS = [
   "paragraphSpacing", "paragraphIndent", "listSpacing", "hangingPunctuation", "hangingList",
   "textAutoResize", "textTruncation", "maxLines", "runs",
   "pointCount", "innerRadius", "startingAngle", "endingAngle", "innerRadiusRatio",
-  "svg", "vectorPaths", "componentId", "componentProperties", "instanceProperties", "variantAxes", "variant",
+  "svg", "vectorPaths", "componentId", "componentProperties", "instanceProperties", "componentPropertyReferences", "variantAxes", "variant",
   "operation", "prototype", "overflowDirection", "numberOfFixedChildren", "styleRefs", "bindings", "variableModes"
 ] as const;
 
@@ -48,7 +48,7 @@ export const PATCH_SET_SEMANTICS: Readonly<Record<PatchSetKey, PatchSetSemantics
   paragraphSpacing: "scalar", paragraphIndent: "scalar", listSpacing: "scalar", hangingPunctuation: "scalar", hangingList: "scalar",
   textAutoResize: "scalar", textTruncation: "scalar", maxLines: "scalar", runs: "replace",
   pointCount: "scalar", innerRadius: "scalar", startingAngle: "scalar", endingAngle: "scalar", innerRadiusRatio: "scalar",
-  svg: "immutable", vectorPaths: "replace", componentId: "deferred", componentProperties: "deferred", instanceProperties: "deferred", variantAxes: "deferred", variant: "deferred",
+  svg: "immutable", vectorPaths: "replace", componentId: "deferred", componentProperties: "deferred", instanceProperties: "deferred", componentPropertyReferences: "deferred", variantAxes: "deferred", variant: "deferred",
   operation: "scalar", prototype: "deferred", overflowDirection: "scalar", numberOfFixedChildren: "scalar", styleRefs: "deferred", bindings: "deferred", variableModes: "deferred"
 };
 
@@ -80,7 +80,7 @@ export const PATCH_SET_APPLIES_TO: Readonly<Record<PatchSetKey, readonly string[
   paragraphSpacing: TEXT_ONLY, paragraphIndent: TEXT_ONLY, listSpacing: TEXT_ONLY, hangingPunctuation: TEXT_ONLY, hangingList: TEXT_ONLY,
   textAutoResize: TEXT_ONLY, textTruncation: TEXT_ONLY, maxLines: TEXT_ONLY, runs: TEXT_ONLY,
   pointCount: ["POLYGON", "STAR"], innerRadius: ["STAR"], startingAngle: ["ELLIPSE", "ARC"], endingAngle: ["ELLIPSE", "ARC"], innerRadiusRatio: ["ELLIPSE", "ARC"],
-  svg: ALL, vectorPaths: ["VECTOR"], componentId: ALL, componentProperties: ALL, instanceProperties: ALL, variantAxes: ALL, variant: ALL,
+  svg: ALL, vectorPaths: ["VECTOR"], componentId: ALL, componentProperties: ALL, instanceProperties: ALL, componentPropertyReferences: ALL, variantAxes: ALL, variant: ALL,
   operation: ["BOOLEAN_OPERATION"], prototype: ALL, overflowDirection: AUTO_LAYOUT_CAPABLE, numberOfFixedChildren: AUTO_LAYOUT_CAPABLE,
   styleRefs: ALL, bindings: ALL, variableModes: ALL
 };

@@ -256,12 +256,28 @@ function mergeInstance(node: InternalNode, component: InternalNode | undefined):
   };
 }
 
+/**
+ * Apply instance overrides onto a component child for HTML preview.
+ * Prefer componentPropertyReferences (TEXT characters / BOOLEAN visible) when
+ * the main component declares them; fall back to the legacy name→TEXT heuristic.
+ * INSTANCE_SWAP (mainComponent) is not rendered in HTML yet.
+ */
 function applyInstanceText(child: InternalNode, instance: InternalNode): InternalNode {
-  const overrides = instance.properties.instanceProperties;
-  if (!overrides || child.type !== "TEXT") return child;
-  const named = overrides[child.name];
-  if (typeof named !== "string") return child;
-  return { ...child, properties: { ...child.properties, text: named } };
+  const overrides = instance.properties.instanceProperties || {};
+  const refs = child.properties.componentPropertyReferences;
+  let next: InternalNode = child;
+  if (refs?.characters && child.type === "TEXT") {
+    const value = overrides[refs.characters];
+    if (typeof value === "string") next = { ...next, properties: { ...next.properties, text: value } };
+  } else if (child.type === "TEXT") {
+    const named = overrides[child.name];
+    if (typeof named === "string") next = { ...next, properties: { ...next.properties, text: named } };
+  }
+  if (refs?.visible) {
+    const value = overrides[refs.visible];
+    if (typeof value === "boolean") next = { ...next, properties: { ...next.properties, visible: value } };
+  }
+  return next;
 }
 
 function nodeRule(id: string, node: InternalNode, props: DesignProperties, state: WalkState, modes: Record<string, string>, ctx: RenderContext): string {
